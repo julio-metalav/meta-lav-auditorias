@@ -1,36 +1,32 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { getUserAndRole, roleGte, type Role } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-function normRole(r: string): Role {
-  const rr = (r || "auditor").toLowerCase().trim();
-  if (rr === "gestor" || rr === "interno" || rr === "auditor") return rr as Role;
-  return "auditor";
+async function assertGestorByEmail(email?: string | null) {
+  if (!email) return false;
+
+  const admin = supabaseAdmin();
+  const { data, error } = await admin
+    .from("profiles")
+    .select("role")
+    .eq("email", email)
+    .single();
+
+  if (error) return false;
+  return data?.role === "gestor";
 }
 
-// GET /api/users  -> lista profiles (somente gestor)
-export async function GET() {
-  const { user, role } = await getUserAndRole();
-  return NextResponse.json({
-  debug: true,
-  email: user?.email ?? null,
-  userId: user?.id ?? null,
-  role: role ?? null,
-});
+// GET /api/users
+export async function GET(req: Request) {
+  const email = req.headers.get("x-user-email"); // vem do middleware/layout
+  const isGestor = await assertGestorByEmail(email);
 
-
-  if (!user) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  }
-  if (!roleGte(role, "gestor")) {
+  if (!isGestor) {
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
   }
 
   const admin = supabaseAdmin();
-
-  // lista via admin para não depender de RLS
   const { data, error } = await admin
     .from("profiles")
     .select("id,email,role,created_at")
@@ -43,22 +39,19 @@ export async function GET() {
   return NextResponse.json({ users: data ?? [] });
 }
 
-// POST /api/users -> cria usuário no Auth + cria/atualiza profile (somente gestor)
+// POST /api/users
 export async function POST(req: Request) {
-  const { user, role } = await getUserAndRole();
+  const emailHeader = req.headers.get("x-user-email");
+  const isGestor = await assertGestorByEmail(emailHeader);
 
-  if (!user) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  }
-  if (!roleGte(role, "gestor")) {
+  if (!isGestor) {
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
   }
 
   const body = await req.json().catch(() => ({}));
-
   const email = String(body?.email ?? "").trim().toLowerCase();
   const password = String(body?.password ?? "").trim();
-  const newRole = normRole(String(body?.role ?? "auditor"));
+  const role = String(body?.role ?? "auditor").toLowerCase();
 
   if (!email || !password) {
     return NextResponse.json(
@@ -69,11 +62,12 @@ export async function POST(req: Request) {
 
   const admin = supabaseAdmin();
 
-  const { data: created, error: createErr } = await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-  });
+  const { data: created, error: createErr } =
+    await admin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+    });
 
   if (createErr || !created?.user) {
     return NextResponse.json(
@@ -85,15 +79,15 @@ export async function POST(req: Request) {
   const { error: profErr } = await admin.from("profiles").upsert({
     id: created.user.id,
     email,
-    role: newRole,
+    role,
   });
 
   if (profErr) {
     return NextResponse.json(
-      { error: `Usuário criado no Auth, mas falhou profile: ${profErr.message}` },
+      { error: profErr.message },
       { status: 500 }
     );
   }
 
-  return NextResponse.json({ ok: true, id: created.user.id });
+  return NextResponse.json({ ok: true });
 }
