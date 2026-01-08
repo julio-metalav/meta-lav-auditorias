@@ -13,6 +13,13 @@ function normRole(r: string): Role {
 // GET /api/users  -> lista profiles (somente gestor)
 export async function GET() {
   const { user, role } = await getUserAndRole();
+  return NextResponse.json({
+  debug: true,
+  email: user?.email ?? null,
+  userId: user?.id ?? null,
+  role: role ?? null,
+});
+
 
   if (!user) {
     return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
