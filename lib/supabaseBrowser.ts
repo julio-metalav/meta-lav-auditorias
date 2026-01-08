@@ -1,3 +1,4 @@
+import "client-only";
 import { createBrowserClient } from "@supabase/ssr";
 
 export const supabaseBrowser = createBrowserClient(
