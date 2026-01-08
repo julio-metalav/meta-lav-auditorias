@@ -1,24 +1,34 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
-// Middleware "no-op" (não faz auth aqui).
-// Motivo: middleware roda em Edge e não pode puxar libs que usam Node APIs.
-// A autenticação/role já está sendo tratada pelo app via /api/me e nas rotas /api.
-const PUBLIC_FILE = /\.(.*)$/;
-
+// middleware é SEMPRE Edge -> NÃO pode importar supabase-js aqui.
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // libera assets e páginas públicas
+  // libera arquivos, login e rotas públicas
   if (
-    pathname.startsWith("/_next") ||
-    pathname.startsWith("/favicon.ico") ||
     pathname.startsWith("/login") ||
-    PUBLIC_FILE.test(pathname)
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/favicon") ||
+    pathname.startsWith("/public")
   ) {
     return NextResponse.next();
   }
 
-  // Deixa passar. As páginas já validam sessão via /api/me.
+  // Só checa se tem cookie de sessão do Supabase (sem validar)
+  const hasSbCookie =
+    req.cookies.get("sb-access-token") ||
+    req.cookies.get("sb-refresh-token") ||
+    // alguns setups guardam o token com prefixo do projeto:
+    Array.from(req.cookies.getAll()).some((c) => c.name.startsWith("sb-"));
+
+  if (!hasSbCookie) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/login";
+    url.searchParams.set("next", pathname);
+    return NextResponse.redirect(url);
+  }
+
   return NextResponse.next();
 }
 
