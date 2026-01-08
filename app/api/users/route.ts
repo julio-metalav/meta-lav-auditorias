@@ -1,3 +1,4 @@
+export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { getUserAndRole, roleGte, type Role } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
