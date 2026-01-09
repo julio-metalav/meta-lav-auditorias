@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
+import { supabaseServer } from "@/lib/supabaseServer";
 
 type Role = "auditor" | "interno" | "gestor";
 
-async function getUserRole(supabase: any): Promise<Role | null> {
+async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise<Role | null> {
   const { data: auth, error: authErr } = await supabase.auth.getUser();
   if (authErr || !auth?.user) return null;
 
@@ -45,10 +44,15 @@ function toNonNegInt(v: any) {
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
-    const supabase = createRouteHandlerClient({ cookies });
+    const supabase = supabaseServer();
     const auditoriaId = params.id;
 
-    // 1) auditoria precisa existir
+    // (opcional) exigir login também no GET
+    const { data: auth, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !auth?.user) {
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    }
+
     const { data: aud, error: audErr } = await supabase
       .from("auditorias")
       .select("id, condominio_id, ano_mes, mes_ref, status")
@@ -62,7 +66,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       );
     }
 
-    // 2) máquinas do condomínio (se você tiver coluna "ativo", pode reativar o filtro)
     const { data: maquinas, error: maqErr } = await supabase
       .from("condominio_maquinas")
       .select(
@@ -76,7 +79,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: maqErr.message }, { status: 400 });
     }
 
-    // 3) ciclos já lançados (normaliza para `ciclos`)
     const { data: ciclosRaw, error: cicErr } = await supabase
       .from("auditoria_ciclos")
       .select("id, auditoria_id, categoria, capacidade_kg, ciclos_mes")
@@ -102,26 +104,26 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       ciclos,
     });
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message ?? "Erro inesperado" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
 }
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {
-    const supabase = createRouteHandlerClient({ cookies });
-    const role = await getUserRole(supabase);
+    const supabase = supabaseServer();
+    const auditoriaId = params.id;
 
-    // Permissão: interno/gestor
+    const { data: auth, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !auth?.user) {
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    }
+
+    const role = await getUserRole(supabase);
     if (!roleGte(role, "interno")) {
       return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
     }
 
-    const auditoriaId = params.id;
-
-    // garante auditoria existe (evita FK confuso)
+    // garante auditoria existe
     const { data: aud, error: audErr } = await supabase
       .from("auditorias")
       .select("id")
@@ -148,17 +150,10 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const payload = items.map((it: any) => {
       const categoria = normCategoria(it.categoria);
       const capacidade_kg = toNumOrNull(it.capacidade_kg);
-
-      // aceita `ciclos` (frontend) ou `ciclos_mes` (legado)
       const ciclos_in = it.ciclos ?? it.ciclos_mes ?? it.ciclosMes;
       const ciclos_mes = toNonNegInt(ciclos_in);
 
-      return {
-        auditoria_id: auditoriaId,
-        categoria,
-        capacidade_kg,
-        ciclos_mes,
-      };
+      return { auditoria_id: auditoriaId, categoria, capacidade_kg, ciclos_mes };
     });
 
     for (const p of payload) {
@@ -173,7 +168,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       }
     }
 
-    // ✅ Upsert por chave composta (auditoria_id, categoria, capacidade_kg)
     const { data: saved, error: upErr } = await supabase
       .from("auditoria_ciclos")
       .upsert(payload, { onConflict: "auditoria_id,categoria,capacidade_kg" })
@@ -186,15 +180,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     return NextResponse.json({
       ok: true,
       upserted: saved?.length ?? 0,
-      data: (saved ?? []).map((r: any) => ({
-        ...r,
-        ciclos: Number(r.ciclos_mes ?? 0),
-      })),
+      data: (saved ?? []).map((r: any) => ({ ...r, ciclos: Number(r.ciclos_mes ?? 0) })),
     });
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message ?? "Erro inesperado" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
 }
