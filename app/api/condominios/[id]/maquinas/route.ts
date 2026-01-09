@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
+import { createServerComponentClient } from "@supabase/auth-helpers-nextjs";
 
 type Role = "auditor" | "interno" | "gestor";
+
+function supabaseServer() {
+  return createServerComponentClient({ cookies });
+}
 
 async function getUserRole(supabase: any): Promise<Role | null> {
   const { data: auth, error: authErr } = await supabase.auth.getUser();
@@ -27,25 +31,30 @@ function roleGte(role: Role | null, min: Exclude<Role, "auditor">): boolean {
 function parseMoneyAny(v: any): number {
   if (v === null || v === undefined) return 0;
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+
   const s = String(v).trim();
   if (!s) return 0;
+
   // aceita "16,50" e "16.50" e "1.234,56"
   const cleaned = s.replace(/\s/g, "").replace(/^R\$/i, "");
   const normalized = cleaned.includes(",")
     ? cleaned.replace(/\./g, "").replace(",", ".")
     : cleaned;
+
   const n = Number(normalized);
   return Number.isFinite(n) ? n : 0;
 }
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
-    const supabase = createRouteHandlerClient({ cookies });
+    const supabase = supabaseServer();
     const condominioId = params.id;
 
     const { data, error } = await supabase
       .from("condominio_maquinas")
-      .select("id, condominio_id, categoria, capacidade_kg, quantidade, valor_ciclo, created_at, updated_at")
+      .select(
+        "id, condominio_id, categoria, capacidade_kg, quantidade, valor_ciclo, created_at, updated_at"
+      )
       .eq("condominio_id", condominioId)
       .order("categoria", { ascending: true })
       .order("capacidade_kg", { ascending: true });
@@ -59,7 +68,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {
-    const supabase = createRouteHandlerClient({ cookies });
+    const supabase = supabaseServer();
     const role = await getUserRole(supabase);
 
     if (!roleGte(role, "interno")) {
@@ -81,13 +90,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         it.quantidade === null || it.quantidade === undefined
           ? 0
           : Number(it.quantidade),
-      // ✅ agora aceita string com vírgula
       valor_ciclo: parseMoneyAny(it.valor_ciclo),
     }));
 
     for (const p of payload) {
-      if (!p.categoria) return NextResponse.json({ error: "categoria é obrigatória" }, { status: 400 });
-
+      if (!p.categoria) {
+        return NextResponse.json({ error: "categoria é obrigatória" }, { status: 400 });
+      }
       if (p.capacidade_kg !== null && Number.isNaN(p.capacidade_kg)) {
         return NextResponse.json({ error: "capacidade_kg inválida" }, { status: 400 });
       }
@@ -99,6 +108,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       }
     }
 
+    // exige UNIQUE(condominio_id,categoria,capacidade_kg) no banco
     const { data, error } = await supabase
       .from("condominio_maquinas")
       .upsert(payload, { onConflict: "condominio_id,categoria,capacidade_kg" })
