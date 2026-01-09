@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type Role = "auditor" | "interno" | "gestor";
 
@@ -43,6 +44,8 @@ function pickMonth(aud: Aud) {
 }
 
 export default function AuditoriasPage() {
+  const router = useRouter();
+
   const [auditorias, setAuditorias] = useState<Aud[]>([]);
   const [condos, setCondos] = useState<Condo[]>([]);
   const [users, setUsers] = useState<UserRow[]>([]);
@@ -76,9 +79,7 @@ export default function AuditoriasPage() {
     if (!form.condominio_id) return auditors;
 
     const allowedIds = new Set(
-      assignments
-        .filter((a) => a.condominio_id === form.condominio_id)
-        .map((a) => a.auditor_id)
+      assignments.filter((a) => a.condominio_id === form.condominio_id).map((a) => a.auditor_id)
     );
 
     // se ainda não tem vínculo, mostra todos (pra não parecer “bugado”)
@@ -183,6 +184,10 @@ export default function AuditoriasPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function abrirAuditoriaAuditor(auditoriaId: string) {
+    router.push(`/auditor/auditoria/${auditoriaId}`);
   }
 
   return (
@@ -296,23 +301,43 @@ export default function AuditoriasPage() {
             {auditorias.map((a) => {
               const isSel = a.id === selectedId;
               const month = pickMonth(a);
+
               return (
-                <button
+                <div
                   key={a.id}
-                  onClick={() => selectAuditoria(a)}
-                  className={`w-full rounded-2xl border p-4 text-left hover:bg-gray-50 ${
+                  className={`w-full rounded-2xl border p-4 text-left ${
                     isSel ? "border-blue-400 ring-2 ring-blue-100" : ""
                   }`}
                 >
-                  <div className="text-lg font-semibold">
-                    {condoLabel.get(a.condominio_id) ?? a.condominio_id}
+                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <div className="text-lg font-semibold">
+                        {condoLabel.get(a.condominio_id) ?? a.condominio_id}
+                      </div>
+                      <div className="mt-1 text-sm text-gray-700">
+                        Auditor: {a.auditor_id ? auditorEmail.get(a.auditor_id) ?? a.auditor_id : "—"} • mês{" "}
+                        {month} • <span className="font-semibold">{a.status ?? "—"}</span>
+                      </div>
+                      <div className="mt-1 font-mono text-xs text-gray-400">ID: {a.id}</div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+                        onClick={() => selectAuditoria(a)}
+                      >
+                        Selecionar
+                      </button>
+
+                      <button
+                        className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+                        onClick={() => abrirAuditoriaAuditor(a.id)}
+                      >
+                        Abrir (Auditor)
+                      </button>
+                    </div>
                   </div>
-                  <div className="mt-1 text-sm text-gray-700">
-                    Auditor: {a.auditor_id ? auditorEmail.get(a.auditor_id) ?? a.auditor_id : "—"} • mês{" "}
-                    {month} • <span className="font-semibold">{a.status ?? "—"}</span>
-                  </div>
-                  <div className="mt-1 font-mono text-xs text-gray-400">ID: {a.id}</div>
-                </button>
+                </div>
               );
             })}
           </div>
@@ -321,3 +346,4 @@ export default function AuditoriasPage() {
     </div>
   );
 }
+
