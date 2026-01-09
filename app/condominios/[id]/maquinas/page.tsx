@@ -11,8 +11,11 @@ type Maquina = {
   quantidade: number;
   valor_ciclo: number;
 
-  limpeza_quimica_ciclos: number;   // ✅ novo
-  limpeza_mecanica_ciclos: number;  // ✅ novo
+  limpeza_quimica_ciclos: number;
+  limpeza_mecanica_ciclos: number;
+
+  // ✅ NOVO: o que o usuário digita (pra não travar o input)
+  valor_ciclo_text: string;
 };
 
 function brl(n: number) {
@@ -40,7 +43,7 @@ function parseMoneyPtBr(input: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Formata para input pt-BR com vírgula e 2 casas */
+/** Formata para pt-BR com 2 casas e vírgula */
 function formatMoneyPtBr(n: number): string {
   const fixed = Number(n ?? 0).toFixed(2);
   return fixed.replace(".", ",");
@@ -74,17 +77,23 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
 
       const maquinas = (j?.maquinas ?? []) as any[];
 
-      const normalized: Maquina[] = maquinas.map((m) => ({
-        id: m.id,
-        condominio_id: m.condominio_id,
-        categoria: (m.categoria ?? "lavadora") as "lavadora" | "secadora",
-        capacidade_kg: m.capacidade_kg === null || m.capacidade_kg === undefined ? null : Number(m.capacidade_kg),
-        quantidade: Number(m.quantidade ?? 0),
-        valor_ciclo: Number(m.valor_ciclo ?? 0),
+      const normalized: Maquina[] = maquinas.map((m) => {
+        const valor = Number(m.valor_ciclo ?? 0);
+        return {
+          id: m.id,
+          condominio_id: m.condominio_id,
+          categoria: (m.categoria ?? "lavadora") as "lavadora" | "secadora",
+          capacidade_kg: m.capacidade_kg === null || m.capacidade_kg === undefined ? null : Number(m.capacidade_kg),
+          quantidade: Number(m.quantidade ?? 0),
+          valor_ciclo: valor,
 
-        limpeza_quimica_ciclos: Number(m.limpeza_quimica_ciclos ?? 500),
-        limpeza_mecanica_ciclos: Number(m.limpeza_mecanica_ciclos ?? 2000),
-      }));
+          limpeza_quimica_ciclos: Number(m.limpeza_quimica_ciclos ?? 500),
+          limpeza_mecanica_ciclos: Number(m.limpeza_mecanica_ciclos ?? 2000),
+
+          // ✅ inicia o campo de texto já formatado
+          valor_ciclo_text: formatMoneyPtBr(valor),
+        };
+      });
 
       setRows(normalized);
     } catch (e: any) {
@@ -107,6 +116,7 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
         capacidade_kg: 10,
         quantidade: 1,
         valor_ciclo: 0,
+        valor_ciclo_text: "0,00",
         limpeza_quimica_ciclos: 500,
         limpeza_mecanica_ciclos: 2000,
       },
@@ -136,7 +146,13 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
     try {
       if (rows.length === 0) throw new Error("Adicione pelo menos 1 tipo de máquina.");
 
-      for (const r of rows) {
+      // ✅ consolida texto -> number antes de validar/enviar
+      const normalizedRows = rows.map((r) => {
+        const valor = parseMoneyPtBr(r.valor_ciclo_text);
+        return { ...r, valor_ciclo: valor };
+      });
+
+      for (const r of normalizedRows) {
         if (!r.categoria) throw new Error("categoria é obrigatória");
         if (r.capacidade_kg !== null && !Number.isFinite(Number(r.capacidade_kg))) throw new Error("capacidade_kg inválida");
         if (!Number.isFinite(Number(r.quantidade)) || Number(r.quantidade) < 0) throw new Error("quantidade inválida");
@@ -148,7 +164,7 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
           throw new Error("limpeza_mecanica_ciclos inválido");
       }
 
-      const payload = rows.map((r) => ({
+      const payload = normalizedRows.map((r) => ({
         categoria: r.categoria,
         capacidade_kg: r.capacidade_kg === null ? null : Number(r.capacidade_kg),
         quantidade: Number(r.quantidade),
@@ -276,20 +292,26 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
                 />
               </label>
 
+              {/* ✅ Agora aceita digitar livre: 16,50 */}
               <label style={{ display: "grid", gap: 6, minWidth: 170 }}>
                 <span style={{ fontSize: 12, opacity: 0.8 }}>Valor por ciclo</span>
                 <input
                   inputMode="decimal"
                   placeholder="ex: 16,50"
-                  value={formatMoneyPtBr(Number(r.valor_ciclo ?? 0))}
+                  value={r.valor_ciclo_text}
                   onChange={(e) => {
-                    const raw = e.target.value.replace(/[^\d,]/g, "");
-                    const n = parseMoneyPtBr(raw);
-                    updateRow(i, { valor_ciclo: n });
+                    // deixa digitar número, vírgula e ponto (ponto opcional)
+                    const raw = e.target.value.replace(/[^\d.,]/g, "");
+                    updateRow(i, { valor_ciclo_text: raw });
+                  }}
+                  onBlur={() => {
+                    // ao sair do campo, normaliza para 2 casas e atualiza number
+                    const n = parseMoneyPtBr(r.valor_ciclo_text);
+                    updateRow(i, { valor_ciclo: n, valor_ciclo_text: formatMoneyPtBr(n) });
                   }}
                   style={{ padding: 8, borderRadius: 10, border: "1px solid #ccc" }}
                 />
-                <span style={{ fontSize: 12, opacity: 0.7 }}>{brl(Number(r.valor_ciclo ?? 0))}</span>
+                <span style={{ fontSize: 12, opacity: 0.7 }}>{brl(parseMoneyPtBr(r.valor_ciclo_text))}</span>
               </label>
 
               <label style={{ display: "grid", gap: 6, minWidth: 210 }}>
