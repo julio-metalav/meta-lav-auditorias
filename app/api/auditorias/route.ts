@@ -33,21 +33,17 @@ type Schema = {
 };
 
 async function detectSchema(admin: ReturnType<typeof supabaseAdmin>): Promise<Schema> {
-  // tenta combinações REAIS (sem information_schema)
   const candidates: Schema[] = [
-    // auditorias
     { table: "auditorias", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "auditor_id", statusCol: "status" },
     { table: "auditorias", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "auditor_id", statusCol: "status" },
     { table: "auditorias", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "user_id", statusCol: "status" },
     { table: "auditorias", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "user_id", statusCol: "status" },
 
-    // auditoria_mes
     { table: "auditoria_mes", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "auditor_id", statusCol: "status" },
     { table: "auditoria_mes", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "auditor_id", statusCol: "status" },
     { table: "auditoria_mes", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "user_id", statusCol: "status" },
     { table: "auditoria_mes", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "user_id", statusCol: "status" },
 
-    // auditorias_mes (se existir)
     { table: "auditorias_mes", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "auditor_id", statusCol: "status" },
     { table: "auditorias_mes", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "auditor_id", statusCol: "status" },
   ];
@@ -65,9 +61,17 @@ async function detectSchema(admin: ReturnType<typeof supabaseAdmin>): Promise<Sc
 
 export async function GET() {
   const ctx = await getUserAndRole();
-  if (!ctx) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  // ctx pode existir, mas sem user logado
+  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
-  if (!roleGte(ctx.role, "interno")) {
+  const role = (ctx.role ?? null) as Role | null;
+
+  // ✅ auditor pode listar as auditorias DELE
+  const canAuditor = role === "auditor";
+  // ✅ interno/gestor podem listar todas
+  const canStaff = roleGte(role, "interno");
+
+  if (!canAuditor && !canStaff) {
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
   }
 
@@ -76,17 +80,18 @@ export async function GET() {
   try {
     const sch = await detectSchema(admin);
 
-    // sem join (pra não depender de relationship)
-    const { data: rows, error } = await admin
-      .from(sch.table)
-      .select("*")
-      .order(sch.monthCol, { ascending: false });
+    let q = admin.from(sch.table).select("*").order(sch.monthCol, { ascending: false });
 
+    // auditor: filtra pelo próprio usuário (id do auth)
+    if (canAuditor && !canStaff) {
+      q = q.eq(sch.auditorCol, ctx.user.id);
+    }
+
+    const { data: rows, error } = await q;
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
     const list = rows ?? [];
 
-    // enrich por consultas separadas
     const condoIds = Array.from(new Set(list.map((r: any) => r[sch.condoCol]).filter(Boolean)));
     const auditorIds = Array.from(new Set(list.map((r: any) => r[sch.auditorCol]).filter(Boolean)));
 
@@ -112,7 +117,7 @@ export async function GET() {
         id: r.id,
         condominio_id,
         auditor_id,
-        ano_mes, // padronizado pro front
+        ano_mes,
         status,
         condominios: condoMap.get(condominio_id) ?? null,
         profiles: profMap.get(auditor_id) ?? null,
@@ -127,9 +132,10 @@ export async function GET() {
 
 export async function POST(req: Request) {
   const ctx = await getUserAndRole();
-  if (!ctx) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
-  if (!roleGte(ctx.role, "interno")) {
+  // criar auditoria: somente interno/gestor
+  if (!roleGte(ctx.role as Role | null, "interno")) {
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
   }
 
@@ -159,7 +165,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // evita duplicar
     const { data: exists, error: exErr } = await admin
       .from(sch.table)
       .select("id")
