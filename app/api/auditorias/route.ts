@@ -24,48 +24,42 @@ function isMonth01(iso: string) {
   return /^\d{4}-\d{2}-01$/.test(iso);
 }
 
-async function detectAuditoriasSchema(admin: ReturnType<typeof supabaseAdmin>) {
-  // tenta achar qual tabela/colunas existem de verdade
-  const candidates = ["auditorias", "auditoria_mes", "auditorias_mes"];
+type Schema = {
+  table: string;
+  condoCol: string;
+  monthCol: string;
+  auditorCol: string;
+  statusCol: string;
+};
 
-  for (const table of candidates) {
-    const { data: cols, error } = await admin
-      .from("information_schema.columns")
-      .select("column_name")
-      .eq("table_schema", "public")
-      .eq("table_name", table);
+async function detectSchema(admin: ReturnType<typeof supabaseAdmin>): Promise<Schema> {
+  // tenta combinações REAIS (sem information_schema)
+  const candidates: Schema[] = [
+    // auditorias
+    { table: "auditorias", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "auditor_id", statusCol: "status" },
+    { table: "auditorias", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "auditor_id", statusCol: "status" },
+    { table: "auditorias", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "user_id", statusCol: "status" },
+    { table: "auditorias", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "user_id", statusCol: "status" },
 
-    if (error || !cols?.length) continue;
+    // auditoria_mes
+    { table: "auditoria_mes", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "auditor_id", statusCol: "status" },
+    { table: "auditoria_mes", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "auditor_id", statusCol: "status" },
+    { table: "auditoria_mes", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "user_id", statusCol: "status" },
+    { table: "auditoria_mes", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "user_id", statusCol: "status" },
 
-    const set = new Set(cols.map((c: any) => c.column_name));
+    // auditorias_mes (se existir)
+    { table: "auditorias_mes", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "auditor_id", statusCol: "status" },
+    { table: "auditorias_mes", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "auditor_id", statusCol: "status" },
+  ];
 
-    const idCol = set.has("id") ? "id" : null;
-    const condoCol = set.has("condominio_id") ? "condominio_id" : null;
-
-    // mês pode ter nomes diferentes
-    const monthCol =
-      set.has("ano_mes") ? "ano_mes" :
-      set.has("mes_ref") ? "mes_ref" :
-      set.has("mes") ? "mes" :
-      set.has("mes_referencia") ? "mes_referencia" :
-      null;
-
-    // auditor pode ter nomes diferentes
-    const auditorCol =
-      set.has("auditor_id") ? "auditor_id" :
-      set.has("auditor_user_id") ? "auditor_user_id" :
-      set.has("user_id") ? "user_id" :
-      null;
-
-    const statusCol = set.has("status") ? "status" : null;
-
-    if (idCol && condoCol && monthCol && auditorCol && statusCol) {
-      return { table, idCol, condoCol, monthCol, auditorCol, statusCol };
-    }
+  for (const c of candidates) {
+    const cols = `id,${c.condoCol},${c.monthCol},${c.auditorCol},${c.statusCol}`;
+    const { error } = await admin.from(c.table).select(cols).limit(1);
+    if (!error) return c;
   }
 
   throw new Error(
-    "Não encontrei uma tabela válida de auditorias. Esperava colunas: id, condominio_id, (ano_mes ou mes_ref), (auditor_id), status."
+    "Não encontrei uma tabela válida de auditorias. Esperava colunas: id, condominio_id, (ano_mes ou mes_ref), (auditor_id/user_id), status."
   );
 }
 
@@ -73,14 +67,16 @@ export async function GET() {
   const ctx = await getUserAndRole();
   if (!ctx) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
-  const { role } = ctx;
-  if (!roleGte(role, "interno")) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  if (!roleGte(ctx.role, "interno")) {
+    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  }
 
   const admin = supabaseAdmin();
 
   try {
-    const sch = await detectAuditoriasSchema(admin);
+    const sch = await detectSchema(admin);
 
+    // sem join (pra não depender de relationship)
     const { data: rows, error } = await admin
       .from(sch.table)
       .select("*")
@@ -90,7 +86,7 @@ export async function GET() {
 
     const list = rows ?? [];
 
-    // busca condomínios e profiles separadamente (sem depender de FK/relationship)
+    // enrich por consultas separadas
     const condoIds = Array.from(new Set(list.map((r: any) => r[sch.condoCol]).filter(Boolean)));
     const auditorIds = Array.from(new Set(list.map((r: any) => r[sch.auditorCol]).filter(Boolean)));
 
@@ -106,7 +102,6 @@ export async function GET() {
     const condoMap = new Map<string, any>((condos ?? []).map((c: any) => [c.id, c]));
     const profMap = new Map<string, any>((profs ?? []).map((p: any) => [p.id, p]));
 
-    // normaliza a resposta para o front sempre receber: ano_mes + auditor_id etc
     const normalized = list.map((r: any) => {
       const condominio_id = r[sch.condoCol];
       const auditor_id = r[sch.auditorCol];
@@ -114,10 +109,10 @@ export async function GET() {
       const status = r[sch.statusCol];
 
       return {
-        id: r[sch.idCol],
+        id: r.id,
         condominio_id,
         auditor_id,
-        ano_mes, // sempre devolve com esse nome
+        ano_mes, // padronizado pro front
         status,
         condominios: condoMap.get(condominio_id) ?? null,
         profiles: profMap.get(auditor_id) ?? null,
@@ -134,20 +129,20 @@ export async function POST(req: Request) {
   const ctx = await getUserAndRole();
   if (!ctx) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
-  const { role } = ctx;
-  if (!roleGte(role, "interno")) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  if (!roleGte(ctx.role, "interno")) {
+    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  }
 
   const admin = supabaseAdmin();
 
   try {
-    const sch = await detectAuditoriasSchema(admin);
+    const sch = await detectSchema(admin);
 
     const body = await req.json().catch(() => ({}));
 
     const condominio_id = String(body?.condominio_id ?? "").trim();
     const mes = String(body?.ano_mes ?? body?.mes_ref ?? "").trim();
-    const auditor_id = body?.auditor_id ? String(body.auditor_id).trim() : "";
-
+    const auditor_id = String(body?.auditor_id ?? "").trim();
     const status = normalizeStatus(body?.status);
 
     if (!condominio_id || !mes || !auditor_id) {
@@ -165,18 +160,16 @@ export async function POST(req: Request) {
     }
 
     // evita duplicar
-    const { data: exists } = await admin
+    const { data: exists, error: exErr } = await admin
       .from(sch.table)
       .select("id")
       .eq(sch.condoCol, condominio_id)
       .eq(sch.monthCol, mes)
       .maybeSingle();
 
+    if (exErr) return NextResponse.json({ error: exErr.message }, { status: 400 });
     if (exists?.id) {
-      return NextResponse.json(
-        { error: `Já existe auditoria para este condomínio em ${mes}` },
-        { status: 409 }
-      );
+      return NextResponse.json({ error: `Já existe auditoria para este condomínio em ${mes}` }, { status: 409 });
     }
 
     const insertRow: any = {
@@ -190,7 +183,7 @@ export async function POST(req: Request) {
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
     return NextResponse.json({
-      id: data[sch.idCol],
+      id: data.id,
       condominio_id: data[sch.condoCol],
       auditor_id: data[sch.auditorCol],
       ano_mes: data[sch.monthCol],
