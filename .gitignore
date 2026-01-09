@@ -1,1 +1,29 @@
-.env.local
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# next.js
+.next/
+out/
+next/
+
+# vercel
+.vercel/
+
+# env files
+.env
+.env.*
+!.env.example
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# misc
+.DS_Store
+
+# local junk (apareceu aí no seu status)
+meta-lav-auditorias@0.1.0
