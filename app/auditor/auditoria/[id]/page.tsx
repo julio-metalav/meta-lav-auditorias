@@ -20,8 +20,18 @@ type Aud = {
   profiles?: { email?: string | null } | null;
 };
 
+type LocalPhoto = {
+  id: string;
+  file: File;
+  url: string; // object URL para preview
+};
+
 function pickMonth(a: Aud) {
   return (a.ano_mes ?? a.mes_ref ?? "") as string;
+}
+
+function uid() {
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 export default function AuditorAuditoriaPage({ params }: { params: { id: string } }) {
@@ -39,6 +49,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   const [leitura_agua, setLeituraAgua] = useState("");
   const [leitura_energia, setLeituraEnergia] = useState("");
   const [leitura_gas, setLeituraGas] = useState("");
+
+  // Fotos (apenas preview local por enquanto)
+  const [photos, setPhotos] = useState<LocalPhoto[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   function applyFromAud(a: Aud) {
     setObs(a.observacoes ?? "");
@@ -107,12 +121,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
       const saved: Aud | null = json?.auditoria ?? null;
 
-      // Atualiza UI com o retorno do banco (se vier)
       if (saved) {
         setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...saved }));
         applyFromAud(saved);
       } else {
-        // Mesmo se a API não devolver a auditoria completa, a gente mantém o form como está
         setAud((prev) =>
           prev
             ? {
@@ -126,12 +138,48 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         );
       }
 
-      setOkMsg("Rascunho salvo ✅");
+      // Importante: fotos ainda NÃO salvam no banco (só preview local)
+      setOkMsg("Rascunho salvo ✅ (fotos ainda são só preview)");
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao salvar");
     } finally {
       setSaving(false);
     }
+  }
+
+  function onPickFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+
+    const next: LocalPhoto[] = [];
+    for (const file of Array.from(files)) {
+      // aceita só imagens
+      if (!file.type.startsWith("image/")) continue;
+
+      const url = URL.createObjectURL(file);
+      next.push({ id: uid(), file, url });
+    }
+
+    if (next.length === 0) return;
+
+    setPhotos((prev) => [...prev, ...next]);
+
+    // permite selecionar os mesmos arquivos de novo depois
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function removePhoto(photoId: string) {
+    setPhotos((prev) => {
+      const item = prev.find((p) => p.id === photoId);
+      if (item) URL.revokeObjectURL(item.url);
+      return prev.filter((p) => p.id !== photoId);
+    });
+  }
+
+  function clearPhotos() {
+    setPhotos((prev) => {
+      prev.forEach((p) => URL.revokeObjectURL(p.url));
+      return [];
+    });
   }
 
   useEffect(() => {
@@ -142,7 +190,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   useEffect(() => {
     return () => {
       if (okTimer.current) window.clearTimeout(okTimer.current);
+      // limpa objectURLs
+      photos.forEach((p) => URL.revokeObjectURL(p.url));
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const titulo = aud?.condominios
@@ -226,6 +277,68 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             rows={4}
             placeholder="anote ocorrências, fotos pendentes, máquina com ruído, etc."
           />
+        </div>
+
+        {/* FOTOS (preview local) */}
+        <div className="mt-6 rounded-2xl border p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-sm font-semibold text-gray-700">Fotos (rascunho)</div>
+            <div className="text-xs text-gray-500">Por enquanto: só preview. Próximo passo: salvar no Supabase.</div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={(e) => onPickFiles(e.target.files)}
+              className="text-sm"
+            />
+
+            <button
+              type="button"
+              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Adicionar fotos
+            </button>
+
+            <button
+              type="button"
+              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+              onClick={clearPhotos}
+              disabled={photos.length === 0}
+            >
+              Limpar fotos
+            </button>
+
+            <div className="ml-auto text-sm text-gray-600">{photos.length} selecionada(s)</div>
+          </div>
+
+          {photos.length > 0 && (
+            <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+              {photos.map((p) => (
+                <div key={p.id} className="rounded-xl border p-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={p.url} alt="foto" className="h-32 w-full rounded-lg object-cover" />
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <div className="truncate text-xs text-gray-600" title={p.file.name}>
+                      {p.file.name}
+                    </div>
+                    <button
+                      type="button"
+                      className="rounded-lg border px-2 py-1 text-xs hover:bg-gray-50"
+                      onClick={() => removePhoto(p.id)}
+                      title="Remover"
+                    >
+                      Remover
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="mt-4 flex gap-3">
