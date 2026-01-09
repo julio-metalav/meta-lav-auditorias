@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabaseBrowser } from "@/lib/supabaseClient";
 
 type Role = "auditor" | "interno" | "gestor";
 
@@ -28,7 +27,6 @@ type Aud = {
   condominio_id: string;
   auditor_id: string | null;
   status: string | null;
-  // pode vir como ano_mes (tabela auditoria_mes) ou mes_ref (outra variação)
   ano_mes?: string | null;
   mes_ref?: string | null;
   created_at?: string | null;
@@ -83,7 +81,7 @@ export default function AuditoriasPage() {
         .map((a) => a.auditor_id)
     );
 
-    // Se ainda não tem vínculo cadastrado, deixa mostrar todos (pra não “sumir” a lista)
+    // se ainda não tem vínculo, mostra todos (pra não parecer “bugado”)
     if (allowedIds.size === 0) return auditors;
 
     return auditors.filter((u) => allowedIds.has(u.id));
@@ -136,8 +134,6 @@ export default function AuditoriasPage() {
       status: (a.status ?? "aberta") as string,
     });
     setErr(null);
-
-    // rola pra cima pro formulário (pra ficar óbvio)
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -156,14 +152,13 @@ export default function AuditoriasPage() {
     setErr(null);
 
     if (!form.condominio_id || !form.ano_mes || !form.auditor_id) {
-      setErr("Campos obrigatórios: condominio_id, mês (YYYY-MM-01), auditor_id");
+      setErr("Campos obrigatórios: condomínio, mês (YYYY-MM-01), auditor");
       return;
     }
 
     setLoading(true);
     try {
       if (!selectedId) {
-        // cria via API (padrão já usado no seu app)
         const res = await fetch("/api/auditorias", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -178,29 +173,11 @@ export default function AuditoriasPage() {
         const json = await res.json();
         if (!res.ok) throw new Error(json?.error ?? "Erro ao criar auditoria");
       } else {
-        // atualiza direto no banco (cliente) — evita depender de rota PATCH que pode não existir
-        const supabase = supabaseBrowser();
-
-        // tenta primeiro auditoria_mes (se existir)
-        const payload = {
-          condominio_id: form.condominio_id,
-          ano_mes: form.ano_mes,
-          auditor_id: form.auditor_id,
-          status: form.status,
-        };
-
-        let upd = await supabase.from("auditoria_mes").update(payload).eq("id", selectedId);
-
-        // se não existir a tabela ou der erro de relação/coluna, tenta "auditorias"
-        if (upd.error) {
-          upd = await supabase.from("auditorias").update(payload).eq("id", selectedId);
-        }
-
-        if (upd.error) throw new Error(upd.error.message);
+        // (por enquanto) edição só no client-state; se precisar editar no banco, a gente cria um PATCH depois
+        setErr("Edição ainda não implementada. (Clique 'voltar para Criar' e crie outra do mês.)");
       }
 
       await loadAll();
-      // mantém selecionado após salvar (melhor pro fluxo)
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao salvar");
     } finally {
@@ -213,7 +190,7 @@ export default function AuditoriasPage() {
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-3xl font-semibold">Auditorias</h1>
         <button
-          className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+          className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
           onClick={loadAll}
           disabled={loading}
         >
@@ -231,7 +208,7 @@ export default function AuditoriasPage() {
         <div className="mb-3 text-sm text-gray-600">
           {selectedId ? (
             <>
-              Editando auditoria <span className="font-mono">{selectedId}</span>{" "}
+              Auditoria selecionada <span className="font-mono">{selectedId}</span>{" "}
               <button className="ml-2 underline" onClick={resetForm}>
                 (voltar para “Criar”)
               </button>
@@ -242,7 +219,7 @@ export default function AuditoriasPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-          <div className="md:col-span-1">
+          <div>
             <label className="mb-1 block text-xs text-gray-600">Condomínio</label>
             <select
               className="w-full rounded-xl border px-3 py-2"
@@ -258,7 +235,7 @@ export default function AuditoriasPage() {
             </select>
           </div>
 
-          <div className="md:col-span-1">
+          <div>
             <label className="mb-1 block text-xs text-gray-600">Mês ref (YYYY-MM-01)</label>
             <input
               className="w-full rounded-xl border px-3 py-2"
@@ -268,7 +245,7 @@ export default function AuditoriasPage() {
             />
           </div>
 
-          <div className="md:col-span-1">
+          <div>
             <label className="mb-1 block text-xs text-gray-600">Auditor</label>
             <select
               className="w-full rounded-xl border px-3 py-2"
@@ -284,7 +261,7 @@ export default function AuditoriasPage() {
             </select>
           </div>
 
-          <div className="md:col-span-1">
+          <div>
             <label className="mb-1 block text-xs text-gray-600">Status</label>
             <select
               className="w-full rounded-xl border px-3 py-2"
@@ -306,12 +283,6 @@ export default function AuditoriasPage() {
           >
             {selectedId ? "Salvar alterações" : "Criar"}
           </button>
-
-          {selectedId && (
-            <span className="text-xs text-gray-500">
-              Dica: clique em outra auditoria abaixo para trocar a seleção.
-            </span>
-          )}
         </div>
       </div>
 
@@ -338,20 +309,14 @@ export default function AuditoriasPage() {
                   </div>
                   <div className="mt-1 text-sm text-gray-700">
                     Auditor: {a.auditor_id ? auditorEmail.get(a.auditor_id) ?? a.auditor_id : "—"} • mês{" "}
-                    {month} •{" "}
-                    <span className="font-semibold">{a.status ?? "—"}</span>
+                    {month} • <span className="font-semibold">{a.status ?? "—"}</span>
                   </div>
-                  <div className="mt-1 text-xs text-gray-400 font-mono">ID: {a.id}</div>
+                  <div className="mt-1 font-mono text-xs text-gray-400">ID: {a.id}</div>
                 </button>
               );
             })}
           </div>
         )}
-
-        <div className="mt-4 text-xs text-gray-500">
-          Fluxo: interno cria a auditoria do mês e escolhe o auditor. Auditor preenche leituras e anexos e envia para conferência.
-          Interno lança ciclos, anexa cashback e fecha como FINAL.
-        </div>
       </div>
     </div>
   );
