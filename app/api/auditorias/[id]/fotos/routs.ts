@@ -13,6 +13,7 @@ const kindToColumn: Record<string, string> = {
   gas: "foto_gas_url",
   quimicos: "foto_quimicos_url",
   bombonas: "foto_bombonas_url",
+  conector_bala: "foto_conector_bala_url",
 };
 
 function extFromFileName(name: string) {
@@ -38,7 +39,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     if (!url || !serviceKey) {
       return NextResponse.json(
-        { error: "Supabase env não configurado (URL ou SERVICE_ROLE_KEY)." },
+        { error: "Supabase env não configurado." },
         { status: 500 }
       );
     }
@@ -55,13 +56,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: "Campo 'kind' inválido." }, { status: 400 });
     }
     if (!file) {
-      return NextResponse.json({ error: "Arquivo não enviado (file)." }, { status: 400 });
+      return NextResponse.json({ error: "Arquivo não enviado." }, { status: 400 });
     }
     if (!file.type.startsWith("image/")) {
       return NextResponse.json({ error: "Envie apenas imagem." }, { status: 400 });
     }
 
-    // lê o arquivo para bytes
     const bytes = new Uint8Array(await file.arrayBuffer());
 
     const ext = extFromFileName(file.name);
@@ -69,36 +69,27 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const filename = `${kind}-${Date.now()}-${base}.${ext}`;
     const path = `${auditoriaId}/${filename}`;
 
-    // upload no Storage
     const up = await supabaseAdmin.storage.from(BUCKET).upload(path, bytes, {
       contentType: file.type,
       upsert: true,
     });
 
     if (up.error) {
-      return NextResponse.json({ error: `Erro upload Storage: ${up.error.message}` }, { status: 500 });
+      return NextResponse.json({ error: up.error.message }, { status: 500 });
     }
 
-    const pub = supabaseAdmin.storage.from(BUCKET).getPublicUrl(path);
-    const publicUrl = pub?.data?.publicUrl;
+    const publicUrl = supabaseAdmin.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
 
-    if (!publicUrl) {
-      return NextResponse.json({ error: "Falha ao obter URL pública." }, { status: 500 });
-    }
-
-    // grava URL na auditoria (na coluna correspondente)
     const col = kindToColumn[kind];
     const { data, error } = await supabaseAdmin
       .from("auditorias")
       .update({ [col]: publicUrl })
       .eq("id", auditoriaId)
-      .select(
-        "id, condominio_id, auditor_id, status, ano_mes, mes_ref, leitura_agua, leitura_energia, leitura_gas, observacoes, foto_agua_url, foto_energia_url, foto_gas_url, foto_quimicos_url, foto_bombonas_url"
-      )
+      .select("*")
       .single();
 
     if (error) {
-      return NextResponse.json({ error: `Erro ao salvar URL no banco: ${error.message}` }, { status: 500 });
+      return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
     return NextResponse.json({ url: publicUrl, kind, auditoria: data });
