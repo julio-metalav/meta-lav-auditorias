@@ -25,6 +25,9 @@ type Aud = {
   condominios?: { nome: string; cidade: string; uf: string } | null;
 };
 
+type Me = { id: string; email: string | null; name: string | null };
+type UserRow = { id: string; email: string | null };
+
 function pickMonth(a: Aud) {
   return (a.ano_mes ?? a.mes_ref ?? "") as string;
 }
@@ -45,6 +48,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   const id = params.id;
 
   const [aud, setAud] = useState<Aud | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
+  const [users, setUsers] = useState<UserRow[]>([]);
+
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -57,7 +63,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   const [leitura_energia, setLeituraEnergia] = useState("");
   const [leitura_gas, setLeituraGas] = useState("");
 
-  // ✅ botão: Salvar (cinza) quando tem alterações; Salvo (verde) quando está sincronizado
   const [dirty, setDirty] = useState(false);
 
   const [uploading, setUploading] = useState<Record<FotoKind, boolean>>({
@@ -97,12 +102,52 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     return a.foto_conector_bala_url ?? null;
   }
 
-  async function carregar() {
+  const userEmailById = useMemo(() => {
+    const m = new Map<string, string>();
+    users.forEach((u) => m.set(u.id, u.email ?? u.id));
+    return m;
+  }, [users]);
+
+  const assignedAuditorLabel = useMemo(() => {
+    if (!aud?.auditor_id) return "—";
+    return userEmailById.get(aud.auditor_id) ?? aud.auditor_id;
+  }, [aud?.auditor_id, userEmailById]);
+
+  const meLabel = useMemo(() => {
+    if (!me) return "—";
+    const who = me.name ? `${me.name} (${me.email ?? me.id})` : me.email ?? me.id;
+    return who;
+  }, [me]);
+
+  const mismatch = useMemo(() => {
+    if (!me?.id) return false;
+    if (!aud?.auditor_id) return false;
+    return me.id !== aud.auditor_id;
+  }, [me?.id, aud?.auditor_id]);
+
+  async function carregarTudo() {
     setLoading(true);
     setErr(null);
     setOk(null);
 
     try {
+      // 1) quem está logado
+      const meRes = await fetch("/api/me", { cache: "no-store" });
+      const meJson = await meRes.json();
+      if (!meRes.ok) throw new Error(meJson?.error ?? "Erro ao identificar usuário logado");
+      setMe(meJson);
+
+      // 2) lista de users (pra traduzir auditor_id -> email)
+      // se falhar, não quebra a página (só mostra id)
+      try {
+        const uRes = await fetch("/api/users", { cache: "no-store" });
+        const uJson = await uRes.json();
+        if (uRes.ok) setUsers(Array.isArray(uJson) ? uJson : uJson?.data ?? []);
+      } catch {
+        // ignora
+      }
+
+      // 3) auditoria
       const res = await fetch("/api/auditorias", { cache: "no-store" });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "Erro ao carregar auditorias");
@@ -124,10 +169,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     setErr(null);
     setOk(null);
 
-    if (!aud) {
-      setErr("Auditoria não carregada.");
-      return;
-    }
+    if (!aud) return setErr("Auditoria não carregada.");
+    if (mismatch) return setErr(`Sem permissão: você está logado como "${meLabel}", mas esta auditoria é de "${assignedAuditorLabel}".`);
 
     setSaving(true);
     try {
@@ -196,10 +239,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     setErr(null);
     setOk(null);
 
-    if (!file.type.startsWith("image/")) {
-      setErr("Envie apenas imagem.");
-      return;
-    }
+    if (!aud) return setErr("Auditoria não carregada.");
+    if (mismatch) return setErr(`Sem permissão: você está logado como "${meLabel}", mas esta auditoria é de "${assignedAuditorLabel}".`);
+
+    if (!file.type.startsWith("image/")) return setErr("Envie apenas imagem.");
 
     setUploading((p) => ({ ...p, [kind]: true }));
     try {
@@ -266,7 +309,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   }, [aud, leitura_agua, leitura_energia]);
 
   useEffect(() => {
-    carregar();
+    carregarTudo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -282,13 +325,27 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     ? `${aud.condominios.nome} • ${aud.condominios.cidade}/${aud.condominios.uf}`
     : aud?.condominio_id ?? "";
 
+  const disableAll = loading || saving || !aud || mismatch;
+
   return (
     <div className="mx-auto max-w-4xl p-6">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Auditoria (Auditor)</h1>
           <div className="text-sm text-gray-600">{titulo}</div>
-          <div className="mt-1 text-xs text-gray-500">
+
+          <div className="mt-2 rounded-xl border bg-white p-3 text-xs">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-gray-700">
+                <b>Logado como:</b> {meLabel}
+              </div>
+              <div className="text-gray-700">
+                <b>Auditoria atribuída a:</b> {assignedAuditorLabel}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-2 text-xs text-gray-500">
             Mês: <b>{aud ? pickMonth(aud) : "-"}</b> • Status: <b>{aud?.status ?? "-"}</b>
           </div>
           <div className="mt-1 font-mono text-xs text-gray-400">ID: {id}</div>
@@ -296,27 +353,31 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
         <button
           className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-          onClick={carregar}
+          onClick={carregarTudo}
           disabled={loading || saving}
         >
           {loading ? "Carregando..." : "Recarregar"}
         </button>
       </div>
 
-      {err && (
-        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>
+      {mismatch && (
+        <div className="mb-4 rounded-2xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
+          <b>Atenção:</b> você está logado como <b>{meLabel}</b>, mas esta auditoria pertence a <b>{assignedAuditorLabel}</b>.
+          <div className="mt-1 text-xs text-red-700">
+            Para lançar dados em campo, faça login com o usuário correto (o auditor atribuído).
+          </div>
+        </div>
       )}
 
-      {ok && (
-        <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>
-      )}
+      {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
+      {ok && <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>}
 
       <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-gray-800">Conferência (campo)</div>
             {checklist.prontoCampo ? (
-              <div className="mt-1 text-sm font-semibold text-green-700">✅ Campo concluído</div>
+              <div className="mt-1 text-sm font-semibold text-green-700">✅ Campo pronto</div>
             ) : (
               <div className="mt-1 text-sm text-red-700">
                 Faltando: <b>{checklist.faltas.join(", ")}</b>
@@ -327,7 +388,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
           <button
             className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
-            disabled={!checklist.prontoCampo || saving || loading || !aud}
+            disabled={!checklist.prontoCampo || disableAll}
             onClick={() => salvarRascunho({ status: "final" })}
           >
             {saving ? "Salvando..." : "Concluir em campo ✅"}
@@ -349,6 +410,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 setDirty(true);
               }}
               placeholder="ex: 12345"
+              disabled={disableAll}
             />
           </div>
 
@@ -362,6 +424,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 setDirty(true);
               }}
               placeholder="ex: 67890"
+              disabled={disableAll}
             />
           </div>
 
@@ -375,6 +438,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 setDirty(true);
               }}
               placeholder="se não tiver, deixa vazio"
+              disabled={disableAll}
             />
           </div>
         </div>
@@ -390,6 +454,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             }}
             rows={3}
             placeholder="anote ocorrências, etc."
+            disabled={disableAll}
           />
         </div>
 
@@ -450,7 +515,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    <label className="cursor-pointer rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+                    <label
+                      className={`cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
+                        disableAll ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
+                      }`}
+                    >
                       📷 Tirar
                       <input
                         type="file"
@@ -461,11 +530,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                           onPick(item.kind, e.target.files?.[0]);
                           e.currentTarget.value = "";
                         }}
-                        disabled={busy}
+                        disabled={disableAll || busy}
                       />
                     </label>
 
-                    <label className="cursor-pointer rounded-xl border px-4 py-2 text-sm hover:bg-gray-50">
+                    <label className={`cursor-pointer rounded-xl border px-4 py-2 text-sm ${disableAll ? "opacity-50" : "hover:bg-gray-50"}`}>
                       🖼️ Galeria
                       <input
                         type="file"
@@ -475,15 +544,17 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                           onPick(item.kind, e.target.files?.[0]);
                           e.currentTarget.value = "";
                         }}
-                        disabled={busy}
+                        disabled={disableAll || busy}
                       />
                     </label>
 
                     {pend && (
                       <>
                         <button
-                          className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
-                          disabled={busy}
+                          className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                            disableAll ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
+                          }`}
+                          disabled={disableAll || busy}
                           onClick={() => uploadFoto(item.kind, pendingFile[item.kind] as File)}
                         >
                           {busy ? "Enviando..." : "Salvar ✅"}
@@ -491,7 +562,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
                         <button
                           className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-                          disabled={busy}
+                          disabled={disableAll || busy}
                           onClick={() => cancelPending(item.kind)}
                         >
                           Refazer
@@ -506,13 +577,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         </div>
 
         <div className="mt-4 flex gap-3">
-          {/* ✅ Botão do jeito que você pediu */}
           <button
             className={`rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
               dirty ? "bg-gray-400 hover:bg-gray-500" : "bg-green-600"
             }`}
             onClick={() => salvarRascunho()}
-            disabled={saving || loading || !aud || !dirty}
+            disabled={disableAll || !dirty}
             title={dirty ? "Salvar alterações" : "Já está salvo"}
           >
             {saving ? "Salvando..." : dirty ? "Salvar" : "Salvo ✓"}
@@ -524,7 +594,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         </div>
       </div>
 
-      {/* Preview opcional (não mostra a foto direto na tela) */}
       {previewKind && pendingUrl[previewKind] && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-4">
