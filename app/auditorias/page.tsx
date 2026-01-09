@@ -1,10 +1,16 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { supabaseBrowser } from "@/lib/supabaseClient";
 
 type Role = "auditor" | "interno" | "gestor";
 
-type Condo = { id: string; nome: string; cidade: string; uf: string };
+type Condo = {
+  id: string;
+  nome: string;
+  cidade: string;
+  uf: string;
+};
 
 type UserRow = {
   id: string;
@@ -12,29 +18,20 @@ type UserRow = {
   role: Role | null;
 };
 
-type AssignmentRow = {
-  id?: string;
-  auditor_id?: string;
-  condominio_id?: string;
-
-  // dependendo do join do backend:
-  auditor_email?: string | null;
-  email?: string | null;
-
-  // joins possíveis:
-  profiles?: { id?: string; email?: string | null; role?: Role | null } | null;
-  auditor?: { id?: string; email?: string | null; role?: Role | null } | null;
+type Assignment = {
+  auditor_id: string;
+  condominio_id: string;
 };
 
-type AuditoriaRow = {
+type Aud = {
   id: string;
   condominio_id: string;
-  auditor_id?: string | null;
-  ano_mes: string;
-  status: string;
-
-  condominios?: { nome: string; cidade: string; uf: string } | null;
-  profiles?: { email?: string | null } | null;
+  auditor_id: string | null;
+  status: string | null;
+  // pode vir como ano_mes (tabela auditoria_mes) ou mes_ref (outra variação)
+  ano_mes?: string | null;
+  mes_ref?: string | null;
+  created_at?: string | null;
 };
 
 function monthISO(d = new Date()) {
@@ -43,26 +40,19 @@ function monthISO(d = new Date()) {
   return `${y}-${m}-01`;
 }
 
-function toList<T = any>(payload: any): T[] {
-  if (Array.isArray(payload)) return payload as T[];
-  if (payload?.data && Array.isArray(payload.data)) return payload.data as T[];
-  if (payload?.users && Array.isArray(payload.users)) return payload.users as T[];
-  if (payload?.items && Array.isArray(payload.items)) return payload.items as T[];
-  return [];
-}
-
-function condoLabel(c: { nome: string; cidade: string; uf: string }) {
-  return `${c.nome} • ${c.cidade}/${c.uf}`;
+function pickMonth(aud: Aud) {
+  return (aud.ano_mes ?? aud.mes_ref ?? monthISO()) as string;
 }
 
 export default function AuditoriasPage() {
-  const [auditorias, setAuditorias] = useState<AuditoriaRow[]>([]);
+  const [auditorias, setAuditorias] = useState<Aud[]>([]);
   const [condos, setCondos] = useState<Condo[]>([]);
-  const [auditores, setAuditores] = useState<UserRow[]>([]);
-  const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
-  const [err, setErr] = useState<string | null>(null);
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState({
     condominio_id: "",
     ano_mes: monthISO(),
@@ -70,328 +60,298 @@ export default function AuditoriasPage() {
     status: "aberta",
   });
 
-  const condoOptions = useMemo(() => {
-    return [...condos].sort((a, b) => condoLabel(a).localeCompare(condoLabel(b)));
+  const condoLabel = useMemo(() => {
+    const map = new Map<string, string>();
+    condos.forEach((c) => map.set(c.id, `${c.nome} • ${c.cidade}/${c.uf}`));
+    return map;
   }, [condos]);
 
-  // auditores atribuídos ao condomínio selecionado (vindo de /api/assignments)
-  const auditoresAtribuidos = useMemo(() => {
-    const cid = form.condominio_id;
-    if (!cid) return [];
+  const auditorEmail = useMemo(() => {
+    const map = new Map<string, string>();
+    users.forEach((u) => map.set(u.id, u.email ?? u.id));
+    return map;
+  }, [users]);
 
-    const list = assignments
-      .filter((a) => a.condominio_id === cid)
-      .map((a) => {
-        const id =
-          a.auditor_id ??
-          a.profiles?.id ??
-          a.auditor?.id ??
-          undefined;
+  const auditors = useMemo(() => users.filter((u) => u.role === "auditor"), [users]);
 
-        const email =
-          a.auditor_email ??
-          a.email ??
-          a.profiles?.email ??
-          a.auditor?.email ??
-          null;
+  const allowedAuditorsForCondo = useMemo(() => {
+    if (!form.condominio_id) return auditors;
 
-        return id ? { id, email, role: "auditor" as Role } : null;
-      })
-      .filter(Boolean) as UserRow[];
+    const allowedIds = new Set(
+      assignments
+        .filter((a) => a.condominio_id === form.condominio_id)
+        .map((a) => a.auditor_id)
+    );
 
-    // remove duplicados por id
-    const map = new Map<string, UserRow>();
-    for (const u of list) map.set(u.id, u);
-    return Array.from(map.values()).sort((a, b) => (a.email ?? "").localeCompare(b.email ?? ""));
-  }, [assignments, form.condominio_id]);
+    // Se ainda não tem vínculo cadastrado, deixa mostrar todos (pra não “sumir” a lista)
+    if (allowedIds.size === 0) return auditors;
 
-  async function carregarTudo() {
+    return auditors.filter((u) => allowedIds.has(u.id));
+  }, [auditors, assignments, form.condominio_id]);
+
+  async function loadAll() {
     setLoading(true);
     setErr(null);
+
     try {
-      // 1) condomínios
-      const cRes = await fetch("/api/condominios", { cache: "no-store" });
+      const [cRes, uRes, aRes, audRes] = await Promise.all([
+        fetch("/api/condominios", { cache: "no-store" }),
+        fetch("/api/users", { cache: "no-store" }),
+        fetch("/api/assignments", { cache: "no-store" }),
+        fetch("/api/auditorias", { cache: "no-store" }),
+      ]);
+
       const cJson = await cRes.json();
-      if (!cRes.ok) throw new Error(cJson?.error ?? "Falha ao carregar condomínios");
-      const cList = toList<Condo>(cJson);
-      setCondos(cList);
-
-      // 2) usuários (fallback e para mostrar emails)
-      const uRes = await fetch("/api/users", { cache: "no-store" });
       const uJson = await uRes.json();
-      if (!uRes.ok) throw new Error(uJson?.error ?? "Falha ao carregar usuários");
-      const uList = toList<UserRow>(uJson);
-      setAuditores(uList);
-
-      // 3) atribuições (quem pode auditar qual condomínio)
-      const aRes = await fetch("/api/assignments", { cache: "no-store" });
       const aJson = await aRes.json();
-      if (!aRes.ok) throw new Error(aJson?.error ?? "Falha ao carregar atribuições");
-      const aList = toList<AssignmentRow>(aJson);
-      setAssignments(aList);
+      const audJson = await audRes.json();
 
-      // 4) auditorias existentes
-      const auRes = await fetch("/api/auditorias", { cache: "no-store" });
-      const auJson = await auRes.json();
-      if (!auRes.ok) throw new Error(auJson?.error ?? "Falha ao carregar auditorias");
-      const auList = toList<AuditoriaRow>(auJson);
-      setAuditorias(auList);
+      if (!cRes.ok) throw new Error(cJson?.error ?? "Erro ao carregar condomínios");
+      if (!uRes.ok) throw new Error(uJson?.error ?? "Erro ao carregar usuários");
+      if (!aRes.ok) throw new Error(aJson?.error ?? "Erro ao carregar atribuições");
+      if (!audRes.ok) throw new Error(audJson?.error ?? "Erro ao carregar auditorias");
 
-      // defaults do form
-      setForm((f) => ({
-        ...f,
-        condominio_id: f.condominio_id || (cList[0]?.id ?? ""),
-      }));
+      setCondos(Array.isArray(cJson) ? cJson : cJson?.data ?? []);
+      setUsers(Array.isArray(uJson) ? uJson : uJson?.data ?? []);
+      setAssignments(Array.isArray(aJson) ? aJson : aJson?.data ?? []);
+      setAuditorias(Array.isArray(audJson) ? audJson : audJson?.data ?? []);
     } catch (e: any) {
-      setErr(e?.message ?? "Erro inesperado");
+      setErr(e?.message ?? "Falha ao carregar dados");
     } finally {
       setLoading(false);
     }
   }
 
-  async function criarAuditoria() {
-    setErr(null);
-
-    if (!form.condominio_id) {
-      setErr("Selecione um condomínio");
-      return;
-    }
-
-    // Regra: se houver auditor atribuído, tem que escolher um
-    if (auditoresAtribuidos.length > 0 && !form.auditor_id) {
-      setErr("Selecione um auditor (atribuído ao condomínio)");
-      return;
-    }
-
-    try {
-      const res = await fetch("/api/auditorias", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          condominio_id: form.condominio_id,
-          ano_mes: form.ano_mes,
-          auditor_id: form.auditor_id || null,
-          status: form.status,
-        }),
-      });
-
-      const json = await res.json();
-      if (!res.ok) {
-        setErr(json?.error ?? "Falha ao criar auditoria");
-        return;
-      }
-
-      await carregarTudo();
-    } catch (e: any) {
-      setErr(e?.message ?? "Erro inesperado ao criar auditoria");
-    }
-  }
-
-  // sempre que trocar o condomínio, se só tiver 1 auditor atribuído, já seleciona
   useEffect(() => {
-    if (!form.condominio_id) return;
-    if (auditoresAtribuidos.length === 1) {
-      setForm((f) => ({ ...f, auditor_id: auditoresAtribuidos[0].id }));
-    } else {
-      setForm((f) => ({ ...f, auditor_id: "" }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.condominio_id, assignments]);
-
-  useEffect(() => {
-    carregarTudo();
+    loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 16 }}>Auditorias</h1>
+  function selectAuditoria(a: Aud) {
+    setSelectedId(a.id);
+    setForm({
+      condominio_id: a.condominio_id,
+      ano_mes: pickMonth(a),
+      auditor_id: a.auditor_id ?? "",
+      status: (a.status ?? "aberta") as string,
+    });
+    setErr(null);
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ color: "#666" }}>{auditorias.length} itens</div>
+    // rola pra cima pro formulário (pra ficar óbvio)
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function resetForm() {
+    setSelectedId(null);
+    setForm({
+      condominio_id: "",
+      ano_mes: monthISO(),
+      auditor_id: "",
+      status: "aberta",
+    });
+    setErr(null);
+  }
+
+  async function criarOuAtualizar() {
+    setErr(null);
+
+    if (!form.condominio_id || !form.ano_mes || !form.auditor_id) {
+      setErr("Campos obrigatórios: condominio_id, mês (YYYY-MM-01), auditor_id");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      if (!selectedId) {
+        // cria via API (padrão já usado no seu app)
+        const res = await fetch("/api/auditorias", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            condominio_id: form.condominio_id,
+            ano_mes: form.ano_mes,
+            auditor_id: form.auditor_id,
+            status: form.status,
+          }),
+        });
+
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.error ?? "Erro ao criar auditoria");
+      } else {
+        // atualiza direto no banco (cliente) — evita depender de rota PATCH que pode não existir
+        const supabase = supabaseBrowser();
+
+        // tenta primeiro auditoria_mes (se existir)
+        const payload = {
+          condominio_id: form.condominio_id,
+          ano_mes: form.ano_mes,
+          auditor_id: form.auditor_id,
+          status: form.status,
+        };
+
+        let upd = await supabase.from("auditoria_mes").update(payload).eq("id", selectedId);
+
+        // se não existir a tabela ou der erro de relação/coluna, tenta "auditorias"
+        if (upd.error) {
+          upd = await supabase.from("auditorias").update(payload).eq("id", selectedId);
+        }
+
+        if (upd.error) throw new Error(upd.error.message);
+      }
+
+      await loadAll();
+      // mantém selecionado após salvar (melhor pro fluxo)
+    } catch (e: any) {
+      setErr(e?.message ?? "Falha ao salvar");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-5xl p-6">
+      <div className="mb-4 flex items-center justify-between">
+        <h1 className="text-3xl font-semibold">Auditorias</h1>
         <button
-          onClick={carregarTudo}
-          style={{
-            padding: "10px 16px",
-            borderRadius: 14,
-            border: "1px solid #d8d8d8",
-            background: "white",
-            cursor: "pointer",
-          }}
+          className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+          onClick={loadAll}
+          disabled={loading}
         >
-          {loading ? "Carregando..." : "Recarregar"}
+          Recarregar
         </button>
       </div>
 
-      {err ? <div style={{ marginTop: 12, color: "#c00" }}>{err}</div> : <div style={{ marginTop: 12 }} />}
+      {err && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {err}
+        </div>
+      )}
 
-      <div
-        style={{
-          marginTop: 18,
-          padding: 18,
-          border: "1px solid #e6e6e6",
-          borderRadius: 16,
-          background: "white",
-        }}
-      >
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 220px 1fr 180px", gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Condomínio</div>
+      <div className="rounded-2xl border bg-white p-5 shadow-sm">
+        <div className="mb-3 text-sm text-gray-600">
+          {selectedId ? (
+            <>
+              Editando auditoria <span className="font-mono">{selectedId}</span>{" "}
+              <button className="ml-2 underline" onClick={resetForm}>
+                (voltar para “Criar”)
+              </button>
+            </>
+          ) : (
+            <>Criar nova auditoria</>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <div className="md:col-span-1">
+            <label className="mb-1 block text-xs text-gray-600">Condomínio</label>
             <select
+              className="w-full rounded-xl border px-3 py-2"
               value={form.condominio_id}
-              onChange={(e) => setForm((f) => ({ ...f, condominio_id: e.target.value }))}
-              style={{
-                width: "100%",
-                padding: "12px 14px",
-                borderRadius: 14,
-                border: "1px solid #d8d8d8",
-                background: "white",
-              }}
+              onChange={(e) => setForm((p) => ({ ...p, condominio_id: e.target.value, auditor_id: "" }))}
             >
               <option value="">Selecione...</option>
-              {condoOptions.map((c) => (
+              {condos.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {condoLabel(c)}
+                  {c.nome} • {c.cidade}/{c.uf}
                 </option>
               ))}
             </select>
           </div>
 
-          <div>
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Mês ref (YYYY-MM-01)</div>
+          <div className="md:col-span-1">
+            <label className="mb-1 block text-xs text-gray-600">Mês ref (YYYY-MM-01)</label>
             <input
+              className="w-full rounded-xl border px-3 py-2"
               value={form.ano_mes}
-              onChange={(e) => setForm((f) => ({ ...f, ano_mes: e.target.value }))}
-              style={{
-                width: "100%",
-                padding: "12px 14px",
-                borderRadius: 14,
-                border: "1px solid #d8d8d8",
-              }}
+              onChange={(e) => setForm((p) => ({ ...p, ano_mes: e.target.value }))}
+              placeholder="2026-01-01"
             />
           </div>
 
-          <div>
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Auditor</div>
+          <div className="md:col-span-1">
+            <label className="mb-1 block text-xs text-gray-600">Auditor</label>
             <select
+              className="w-full rounded-xl border px-3 py-2"
               value={form.auditor_id}
-              onChange={(e) => setForm((f) => ({ ...f, auditor_id: e.target.value }))}
-              style={{
-                width: "100%",
-                padding: "12px 14px",
-                borderRadius: 14,
-                border: "1px solid #d8d8d8",
-                background: "white",
-              }}
+              onChange={(e) => setForm((p) => ({ ...p, auditor_id: e.target.value }))}
             >
-              <option value="">
-                {auditoresAtribuidos.length > 0
-                  ? "Selecione..."
-                  : "Sem atribuição (use Atribuições)"}
-              </option>
-
-              {auditoresAtribuidos.length > 0
-                ? auditoresAtribuidos.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.email ?? u.id}
-                    </option>
-                  ))
-                : null}
+              <option value="">Selecione...</option>
+              {allowedAuditorsForCondo.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.email ?? u.id}
+                </option>
+              ))}
             </select>
-
-            {auditoresAtribuidos.length === 0 && (
-              <div style={{ fontSize: 12, color: "#999", marginTop: 6 }}>
-                Dica: vá em <b>Atribuições</b> e atribua um auditor ao condomínio.
-              </div>
-            )}
           </div>
 
-          <div>
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Status</div>
+          <div className="md:col-span-1">
+            <label className="mb-1 block text-xs text-gray-600">Status</label>
             <select
+              className="w-full rounded-xl border px-3 py-2"
               value={form.status}
-              onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
-              style={{
-                width: "100%",
-                padding: "12px 14px",
-                borderRadius: 14,
-                border: "1px solid #d8d8d8",
-                background: "white",
-              }}
+              onChange={(e) => setForm((p) => ({ ...p, status: e.target.value }))}
             >
               <option value="aberta">aberta</option>
-              <option value="em_andamento">em_andamento</option>
               <option value="em_conferencia">em_conferencia</option>
               <option value="final">final</option>
             </select>
           </div>
         </div>
 
-        <div style={{ marginTop: 12 }}>
+        <div className="mt-4 flex items-center gap-3">
           <button
-            onClick={criarAuditoria}
-            style={{
-              padding: "12px 18px",
-              borderRadius: 14,
-              border: "none",
-              background: "#1f6feb",
-              color: "white",
-              fontWeight: 800,
-              cursor: "pointer",
-            }}
+            className="rounded-xl bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            onClick={criarOuAtualizar}
+            disabled={loading}
           >
-            Criar
+            {selectedId ? "Salvar alterações" : "Criar"}
           </button>
+
+          {selectedId && (
+            <span className="text-xs text-gray-500">
+              Dica: clique em outra auditoria abaixo para trocar a seleção.
+            </span>
+          )}
         </div>
       </div>
 
-      <div
-        style={{
-          marginTop: 18,
-          padding: 18,
-          border: "1px solid #e6e6e6",
-          borderRadius: 16,
-          background: "white",
-        }}
-      >
-        {auditorias.length === 0 ? (
-          <div style={{ color: "#666" }}>Nenhuma auditoria cadastrada.</div>
-        ) : (
-          <div style={{ display: "grid", gap: 12 }}>
-            {auditorias.map((a) => {
-              const c = a.condominios;
-              const condLabel = c ? condoLabel(c) : a.condominio_id;
-              const auditorEmail =
-                a.profiles?.email ??
-                auditores.find((u) => u.id === a.auditor_id)?.email ??
-                a.auditor_id ??
-                "-";
+      <div className="mt-6 rounded-2xl border bg-white p-5 shadow-sm">
+        <div className="mb-3 text-sm text-gray-600">{auditorias.length} itens</div>
 
+        {auditorias.length === 0 ? (
+          <div className="text-sm text-gray-600">Nenhuma auditoria cadastrada.</div>
+        ) : (
+          <div className="space-y-3">
+            {auditorias.map((a) => {
+              const isSel = a.id === selectedId;
+              const month = pickMonth(a);
               return (
-                <div
+                <button
                   key={a.id}
-                  style={{
-                    padding: 14,
-                    borderRadius: 14,
-                    border: "1px solid #f0f0f0",
-                    background: "#fff",
-                  }}
+                  onClick={() => selectAuditoria(a)}
+                  className={`w-full rounded-2xl border p-4 text-left hover:bg-gray-50 ${
+                    isSel ? "border-blue-400 ring-2 ring-blue-100" : ""
+                  }`}
                 >
-                  <div style={{ fontWeight: 900 }}>{condLabel}</div>
-                  <div style={{ color: "#666", marginTop: 4 }}>
-                    Auditor: {auditorEmail} • mês {a.ano_mes} • <b>{a.status}</b>
+                  <div className="text-lg font-semibold">
+                    {condoLabel.get(a.condominio_id) ?? a.condominio_id}
                   </div>
-                  <div style={{ color: "#999", marginTop: 6, fontSize: 12 }}>ID: {a.id}</div>
-                </div>
+                  <div className="mt-1 text-sm text-gray-700">
+                    Auditor: {a.auditor_id ? auditorEmail.get(a.auditor_id) ?? a.auditor_id : "—"} • mês{" "}
+                    {month} •{" "}
+                    <span className="font-semibold">{a.status ?? "—"}</span>
+                  </div>
+                  <div className="mt-1 text-xs text-gray-400 font-mono">ID: {a.id}</div>
+                </button>
               );
             })}
           </div>
         )}
-      </div>
 
-      <div style={{ marginTop: 14, color: "#777", fontSize: 12 }}>
-        Fluxo: interno cria a auditoria do mês e escolhe o auditor. Auditor preenche leituras e anexos e
-        envia para conferência. Interno lança ciclos, anexa cashback e fecha como FINAL.
+        <div className="mt-4 text-xs text-gray-500">
+          Fluxo: interno cria a auditoria do mês e escolhe o auditor. Auditor preenche leituras e anexos e envia para conferência.
+          Interno lança ciclos, anexa cashback e fecha como FINAL.
+        </div>
       </div>
     </div>
   );
