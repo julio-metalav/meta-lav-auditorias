@@ -1,6 +1,4 @@
 "use client";
-console.log("### PAGE AUDITOR CHECKLIST LIMPO ###");
-
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -32,13 +30,7 @@ function pickMonth(a: Aud) {
 }
 
 type FotoKind = "agua" | "energia" | "gas" | "quimicos" | "bombonas" | "conector_bala";
-
-type FotoItem = {
-  kind: FotoKind;
-  label: string;
-  required: boolean;
-  help?: string;
-};
+type FotoItem = { kind: FotoKind; label: string; required: boolean; help?: string };
 
 const FOTO_ITEMS: FotoItem[] = [
   { kind: "agua", label: "Medidor de Água", required: true },
@@ -65,6 +57,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   const [leitura_energia, setLeituraEnergia] = useState("");
   const [leitura_gas, setLeituraGas] = useState("");
 
+  // ✅ Controle do botão "Salvar" (dirty state)
+  // dirty=true => tem alteração não salva => botão AZUL "Salvar"
+  // dirty=false => tudo salvo => botão VERDE "Salvo ✓" desabilitado
+  const [dirty, setDirty] = useState(false);
+
   const [uploading, setUploading] = useState<Record<FotoKind, boolean>>({
     agua: false,
     energia: false,
@@ -74,10 +71,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     conector_bala: false,
   });
 
-  // pendente = tirou e ainda não salvou
   const [pendingFile, setPendingFile] = useState<Partial<Record<FotoKind, File>>>({});
   const [pendingUrl, setPendingUrl] = useState<Partial<Record<FotoKind, string>>>({});
-  const [previewKind, setPreviewKind] = useState<FotoKind | null>(null); // modal simples
+  const [previewKind, setPreviewKind] = useState<FotoKind | null>(null);
 
   function setOkMsg(msg: string) {
     setOk(msg);
@@ -90,6 +86,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     setLeituraAgua(a.leitura_agua ?? "");
     setLeituraEnergia(a.leitura_energia ?? "");
     setLeituraGas(a.leitura_gas ?? "");
+    setDirty(false); // ✅ acabou de carregar do banco = estado "salvo"
   }
 
   function fotoUrl(a: Aud | null, kind: FotoKind) {
@@ -154,7 +151,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       const saved: Aud | null = json?.auditoria ?? null;
       if (saved) {
         setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...saved }));
-        applyFromAud(saved);
+        applyFromAud(saved); // ✅ já seta dirty=false
+      } else {
+        // mesmo se não voltar auditoria, considera salvo
+        setDirty(false);
       }
 
       setOkMsg(extra?.status ? "Concluída em campo ✅" : "Rascunho salvo ✅");
@@ -234,7 +234,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
       if (previewKind === kind) setPreviewKind(null);
 
-      setOkMsg(`Foto salva ✅ (${FOTO_ITEMS.find((x) => x.kind === kind)?.label ?? kind})`);
+      setOkMsg("Foto salva ✅");
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao enviar foto");
     } finally {
@@ -248,46 +248,26 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     const leituraAguaOk = (leitura_agua ?? "").trim().length > 0;
     const leituraEnergiaOk = (leitura_energia ?? "").trim().length > 0;
 
-    const statusByKind: Record<FotoKind, "ok" | "pending" | "missing" | "optional_missing"> = {
-      agua: "missing",
-      energia: "missing",
-      gas: "optional_missing",
-      quimicos: "missing",
-      bombonas: "missing",
-      conector_bala: "missing",
-    };
+    const fotoAguaOk = !!a?.foto_agua_url;
+    const fotoEnergiaOk = !!a?.foto_energia_url;
+    const fotoQuimicosOk = !!a?.foto_quimicos_url;
+    const fotoBombonasOk = !!a?.foto_bombonas_url;
+    const fotoConectorOk = !!a?.foto_conector_bala_url;
 
-    for (const item of FOTO_ITEMS) {
-      const saved = !!fotoUrl(a, item.kind);
-      const pend = !!pendingFile[item.kind];
-
-      if (saved) statusByKind[item.kind] = "ok";
-      else if (pend) statusByKind[item.kind] = "pending";
-      else statusByKind[item.kind] = item.required ? "missing" : "optional_missing";
-    }
-
-    const fotosObrigatoriasOk =
-      statusByKind.agua === "ok" &&
-      statusByKind.energia === "ok" &&
-      statusByKind.quimicos === "ok" &&
-      statusByKind.bombonas === "ok" &&
-      statusByKind.conector_bala === "ok";
-
+    const fotosObrigatoriasOk = fotoAguaOk && fotoEnergiaOk && fotoQuimicosOk && fotoBombonasOk && fotoConectorOk;
     const prontoCampo = leituraAguaOk && leituraEnergiaOk && fotosObrigatoriasOk;
 
     const faltas: string[] = [];
     if (!leituraAguaOk) faltas.push("Leitura de água");
     if (!leituraEnergiaOk) faltas.push("Leitura de energia");
+    if (!fotoAguaOk) faltas.push("Foto água");
+    if (!fotoEnergiaOk) faltas.push("Foto energia");
+    if (!fotoQuimicosOk) faltas.push("Foto proveta");
+    if (!fotoBombonasOk) faltas.push("Foto bombonas");
+    if (!fotoConectorOk) faltas.push("Foto conector");
 
-    // obrigatórias
-    if (statusByKind.agua !== "ok") faltas.push("Foto água");
-    if (statusByKind.energia !== "ok") faltas.push("Foto energia");
-    if (statusByKind.quimicos !== "ok") faltas.push("Foto proveta");
-    if (statusByKind.bombonas !== "ok") faltas.push("Foto bombonas");
-    if (statusByKind.conector_bala !== "ok") faltas.push("Foto conector");
-
-    return { prontoCampo, faltas, statusByKind };
-  }, [aud, leitura_agua, leitura_energia, pendingFile]);
+    return { prontoCampo, faltas };
+  }, [aud, leitura_agua, leitura_energia]);
 
   useEffect(() => {
     carregar();
@@ -335,7 +315,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>
       )}
 
-      {/* TOP BAR: Concluir em campo */}
       <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -360,55 +339,85 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         </div>
       </div>
 
-      {/* Leituras */}
       <div className="rounded-2xl border bg-white p-5 shadow-sm">
         <div className="mb-3 text-sm font-semibold text-gray-700">Leituras</div>
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <div>
             <label className="mb-1 block text-xs text-gray-600">Leitura Água</label>
-            <input className="w-full rounded-xl border px-3 py-2" value={leitura_agua} onChange={(e) => setLeituraAgua(e.target.value)} />
+            <input
+              className="w-full rounded-xl border px-3 py-2"
+              value={leitura_agua}
+              onChange={(e) => {
+                setLeituraAgua(e.target.value);
+                setDirty(true);
+              }}
+              placeholder="ex: 12345"
+            />
           </div>
 
           <div>
             <label className="mb-1 block text-xs text-gray-600">Leitura Energia</label>
-            <input className="w-full rounded-xl border px-3 py-2" value={leitura_energia} onChange={(e) => setLeituraEnergia(e.target.value)} />
+            <input
+              className="w-full rounded-xl border px-3 py-2"
+              value={leitura_energia}
+              onChange={(e) => {
+                setLeituraEnergia(e.target.value);
+                setDirty(true);
+              }}
+              placeholder="ex: 67890"
+            />
           </div>
 
           <div>
             <label className="mb-1 block text-xs text-gray-600">Leitura Gás (opcional)</label>
-            <input className="w-full rounded-xl border px-3 py-2" value={leitura_gas} onChange={(e) => setLeituraGas(e.target.value)} />
+            <input
+              className="w-full rounded-xl border px-3 py-2"
+              value={leitura_gas}
+              onChange={(e) => {
+                setLeituraGas(e.target.value);
+                setDirty(true);
+              }}
+              placeholder="se não tiver, deixa vazio"
+            />
           </div>
         </div>
 
         <div className="mt-4">
           <label className="mb-1 block text-xs text-gray-600">Observações</label>
-          <textarea className="w-full rounded-xl border px-3 py-2" value={obs} onChange={(e) => setObs(e.target.value)} rows={3} />
+          <textarea
+            className="w-full rounded-xl border px-3 py-2"
+            value={obs}
+            onChange={(e) => {
+              setObs(e.target.value);
+              setDirty(true);
+            }}
+            rows={3}
+            placeholder="anote ocorrências, etc."
+          />
         </div>
 
-        {/* Fotos: layout LIMPO (linhas) */}
         <div className="mt-6 rounded-2xl border p-4">
           <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (checklist)</div>
           <div className="text-xs text-gray-500">Tocar em “Tirar” → depois “Salvar”. Sem foto aparecendo.</div>
 
           <div className="mt-3 divide-y rounded-xl border">
             {FOTO_ITEMS.map((item) => {
-              const saved = !!fotoUrl(aud, item.kind);
+              const savedUrl = fotoUrl(aud, item.kind);
+              const saved = !!savedUrl;
               const pend = !!pendingFile[item.kind];
               const busy = uploading[item.kind];
-              const savedUrl = fotoUrl(aud, item.kind);
               const pUrl = pendingUrl[item.kind];
 
-              const badge =
-                saved ? (
-                  <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">Feita</span>
-                ) : pend ? (
-                  <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">Pendente</span>
-                ) : item.required ? (
-                  <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">Obrigatória</span>
-                ) : (
-                  <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-700">Opcional</span>
-                );
+              const badge = saved ? (
+                <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">Feita</span>
+              ) : pend ? (
+                <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">Pendente</span>
+              ) : item.required ? (
+                <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">Obrigatória</span>
+              ) : (
+                <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-700">Opcional</span>
+              );
 
               return (
                 <div key={item.kind} className="flex flex-col gap-2 p-3 md:flex-row md:items-center md:justify-between">
@@ -417,7 +426,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                       <div className="text-sm font-semibold text-gray-800">{item.label}</div>
                       {badge}
                     </div>
+
                     {item.help && <div className="mt-1 text-xs text-gray-500">{item.help}</div>}
+
                     {saved && savedUrl && (
                       <div className="mt-1">
                         <a className="text-xs underline text-gray-600" href={savedUrl} target="_blank" rel="noreferrer">
@@ -425,6 +436,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                         </a>
                       </div>
                     )}
+
                     {pend && (
                       <div className="mt-1 text-xs text-gray-600">
                         Selecionada: <b>{pendingFile[item.kind]?.name ?? "foto.jpg"}</b>
@@ -498,12 +510,16 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         </div>
 
         <div className="mt-4 flex gap-3">
+          {/* ✅ BOTÃO PRINCIPAL: azul quando tem alteração, verde quando já está salvo */}
           <button
-            className="rounded-xl bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            className={`rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+              dirty ? "bg-blue-600 hover:bg-blue-700" : "bg-green-600 hover:bg-green-700"
+            }`}
             onClick={() => salvarRascunho()}
-            disabled={saving || loading || !aud}
+            disabled={saving || loading || !aud || !dirty}
+            title={dirty ? "Salvar alterações" : "Nada para salvar"}
           >
-            {saving ? "Salvando..." : "Salvar rascunho"}
+            {saving ? "Salvando..." : dirty ? "Salvar" : "Salvo ✓"}
           </button>
 
           <a className="rounded-xl border px-5 py-2 text-sm hover:bg-gray-50" href="/auditorias">
@@ -524,7 +540,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             </div>
             <div className="mt-3">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={pendingUrl[previewKind] as string} alt="preview" className="max-h-[70vh] w-full rounded-xl object-contain" />
+              <img
+                src={pendingUrl[previewKind] as string}
+                alt="preview"
+                className="max-h-[70vh] w-full rounded-xl object-contain"
+              />
             </div>
           </div>
         </div>
