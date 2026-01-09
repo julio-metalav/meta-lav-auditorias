@@ -1,88 +1,73 @@
 export const runtime = "nodejs";
+
 import { NextResponse } from "next/server";
-import { getUserAndRole, roleGte } from "@/lib/auth";
+import { getUserAndRole } from "@/lib/auth";
 
-export async function GET(_: Request, { params }: { params: { id: string } }) {
-  const { supabase, user, role } = await getUserAndRole();
-  if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+type PatchBody = {
+  leitura_agua?: string | null;
+  leitura_energia?: string | null;
+  leitura_gas?: string | null;
+  observacoes?: string | null;
+};
 
-  const { data, error } = await supabase
-    .from("auditorias")
-    .select(
-      "*, condominios(*)"
-    )
-    .eq("id", params.id)
-    .single();
+export async function PATCH(
+  req: Request,
+  ctx: { params: { id: string } }
+) {
+  const auth = await getUserAndRole();
+  if (!auth) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-  if (role === "auditor" && data?.auditor_id !== user.id) {
-    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  const { supabase, user, role } = auth;
+  const id = ctx.params.id;
+
+  let body: PatchBody = {};
+  try {
+    body = (await req.json()) as PatchBody;
+  } catch {
+    // body vazio ok
   }
 
-  return NextResponse.json({ data });
-}
-
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
-  const { supabase, user, role } = await getUserAndRole();
-  if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-
-  const body = await req.json().catch(() => ({}));
-
-  // carregar auditoria para checar permissões
-  const { data: aud, error: audErr } = await supabase
-    .from("auditorias")
-    .select("id,auditor_id,status")
-    .eq("id", params.id)
-    .single();
-
-  if (audErr) return NextResponse.json({ error: audErr.message }, { status: 400 });
-
+  // Auditor só pode salvar a auditoria dele
   if (role === "auditor") {
-    if (aud.auditor_id !== user.id) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
-
-    // auditor só pode preencher dados de campo e anexos, e alterar status até "em_conferencia"
-    const allowed: any = {
-      agua_leitura: body.agua_leitura ?? undefined,
-      energia_leitura: body.energia_leitura ?? undefined,
-      gas_leitura: body.gas_leitura ?? undefined,
-      quimicos_detergente_ml: body.quimicos_detergente_ml ?? undefined,
-      quimicos_amaciante_ml: body.quimicos_amaciante_ml ?? undefined,
-      foto_agua_url: body.foto_agua_url ?? undefined,
-      foto_energia_url: body.foto_energia_url ?? undefined,
-      foto_gas_url: body.foto_gas_url ?? undefined,
-      foto_proveta_url: body.foto_proveta_url ?? undefined,
-      foto_bombonas_url: body.foto_bombonas_url ?? undefined,
-      foto_cabo_bala_url: body.foto_cabo_bala_url ?? undefined,
-      status: body.status ?? undefined,
-    };
-
-    if (allowed.status && !["aberta", "em_campo", "em_conferencia"].includes(String(allowed.status))) {
-      return NextResponse.json({ error: "Status inválido para auditor" }, { status: 400 });
-    }
-
-    const { data, error } = await supabase
+    const { data: arow, error: aerr } = await supabase
       .from("auditorias")
-      .update(allowed)
-      .eq("id", params.id)
-      .select("id")
-      .single();
+      .select("id,auditor_id")
+      .eq("id", id)
+      .maybeSingle();
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-    return NextResponse.json({ ok: true, data });
+    if (aerr) {
+      return NextResponse.json({ error: aerr.message }, { status: 500 });
+    }
+    if (!arow) {
+      return NextResponse.json({ error: "Auditoria não encontrada" }, { status: 404 });
+    }
+    if (arow.auditor_id !== user.id) {
+      return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+    }
   }
 
-  if (!roleGte(role, "interno")) {
+  // interno/gestor podem salvar em qualquer auditoria
+  if (role !== "auditor" && role !== "interno" && role !== "gestor") {
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
   }
 
-  // interno/gestor pode atualizar tudo (inclui ciclos, cashback, status final)
+  const updatePayload = {
+    leitura_agua: body.leitura_agua ?? null,
+    leitura_energia: body.leitura_energia ?? null,
+    leitura_gas: body.leitura_gas ?? null,
+    observacoes: body.observacoes ?? null,
+  };
+
   const { data, error } = await supabase
     .from("auditorias")
-    .update(body)
-    .eq("id", params.id)
-    .select("id")
-    .single();
+    .update(updatePayload)
+    .eq("id", id)
+    .select("*")
+    .maybeSingle();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-  return NextResponse.json({ ok: true, data });
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true, auditoria: data });
 }
