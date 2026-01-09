@@ -36,6 +36,13 @@ function pickMonth(a: Aud) {
   return (a.ano_mes ?? a.mes_ref ?? "") as string;
 }
 
+function unwrapData<T>(payload: any): T[] {
+  // aceita: [ ... ]  OU  { data: [ ... ] }
+  if (Array.isArray(payload)) return payload as T[];
+  if (payload && Array.isArray(payload.data)) return payload.data as T[];
+  return [];
+}
+
 export default function AuditoriasPage() {
   const router = useRouter();
 
@@ -53,31 +60,42 @@ export default function AuditoriasPage() {
     status: "aberta",
   });
 
-  const canCreate = me?.role === "gestor" || me?.role === "interno";
+  // ✅ só GESTOR cria auditoria (se quiser permitir interno, volta aqui)
+  const canCreate = me?.role === "gestor";
 
   async function loadAll() {
     setLoading(true);
     setErr(null);
     try {
-      const [m, a, c, u] = await Promise.all([
-        fetch("/api/me", { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/auditorias", { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/condominios", { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/users", { cache: "no-store" }).then((r) => r.json()),
+      const [mRes, aRes, cRes, uRes] = await Promise.all([
+        fetch("/api/me", { cache: "no-store" }),
+        fetch("/api/auditorias", { cache: "no-store" }),
+        fetch("/api/condominios", { cache: "no-store" }),
+        fetch("/api/users", { cache: "no-store" }),
       ]);
 
+      const m = await mRes.json().catch(() => ({}));
+      const a = await aRes.json().catch(() => ({}));
+      const c = await cRes.json().catch(() => ({}));
+      const u = await uRes.json().catch(() => ({}));
+
+      if (!mRes.ok) throw new Error(m?.error ?? "Erro em /api/me");
       if (m?.error) throw new Error(m.error);
       setMe(m);
 
+      if (!aRes.ok) throw new Error(a?.error ?? "Erro em /api/auditorias");
       if (a?.error) throw new Error(a.error);
-      setAuditorias(a.data || []);
+      setAuditorias(unwrapData<Aud>(a));
 
+      if (!cRes.ok) throw new Error(c?.error ?? "Erro em /api/condominios");
       if (c?.error) throw new Error(c.error);
-      setCondos(c.data || []);
+      setCondos(unwrapData<Condo>(c));
 
+      if (!uRes.ok) throw new Error(u?.error ?? "Erro em /api/users");
       if (u?.error) throw new Error(u.error);
-      // /api/users costuma devolver data com profiles; aqui só pegamos o básico
-      const list = (u.data || []).map((x: any) => ({
+
+      const rawUsers = unwrapData<any>(u);
+      const list = rawUsers.map((x: any) => ({
         id: x.id,
         email: x.email ?? x.profiles?.email ?? null,
         role: x.role ?? x.profiles?.role ?? null,
@@ -120,7 +138,6 @@ export default function AuditoriasPage() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error ?? "Erro ao criar auditoria");
 
-      // reset mínimo
       setForm((s) => ({ ...s, status: "aberta" }));
       await loadAll();
     } catch (e: any) {
@@ -133,6 +150,7 @@ export default function AuditoriasPage() {
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <div className="small">
           {loading ? "Carregando..." : `${auditorias.length} auditorias`}
+          {me?.role ? ` • você: ${me.role}` : ""}
         </div>
         <button className="btn" onClick={loadAll} disabled={loading}>
           Recarregar
@@ -246,7 +264,6 @@ export default function AuditoriasPage() {
                   Abrir (Auditor)
                 </button>
 
-                {/* ✅ AQUI ESTÁ A CORREÇÃO: usa auditoria.id (NÃO condominio_id) */}
                 <button className="btn" onClick={() => router.push(`/interno/auditoria/${a.id}`)}>
                   Abrir (Interno)
                 </button>
