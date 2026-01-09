@@ -1,41 +1,70 @@
 import { cookies } from "next/headers";
-import { createServerComponentClient } from "@supabase/auth-helpers-nextjs";
+import { createServerClient } from "@supabase/ssr";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 
 export type Role = "auditor" | "interno" | "gestor";
 
-const ROLE_WEIGHT: Record<Role, number> = {
-  auditor: 1,
-  interno: 2,
-  gestor: 3,
+type CookieToSet = {
+  name: string;
+  value: string;
+  options?: {
+    domain?: string;
+    path?: string;
+    maxAge?: number;
+    expires?: Date;
+    httpOnly?: boolean;
+    secure?: boolean;
+    sameSite?: "lax" | "strict" | "none";
+  };
 };
 
-export function roleGte(a?: Role | null, b: Role = "auditor") {
-  const aa: Role = (a ?? "auditor") as Role;
-  return (ROLE_WEIGHT[aa] ?? 0) >= ROLE_WEIGHT[b];
+export function supabaseServer() {
+  const cookieStore = cookies();
+
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll();
+        },
+        setAll(cookiesToSet: CookieToSet[]) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options)
+            );
+          } catch {
+            // ok
+          }
+        },
+      },
+    }
+  );
 }
 
-export async function getUserAndRole() {
-  const supabase = createServerComponentClient({ cookies });
+export function supabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const service = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  return createAdminClient(url, service, { auth: { persistSession: false } });
+}
 
-  const { data: authData, error: authErr } = await supabase.auth.getUser();
-  const user = authData?.user ?? null;
+export async function getUserAndRole(): Promise<{
+  user: { id: string; email: string | null };
+  role: Role | null;
+} | null> {
+  const supabase = supabaseServer();
 
-  if (authErr || !user) {
-    return { user: null, role: null as Role | null, supabase };
-  }
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !auth?.user) return null;
 
-  // pega role do profiles
-  const { data: profile, error: profErr } = await supabase
+  const user = { id: auth.user.id, email: auth.user.email ?? null };
+
+  const { data: prof } = await supabase
     .from("profiles")
     .select("role")
     .eq("id", user.id)
-    .single();
+    .maybeSingle();
 
-  // se não conseguir ler, devolve null (pra você enxergar o problema)
-  if (profErr) {
-    return { user, role: null as Role | null, supabase };
-  }
-
-  const role = (profile?.role ?? null) as Role | null;
-  return { user, role, supabase };
+  return { user, role: (prof?.role as Role) ?? null };
 }
