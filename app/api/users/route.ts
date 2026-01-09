@@ -1,18 +1,43 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
-import { createClient } from "@supabase/supabase-js";
+import { createServerClient } from "@supabase/ssr";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 
 type Role = "auditor" | "interno" | "gestor";
+
+function supabaseServer() {
+  const cookieStore = cookies();
+
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll();
+        },
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options)
+            );
+          } catch {
+            // Em Route Handler pode dar read-only; ok ignorar.
+          }
+        },
+      },
+    }
+  );
+}
 
 function adminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const service = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  return createClient(url, service, { auth: { persistSession: false } });
+  return createAdminClient(url, service, { auth: { persistSession: false } });
 }
 
 async function requireManager() {
-  const supabase = createRouteHandlerClient({ cookies });
+  const supabase = supabaseServer();
 
   const { data: auth, error: authErr } = await supabase.auth.getUser();
   if (authErr || !auth?.user) {
@@ -25,9 +50,7 @@ async function requireManager() {
     .eq("id", auth.user.id)
     .maybeSingle();
 
-  if (profErr) {
-    return { ok: false as const, status: 500, msg: profErr.message };
-  }
+  if (profErr) return { ok: false as const, status: 500, msg: profErr.message };
 
   const role = (prof?.role as Role) ?? null;
   if (role !== "gestor" && role !== "interno") {
