@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { createServerComponentClient } from "@supabase/auth-helpers-nextjs";
+import { createServerClient } from "@supabase/auth-helpers-nextjs";
 
 type Role = "auditor" | "interno" | "gestor";
 
 function supabaseServer() {
-  return createServerComponentClient({ cookies });
+  const cookieStore = cookies();
+  return createServerClient({ cookies: () => cookieStore });
 }
 
 async function getUserRole(supabase: any): Promise<Role | null> {
@@ -108,7 +109,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       }
     }
 
-    // exige UNIQUE(condominio_id,categoria,capacidade_kg) no banco
     const { data, error } = await supabase
       .from("condominio_maquinas")
       .upsert(payload, { onConflict: "condominio_id,categoria,capacidade_kg" })
