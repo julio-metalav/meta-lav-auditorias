@@ -5,6 +5,20 @@ import { createClient as createAdminClient } from "@supabase/supabase-js";
 
 type Role = "auditor" | "interno" | "gestor";
 
+type CookieToSet = {
+  name: string;
+  value: string;
+  options?: {
+    domain?: string;
+    path?: string;
+    maxAge?: number;
+    expires?: Date;
+    httpOnly?: boolean;
+    secure?: boolean;
+    sameSite?: "lax" | "strict" | "none";
+  };
+};
+
 function supabaseServer() {
   const cookieStore = cookies();
 
@@ -16,13 +30,13 @@ function supabaseServer() {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: CookieToSet[]) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
               cookieStore.set(name, value, options)
             );
           } catch {
-            // Em Route Handler pode dar read-only; ok ignorar.
+            // ok
           }
         },
       },
@@ -152,3 +166,4 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ ok: true, id: created.user.id, email, role });
 }
+
