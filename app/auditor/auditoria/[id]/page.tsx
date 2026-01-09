@@ -1,4 +1,6 @@
 "use client";
+console.log("### PAGE AUDITOR CHECKLIST LIMPO ###");
+
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
