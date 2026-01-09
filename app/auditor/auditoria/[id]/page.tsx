@@ -31,16 +31,21 @@ function pickMonth(a: Aud) {
 
 type FotoKind = "agua" | "energia" | "gas" | "quimicos" | "bombonas" | "conector_bala";
 
-const FOTO_LABEL: Record<FotoKind, string> = {
-  agua: "Medidor de Água",
-  energia: "Medidor de Energia",
-  gas: "Medidor de Gás (opcional)",
-  quimicos: "Proveta (aferição de químicos)",
-  bombonas: "Bombonas (detergente + amaciante na mesma foto)",
-  conector_bala: "Conector bala conectado",
+type FotoItem = {
+  kind: FotoKind;
+  label: string;
+  required: boolean;
+  help?: string;
 };
 
-const kinds: FotoKind[] = ["agua", "energia", "gas", "quimicos", "bombonas", "conector_bala"];
+const FOTO_ITEMS: FotoItem[] = [
+  { kind: "agua", label: "Medidor de Água", required: true },
+  { kind: "energia", label: "Medidor de Energia", required: true },
+  { kind: "gas", label: "Medidor de Gás", required: false, help: "Opcional (se houver gás)" },
+  { kind: "quimicos", label: "Proveta (aferição de químicos)", required: true },
+  { kind: "bombonas", label: "Bombonas (detergente + amaciante)", required: true, help: "Uma foto com as duas bombonas" },
+  { kind: "conector_bala", label: "Conector bala conectado", required: true },
+];
 
 export default function AuditorAuditoriaPage({ params }: { params: { id: string } }) {
   const id = params.id;
@@ -67,17 +72,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     conector_bala: false,
   });
 
-  // fluxo "tirou -> conferiu -> salvar"
+  // pendente = tirou e ainda não salvou
   const [pendingFile, setPendingFile] = useState<Partial<Record<FotoKind, File>>>({});
   const [pendingUrl, setPendingUrl] = useState<Partial<Record<FotoKind, string>>>({});
-  const [showPreview, setShowPreview] = useState<Record<FotoKind, boolean>>({
-    agua: false,
-    energia: false,
-    gas: false,
-    quimicos: false,
-    bombonas: false,
-    conector_bala: false,
-  });
+  const [previewKind, setPreviewKind] = useState<FotoKind | null>(null); // modal simples
 
   function setOkMsg(msg: string) {
     setOk(msg);
@@ -102,21 +100,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     return a.foto_conector_bala_url ?? null;
   }
 
-  function filenameFromFile(f?: File) {
-    if (!f) return "";
-    return f.name || "foto.jpg";
-  }
-
-  function shortUrl(u: string) {
-    // mostra só o final, pra não poluir
-    try {
-      const parts = u.split("/");
-      return parts.slice(-2).join("/");
-    } catch {
-      return u;
-    }
-  }
-
   async function carregar() {
     setLoading(true);
     setErr(null);
@@ -129,8 +112,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
       const list: Aud[] = Array.isArray(json) ? json : json?.data ?? [];
       const found = list.find((x) => x.id === id);
-
-      if (!found) throw new Error("Auditoria não encontrada (id inválido ou você não tem acesso).");
+      if (!found) throw new Error("Auditoria não encontrada.");
 
       setAud(found);
       applyFromAud(found);
@@ -181,6 +163,36 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
+  function onPick(kind: FotoKind, file?: File | null) {
+    if (!file) return;
+
+    const url = URL.createObjectURL(file);
+    const old = pendingUrl[kind];
+    if (old) URL.revokeObjectURL(old);
+
+    setPendingFile((p) => ({ ...p, [kind]: file }));
+    setPendingUrl((p) => ({ ...p, [kind]: url }));
+    setPreviewKind(null);
+  }
+
+  function cancelPending(kind: FotoKind) {
+    const url = pendingUrl[kind];
+    if (url) URL.revokeObjectURL(url);
+
+    setPendingFile((p) => {
+      const copy = { ...p };
+      delete copy[kind];
+      return copy;
+    });
+    setPendingUrl((p) => {
+      const copy = { ...p };
+      delete copy[kind];
+      return copy;
+    });
+
+    if (previewKind === kind) setPreviewKind(null);
+  }
+
   async function uploadFoto(kind: FotoKind, file: File) {
     setErr(null);
     setOk(null);
@@ -203,7 +215,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       const saved: Aud | null = json?.auditoria ?? null;
       if (saved) setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...saved }));
 
-      // limpa pendência + fecha preview
+      // limpa pendência
       const url = pendingUrl[kind];
       if (url) URL.revokeObjectURL(url);
 
@@ -217,43 +229,15 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         delete copy[kind];
         return copy;
       });
-      setShowPreview((p) => ({ ...p, [kind]: false }));
 
-      setOkMsg(`Foto salva ✅ (${FOTO_LABEL[kind]})`);
+      if (previewKind === kind) setPreviewKind(null);
+
+      setOkMsg(`Foto salva ✅ (${FOTO_ITEMS.find((x) => x.kind === kind)?.label ?? kind})`);
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao enviar foto");
     } finally {
       setUploading((p) => ({ ...p, [kind]: false }));
     }
-  }
-
-  function onPick(kind: FotoKind, file?: File | null) {
-    if (!file) return;
-
-    const url = URL.createObjectURL(file);
-    const old = pendingUrl[kind];
-    if (old) URL.revokeObjectURL(old);
-
-    setPendingFile((p) => ({ ...p, [kind]: file }));
-    setPendingUrl((p) => ({ ...p, [kind]: url }));
-    setShowPreview((p) => ({ ...p, [kind]: false })); // por padrão: NÃO mostrar foto
-  }
-
-  function cancelPending(kind: FotoKind) {
-    const url = pendingUrl[kind];
-    if (url) URL.revokeObjectURL(url);
-
-    setPendingFile((p) => {
-      const copy = { ...p };
-      delete copy[kind];
-      return copy;
-    });
-    setPendingUrl((p) => {
-      const copy = { ...p };
-      delete copy[kind];
-      return copy;
-    });
-    setShowPreview((p) => ({ ...p, [kind]: false }));
   }
 
   const checklist = useMemo(() => {
@@ -262,29 +246,46 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     const leituraAguaOk = (leitura_agua ?? "").trim().length > 0;
     const leituraEnergiaOk = (leitura_energia ?? "").trim().length > 0;
 
-    // gás é opcional sempre
-    const fotoAguaOk = !!a?.foto_agua_url;
-    const fotoEnergiaOk = !!a?.foto_energia_url;
-    const fotoQuimicosOk = !!a?.foto_quimicos_url;
-    const fotoBombonasOk = !!a?.foto_bombonas_url;
-    const fotoConectorOk = !!a?.foto_conector_bala_url;
+    const statusByKind: Record<FotoKind, "ok" | "pending" | "missing" | "optional_missing"> = {
+      agua: "missing",
+      energia: "missing",
+      gas: "optional_missing",
+      quimicos: "missing",
+      bombonas: "missing",
+      conector_bala: "missing",
+    };
+
+    for (const item of FOTO_ITEMS) {
+      const saved = !!fotoUrl(a, item.kind);
+      const pend = !!pendingFile[item.kind];
+
+      if (saved) statusByKind[item.kind] = "ok";
+      else if (pend) statusByKind[item.kind] = "pending";
+      else statusByKind[item.kind] = item.required ? "missing" : "optional_missing";
+    }
 
     const fotosObrigatoriasOk =
-      fotoAguaOk && fotoEnergiaOk && fotoQuimicosOk && fotoBombonasOk && fotoConectorOk;
+      statusByKind.agua === "ok" &&
+      statusByKind.energia === "ok" &&
+      statusByKind.quimicos === "ok" &&
+      statusByKind.bombonas === "ok" &&
+      statusByKind.conector_bala === "ok";
 
     const prontoCampo = leituraAguaOk && leituraEnergiaOk && fotosObrigatoriasOk;
 
     const faltas: string[] = [];
     if (!leituraAguaOk) faltas.push("Leitura de água");
     if (!leituraEnergiaOk) faltas.push("Leitura de energia");
-    if (!fotoAguaOk) faltas.push("Foto do medidor de água");
-    if (!fotoEnergiaOk) faltas.push("Foto do medidor de energia");
-    if (!fotoQuimicosOk) faltas.push("Foto da proveta (químicos)");
-    if (!fotoBombonasOk) faltas.push("Foto das bombonas (detergente+amaciante)");
-    if (!fotoConectorOk) faltas.push("Foto do conector bala conectado");
 
-    return { prontoCampo, faltas };
-  }, [aud, leitura_agua, leitura_energia]);
+    // obrigatórias
+    if (statusByKind.agua !== "ok") faltas.push("Foto água");
+    if (statusByKind.energia !== "ok") faltas.push("Foto energia");
+    if (statusByKind.quimicos !== "ok") faltas.push("Foto proveta");
+    if (statusByKind.bombonas !== "ok") faltas.push("Foto bombonas");
+    if (statusByKind.conector_bala !== "ok") faltas.push("Foto conector");
+
+    return { prontoCampo, faltas, statusByKind };
+  }, [aud, leitura_agua, leitura_energia, pendingFile]);
 
   useEffect(() => {
     carregar();
@@ -332,19 +333,19 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>
       )}
 
+      {/* TOP BAR: Concluir em campo */}
       <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-gray-800">Conferência rápida (campo)</div>
-            <div className="mt-1 text-xs text-gray-500">Gás é opcional. Fotos obrigatórias não aparecem na tela — só link.</div>
-
+            <div className="text-sm font-semibold text-gray-800">Conferência (campo)</div>
             {checklist.prontoCampo ? (
-              <div className="mt-2 text-sm font-semibold text-green-700">✅ Campo concluído</div>
+              <div className="mt-1 text-sm font-semibold text-green-700">✅ Campo concluído</div>
             ) : (
-              <div className="mt-2 text-sm text-red-700">
+              <div className="mt-1 text-sm text-red-700">
                 Faltando: <b>{checklist.faltas.join(", ")}</b>
               </div>
             )}
+            <div className="mt-1 text-xs text-gray-500">Gás é opcional.</div>
           </div>
 
           <button
@@ -357,123 +358,97 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         </div>
       </div>
 
+      {/* Leituras */}
       <div className="rounded-2xl border bg-white p-5 shadow-sm">
         <div className="mb-3 text-sm font-semibold text-gray-700">Leituras</div>
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <div>
             <label className="mb-1 block text-xs text-gray-600">Leitura Água</label>
-            <input
-              className="w-full rounded-xl border px-3 py-2"
-              value={leitura_agua}
-              onChange={(e) => setLeituraAgua(e.target.value)}
-              placeholder="ex: 12345"
-            />
+            <input className="w-full rounded-xl border px-3 py-2" value={leitura_agua} onChange={(e) => setLeituraAgua(e.target.value)} />
           </div>
 
           <div>
             <label className="mb-1 block text-xs text-gray-600">Leitura Energia</label>
-            <input
-              className="w-full rounded-xl border px-3 py-2"
-              value={leitura_energia}
-              onChange={(e) => setLeituraEnergia(e.target.value)}
-              placeholder="ex: 67890"
-            />
+            <input className="w-full rounded-xl border px-3 py-2" value={leitura_energia} onChange={(e) => setLeituraEnergia(e.target.value)} />
           </div>
 
           <div>
             <label className="mb-1 block text-xs text-gray-600">Leitura Gás (opcional)</label>
-            <input
-              className="w-full rounded-xl border px-3 py-2"
-              value={leitura_gas}
-              onChange={(e) => setLeituraGas(e.target.value)}
-              placeholder="se não tiver, deixa vazio"
-            />
+            <input className="w-full rounded-xl border px-3 py-2" value={leitura_gas} onChange={(e) => setLeituraGas(e.target.value)} />
           </div>
         </div>
 
         <div className="mt-4">
           <label className="mb-1 block text-xs text-gray-600">Observações</label>
-          <textarea
-            className="w-full rounded-xl border px-3 py-2"
-            value={obs}
-            onChange={(e) => setObs(e.target.value)}
-            rows={4}
-            placeholder="anote ocorrências, etc."
-          />
+          <textarea className="w-full rounded-xl border px-3 py-2" value={obs} onChange={(e) => setObs(e.target.value)} rows={3} />
         </div>
 
+        {/* Fotos: layout LIMPO (linhas) */}
         <div className="mt-6 rounded-2xl border p-4">
-          <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (6 slots)</div>
-          <div className="text-xs text-gray-500">Fluxo: tirou → (opcional ver prévia) → salvar. Depois some e vira link.</div>
+          <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (checklist)</div>
+          <div className="text-xs text-gray-500">Tocar em “Tirar” → depois “Salvar”. Sem foto aparecendo.</div>
 
-          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-            {kinds.map((kind) => {
-              const savedUrl = fotoUrl(aud, kind);
-              const busy = uploading[kind];
-              const pUrl = pendingUrl[kind];
-              const pFile = pendingFile[kind];
+          <div className="mt-3 divide-y rounded-xl border">
+            {FOTO_ITEMS.map((item) => {
+              const saved = !!fotoUrl(aud, item.kind);
+              const pend = !!pendingFile[item.kind];
+              const busy = uploading[item.kind];
+              const savedUrl = fotoUrl(aud, item.kind);
+              const pUrl = pendingUrl[item.kind];
+
+              const badge =
+                saved ? (
+                  <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">Feita</span>
+                ) : pend ? (
+                  <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">Pendente</span>
+                ) : item.required ? (
+                  <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">Obrigatória</span>
+                ) : (
+                  <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-700">Opcional</span>
+                );
 
               return (
-                <div key={kind} className="rounded-2xl border p-3">
-                  <div className="text-sm font-semibold">{FOTO_LABEL[kind]}</div>
-
-                  {/* Área "clean": sem foto */}
-                  <div className="mt-2 rounded-xl border bg-gray-50 p-3 text-sm">
-                    {pFile ? (
-                      <div className="text-gray-700">
-                        <b>Pendente:</b> {filenameFromFile(pFile)}
-                      </div>
-                    ) : savedUrl ? (
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-gray-700">
-                          <b>Salva ✅</b> <span className="text-xs text-gray-500">({shortUrl(savedUrl)})</span>
-                        </div>
-                        <a
-                          className="rounded-lg border bg-white px-3 py-1 text-xs hover:bg-gray-100"
-                          href={savedUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Abrir
+                <div key={item.kind} className="flex flex-col gap-2 p-3 md:flex-row md:items-center md:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="text-sm font-semibold text-gray-800">{item.label}</div>
+                      {badge}
+                    </div>
+                    {item.help && <div className="mt-1 text-xs text-gray-500">{item.help}</div>}
+                    {saved && savedUrl && (
+                      <div className="mt-1">
+                        <a className="text-xs underline text-gray-600" href={savedUrl} target="_blank" rel="noreferrer">
+                          Abrir arquivo
                         </a>
                       </div>
-                    ) : (
-                      <div className="text-gray-500">Sem foto</div>
+                    )}
+                    {pend && (
+                      <div className="mt-1 text-xs text-gray-600">
+                        Selecionada: <b>{pendingFile[item.kind]?.name ?? "foto.jpg"}</b>
+                        {pUrl && (
+                          <>
+                            {" "}
+                            •{" "}
+                            <button className="underline" onClick={() => setPreviewKind(item.kind)}>
+                              Ver
+                            </button>
+                          </>
+                        )}
+                      </div>
                     )}
                   </div>
 
-                  {/* Prévia opcional (só se pendente) */}
-                  {pUrl && (
-                    <div className="mt-2">
-                      <button
-                        type="button"
-                        className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
-                        onClick={() => setShowPreview((p) => ({ ...p, [kind]: !p[kind] }))}
-                      >
-                        {showPreview[kind] ? "Ocultar prévia" : "Ver prévia"}
-                      </button>
-
-                      {showPreview[kind] && (
-                        <div className="mt-2">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={pUrl} alt={`${kind}-preview`} className="h-48 w-full rounded-xl object-cover" />
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Ações */}
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <label className="cursor-pointer rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-                      📷 Tirar foto
+                      📷 Tirar
                       <input
                         type="file"
                         accept="image/*"
                         capture="environment"
                         className="hidden"
                         onChange={(e) => {
-                          onPick(kind, e.target.files?.[0]);
+                          onPick(item.kind, e.target.files?.[0]);
                           e.currentTarget.value = "";
                         }}
                         disabled={busy}
@@ -487,37 +462,33 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                         accept="image/*"
                         className="hidden"
                         onChange={(e) => {
-                          onPick(kind, e.target.files?.[0]);
+                          onPick(item.kind, e.target.files?.[0]);
                           e.currentTarget.value = "";
                         }}
                         disabled={busy}
                       />
                     </label>
 
-                    {pFile && (
+                    {pend && (
                       <>
                         <button
-                          type="button"
                           className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
                           disabled={busy}
-                          onClick={() => uploadFoto(kind, pFile)}
+                          onClick={() => uploadFoto(item.kind, pendingFile[item.kind] as File)}
                         >
                           {busy ? "Enviando..." : "Salvar ✅"}
                         </button>
 
                         <button
-                          type="button"
                           className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
                           disabled={busy}
-                          onClick={() => cancelPending(kind)}
+                          onClick={() => cancelPending(item.kind)}
                         >
                           Refazer
                         </button>
                       </>
                     )}
                   </div>
-
-                  {kind === "gas" && <div className="mt-2 text-xs text-gray-500">Opcional: se não existir gás, pode deixar sem.</div>}
                 </div>
               );
             })}
@@ -538,6 +509,25 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           </a>
         </div>
       </div>
+
+      {/* Modal simples de preview (opcional) */}
+      {previewKind && pendingUrl[previewKind] && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-4">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">{FOTO_ITEMS.find((x) => x.kind === previewKind)?.label}</div>
+              <button className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50" onClick={() => setPreviewKind(null)}>
+                Fechar
+              </button>
+            </div>
+            <div className="mt-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={pendingUrl[previewKind] as string} alt="preview" className="max-h-[70vh] w-full rounded-xl object-contain" />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
