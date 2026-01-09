@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Aud = {
   id: string;
@@ -34,11 +34,13 @@ type FotoKind = "agua" | "energia" | "gas" | "quimicos" | "bombonas" | "conector
 const FOTO_LABEL: Record<FotoKind, string> = {
   agua: "Medidor de Água",
   energia: "Medidor de Energia",
-  gas: "Medidor de Gás (se houver)",
+  gas: "Medidor de Gás (opcional)",
   quimicos: "Proveta (aferição de químicos)",
   bombonas: "Bombonas (detergente + amaciante na mesma foto)",
   conector_bala: "Conector bala conectado",
 };
+
+const kinds: FotoKind[] = ["agua", "energia", "gas", "quimicos", "bombonas", "conector_bala"];
 
 export default function AuditorAuditoriaPage({ params }: { params: { id: string } }) {
   const id = params.id;
@@ -65,6 +67,16 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     conector_bala: false,
   });
 
+  // fluxo "tirou -> conferiu -> salvar": guardamos um arquivo pendente por slot
+  const [pendingFile, setPendingFile] = useState<Partial<Record<FotoKind, File>>>({});
+  const [pendingUrl, setPendingUrl] = useState<Partial<Record<FotoKind, string>>>({}); // objectURL preview
+
+  function setOkMsg(msg: string) {
+    setOk(msg);
+    if (okTimer.current) window.clearTimeout(okTimer.current);
+    okTimer.current = window.setTimeout(() => setOk(null), 2500);
+  }
+
   function applyFromAud(a: Aud) {
     setObs(a.observacoes ?? "");
     setLeituraAgua(a.leitura_agua ?? "");
@@ -72,10 +84,14 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     setLeituraGas(a.leitura_gas ?? "");
   }
 
-  function setOkMsg(msg: string) {
-    setOk(msg);
-    if (okTimer.current) window.clearTimeout(okTimer.current);
-    okTimer.current = window.setTimeout(() => setOk(null), 2500);
+  function fotoUrl(a: Aud | null, kind: FotoKind) {
+    if (!a) return null;
+    if (kind === "agua") return a.foto_agua_url ?? null;
+    if (kind === "energia") return a.foto_energia_url ?? null;
+    if (kind === "gas") return a.foto_gas_url ?? null;
+    if (kind === "quimicos") return a.foto_quimicos_url ?? null;
+    if (kind === "bombonas") return a.foto_bombonas_url ?? null;
+    return a.foto_conector_bala_url ?? null;
   }
 
   async function carregar() {
@@ -102,7 +118,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
-  async function salvarRascunho() {
+  async function salvarRascunho(extra?: Partial<Pick<Aud, "status">>) {
     setErr(null);
     setOk(null);
 
@@ -121,32 +137,20 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           leitura_energia,
           leitura_gas,
           observacoes: obs,
+          ...(extra ?? {}),
         }),
       });
 
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.error ?? "Erro ao salvar rascunho");
+      if (!res.ok) throw new Error(json?.error ?? "Erro ao salvar");
 
       const saved: Aud | null = json?.auditoria ?? null;
-
       if (saved) {
         setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...saved }));
         applyFromAud(saved);
-      } else {
-        setAud((prev) =>
-          prev
-            ? {
-                ...prev,
-                leitura_agua,
-                leitura_energia,
-                leitura_gas,
-                observacoes: obs,
-              }
-            : prev
-        );
       }
 
-      setOkMsg("Rascunho salvo ✅");
+      setOkMsg(extra?.status ? "Concluída em campo ✅" : "Rascunho salvo ✅");
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao salvar");
     } finally {
@@ -180,13 +184,93 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       const saved: Aud | null = json?.auditoria ?? null;
       if (saved) setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...saved }));
 
-      setOkMsg(`Foto enviada ✅ (${FOTO_LABEL[kind]})`);
+      // limpa pendência do slot (já salvou)
+      const url = pendingUrl[kind];
+      if (url) URL.revokeObjectURL(url);
+
+      setPendingFile((p) => {
+        const copy = { ...p };
+        delete copy[kind];
+        return copy;
+      });
+      setPendingUrl((p) => {
+        const copy = { ...p };
+        delete copy[kind];
+        return copy;
+      });
+
+      setOkMsg(`Foto salva ✅ (${FOTO_LABEL[kind]})`);
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao enviar foto");
     } finally {
       setUploading((p) => ({ ...p, [kind]: false }));
     }
   }
+
+  function onPick(kind: FotoKind, file?: File | null) {
+    if (!file) return;
+
+    // cria preview local (conferência)
+    const url = URL.createObjectURL(file);
+
+    // se já tinha preview pendente, libera
+    const old = pendingUrl[kind];
+    if (old) URL.revokeObjectURL(old);
+
+    setPendingFile((p) => ({ ...p, [kind]: file }));
+    setPendingUrl((p) => ({ ...p, [kind]: url }));
+  }
+
+  function cancelPending(kind: FotoKind) {
+    const url = pendingUrl[kind];
+    if (url) URL.revokeObjectURL(url);
+
+    setPendingFile((p) => {
+      const copy = { ...p };
+      delete copy[kind];
+      return copy;
+    });
+    setPendingUrl((p) => {
+      const copy = { ...p };
+      delete copy[kind];
+      return copy;
+    });
+  }
+
+  const checklist = useMemo(() => {
+    const a = aud;
+
+    const leituraAguaOk = (leitura_agua ?? "").trim().length > 0;
+    const leituraEnergiaOk = (leitura_energia ?? "").trim().length > 0;
+    // gás é opcional sempre:
+    const leituraGasOk = true;
+
+    const fotoAguaOk = !!a?.foto_agua_url;
+    const fotoEnergiaOk = !!a?.foto_energia_url;
+    const fotoGasOk = true; // opcional
+    const fotoQuimicosOk = !!a?.foto_quimicos_url;
+    const fotoBombonasOk = !!a?.foto_bombonas_url;
+    const fotoConectorOk = !!a?.foto_conector_bala_url;
+
+    const fotosObrigatoriasOk =
+      fotoAguaOk && fotoEnergiaOk && fotoQuimicosOk && fotoBombonasOk && fotoConectorOk;
+
+    const prontoCampo = leituraAguaOk && leituraEnergiaOk && leituraGasOk && fotosObrigatoriasOk;
+
+    const faltas: string[] = [];
+    if (!leituraAguaOk) faltas.push("Leitura de água");
+    if (!leituraEnergiaOk) faltas.push("Leitura de energia");
+    if (!fotoAguaOk) faltas.push("Foto do medidor de água");
+    if (!fotoEnergiaOk) faltas.push("Foto do medidor de energia");
+    if (!fotoQuimicosOk) faltas.push("Foto da proveta (químicos)");
+    if (!fotoBombonasOk) faltas.push("Foto das bombonas (detergente+amaciante)");
+    if (!fotoConectorOk) faltas.push("Foto do conector bala conectado");
+
+    return {
+      prontoCampo,
+      faltas,
+    };
+  }, [aud, leitura_agua, leitura_energia, leitura_gas]);
 
   useEffect(() => {
     carregar();
@@ -196,24 +280,15 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   useEffect(() => {
     return () => {
       if (okTimer.current) window.clearTimeout(okTimer.current);
+      // libera todos previews pendentes
+      Object.values(pendingUrl).forEach((u) => u && URL.revokeObjectURL(u));
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const titulo = aud?.condominios
     ? `${aud.condominios.nome} • ${aud.condominios.cidade}/${aud.condominios.uf}`
     : aud?.condominio_id ?? "";
-
-  const fotoUrl = (a: Aud | null, kind: FotoKind) => {
-    if (!a) return null;
-    if (kind === "agua") return a.foto_agua_url ?? null;
-    if (kind === "energia") return a.foto_energia_url ?? null;
-    if (kind === "gas") return a.foto_gas_url ?? null;
-    if (kind === "quimicos") return a.foto_quimicos_url ?? null;
-    if (kind === "bombonas") return a.foto_bombonas_url ?? null;
-    return a.foto_conector_bala_url ?? null;
-  };
-
-  const kinds: FotoKind[] = ["agua", "energia", "gas", "quimicos", "bombonas", "conector_bala"];
 
   return (
     <div className="mx-auto max-w-4xl p-6">
@@ -244,6 +319,35 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>
       )}
 
+      {/* CHECKLIST DO CAMPO */}
+      <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-gray-800">Conferência rápida (campo)</div>
+            <div className="mt-1 text-xs text-gray-500">
+              Gás é opcional. O objetivo é sair do condomínio com tudo comprovado por foto.
+            </div>
+
+            {checklist.prontoCampo ? (
+              <div className="mt-2 text-sm font-semibold text-green-700">✅ Campo concluído</div>
+            ) : (
+              <div className="mt-2 text-sm text-red-700">
+                Faltando: <b>{checklist.faltas.join(", ")}</b>
+              </div>
+            )}
+          </div>
+
+          <button
+            className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+            disabled={!checklist.prontoCampo || saving || loading || !aud}
+            onClick={() => salvarRascunho({ status: "final" })}
+            title={!checklist.prontoCampo ? "Complete as leituras e fotos obrigatórias" : "Marcar como concluída em campo"}
+          >
+            {saving ? "Salvando..." : "Concluir em campo ✅"}
+          </button>
+        </div>
+      </div>
+
       <div className="rounded-2xl border bg-white p-5 shadow-sm">
         <div className="mb-3 text-sm font-semibold text-gray-700">Leituras</div>
 
@@ -269,12 +373,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           </div>
 
           <div>
-            <label className="mb-1 block text-xs text-gray-600">Leitura Gás</label>
+            <label className="mb-1 block text-xs text-gray-600">Leitura Gás (opcional)</label>
             <input
               className="w-full rounded-xl border px-3 py-2"
               value={leitura_gas}
               onChange={(e) => setLeituraGas(e.target.value)}
-              placeholder="ex: 222"
+              placeholder="se não tiver, deixa vazio"
             />
           </div>
         </div>
@@ -293,22 +397,27 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         <div className="mt-6 rounded-2xl border p-4">
           <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (6 slots)</div>
           <div className="text-xs text-gray-500">
-            No celular: “Tirar foto” abre a câmera. Depois de tirar, envia e salva na auditoria.
+            Fluxo rápido: <b>tirou → conferiu → salvar</b>. (Gás é opcional.)
           </div>
 
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
             {kinds.map((kind) => {
-              const url = fotoUrl(aud, kind);
+              const savedUrl = fotoUrl(aud, kind);
               const busy = uploading[kind];
+              const pUrl = pendingUrl[kind];
+              const pFile = pendingFile[kind];
 
               return (
                 <div key={kind} className="rounded-2xl border p-3">
                   <div className="text-sm font-semibold">{FOTO_LABEL[kind]}</div>
 
                   <div className="mt-2">
-                    {url ? (
+                    {pUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={url} alt={kind} className="h-48 w-full rounded-xl object-cover" />
+                      <img src={pUrl} alt={`${kind}-pending`} className="h-48 w-full rounded-xl object-cover" />
+                    ) : savedUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={savedUrl} alt={kind} className="h-48 w-full rounded-xl object-cover" />
                     ) : (
                       <div className="flex h-48 items-center justify-center rounded-xl border bg-gray-50 text-sm text-gray-500">
                         Sem foto
@@ -316,18 +425,17 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                     )}
                   </div>
 
-                  <div className="mt-3 flex items-center gap-2">
+                  {/* Ações */}
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
                     <label className="cursor-pointer rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-                      {busy ? "Enviando..." : "Tirar foto"}
+                      Tirar foto
                       <input
                         type="file"
                         accept="image/*"
                         capture="environment"
                         className="hidden"
                         onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (!f) return;
-                          uploadFoto(kind, f);
+                          onPick(kind, e.target.files?.[0]);
                           e.currentTarget.value = "";
                         }}
                         disabled={busy}
@@ -335,26 +443,45 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                     </label>
 
                     <label className="cursor-pointer rounded-xl border px-4 py-2 text-sm hover:bg-gray-50">
-                      {busy ? "Enviando..." : "Escolher da galeria"}
+                      Galeria
                       <input
                         type="file"
                         accept="image/*"
                         className="hidden"
                         onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (!f) return;
-                          uploadFoto(kind, f);
+                          onPick(kind, e.target.files?.[0]);
                           e.currentTarget.value = "";
                         }}
                         disabled={busy}
                       />
                     </label>
+
+                    {/* Se tem pendente, aparece salvar/cancelar */}
+                    {pFile && (
+                      <>
+                        <button
+                          type="button"
+                          className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+                          disabled={busy}
+                          onClick={() => uploadFoto(kind, pFile)}
+                        >
+                          {busy ? "Enviando..." : "Salvar"}
+                        </button>
+
+                        <button
+                          type="button"
+                          className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                          disabled={busy}
+                          onClick={() => cancelPending(kind)}
+                        >
+                          Refazer
+                        </button>
+                      </>
+                    )}
                   </div>
 
                   {kind === "gas" && (
-                    <div className="mt-2 text-xs text-gray-500">
-                      Se não existir gás no condomínio, pode deixar sem foto.
-                    </div>
+                    <div className="mt-2 text-xs text-gray-500">Opcional: se não existir gás, pode deixar sem.</div>
                   )}
                 </div>
               );
@@ -365,7 +492,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         <div className="mt-4 flex gap-3">
           <button
             className="rounded-xl bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-            onClick={salvarRascunho}
+            onClick={() => salvarRascunho()}
             disabled={saving || loading || !aud}
           >
             {saving ? "Salvando..." : "Salvar rascunho"}
