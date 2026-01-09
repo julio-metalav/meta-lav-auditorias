@@ -66,6 +66,13 @@ function parseMoneyAny(v: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function parsePositiveInt(v: any, fallback: number) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  const i = Math.trunc(n);
+  return i > 0 ? i : fallback;
+}
+
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
     const supabase = supabaseServer();
@@ -73,7 +80,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     const { data, error } = await supabase
       .from("condominio_maquinas")
-      .select("id, condominio_id, categoria, capacidade_kg, quantidade, valor_ciclo, created_at, updated_at")
+      .select(
+        "id, condominio_id, categoria, capacidade_kg, quantidade, valor_ciclo, limpeza_quimica_ciclos, limpeza_mecanica_ciclos, created_at, updated_at"
+      )
       .eq("condominio_id", condominioId)
       .order("categoria", { ascending: true })
       .order("capacidade_kg", { ascending: true });
@@ -110,6 +119,10 @@ export async function POST(req: Request, { params }: { params: { id: string } })
           ? 0
           : Number(it.quantidade),
       valor_ciclo: parseMoneyAny(it.valor_ciclo),
+
+      // ✅ novos campos (defaults se vier vazio)
+      limpeza_quimica_ciclos: parsePositiveInt(it.limpeza_quimica_ciclos, 500),
+      limpeza_mecanica_ciclos: parsePositiveInt(it.limpeza_mecanica_ciclos, 2000),
     }));
 
     for (const p of payload) {
@@ -125,12 +138,20 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       if (Number.isNaN(p.valor_ciclo) || p.valor_ciclo < 0) {
         return NextResponse.json({ error: "valor_ciclo inválido" }, { status: 400 });
       }
+      if (!Number.isFinite(p.limpeza_quimica_ciclos) || p.limpeza_quimica_ciclos <= 0) {
+        return NextResponse.json({ error: "limpeza_quimica_ciclos inválido" }, { status: 400 });
+      }
+      if (!Number.isFinite(p.limpeza_mecanica_ciclos) || p.limpeza_mecanica_ciclos <= 0) {
+        return NextResponse.json({ error: "limpeza_mecanica_ciclos inválido" }, { status: 400 });
+      }
     }
 
     const { data, error } = await supabase
       .from("condominio_maquinas")
       .upsert(payload, { onConflict: "condominio_id,categoria,capacidade_kg" })
-      .select("id, condominio_id, categoria, capacidade_kg, quantidade, valor_ciclo");
+      .select(
+        "id, condominio_id, categoria, capacidade_kg, quantidade, valor_ciclo, limpeza_quimica_ciclos, limpeza_mecanica_ciclos"
+      );
 
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
