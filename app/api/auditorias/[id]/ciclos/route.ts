@@ -48,7 +48,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     const supabase = createRouteHandlerClient({ cookies });
     const auditoriaId = params.id;
 
-    // 1) auditoria (precisa existir)
+    // 1) auditoria precisa existir
     const { data: aud, error: audErr } = await supabase
       .from("auditorias")
       .select("id, condominio_id, ano_mes, mes_ref, status")
@@ -62,7 +62,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       );
     }
 
-    // 2) máquinas do condomínio
+    // 2) máquinas do condomínio (se você tiver coluna "ativo", pode reativar o filtro)
     const { data: maquinas, error: maqErr } = await supabase
       .from("condominio_maquinas")
       .select(
@@ -91,8 +91,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       auditoria_id: c.auditoria_id,
       categoria: c.categoria,
       capacidade_kg: c.capacidade_kg ?? null,
-      ciclos: Number(c.ciclos_mes ?? 0), // ✅ compatível com o frontend
-      ciclos_mes: Number(c.ciclos_mes ?? 0), // mantém também por compat
+      ciclos: Number(c.ciclos_mes ?? 0),
+      ciclos_mes: Number(c.ciclos_mes ?? 0),
     }));
 
     return NextResponse.json({
@@ -121,7 +121,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     const auditoriaId = params.id;
 
-    // garante auditoria existe (evita FK/erros esquisitos)
+    // garante auditoria existe (evita FK confuso)
     const { data: aud, error: audErr } = await supabase
       .from("auditorias")
       .select("id")
@@ -140,7 +140,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     // aceita lista ou 1 item
     const items = Array.isArray(body) ? body : body ? [body] : [];
 
-    // ✅ array vazio = OK (no-op). Isso elimina "Nenhuma linha enviada."
+    // ✅ array vazio = OK (no-op)
     if (items.length === 0) {
       return NextResponse.json({ ok: true, upserted: 0 });
     }
@@ -148,9 +148,10 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const payload = items.map((it: any) => {
       const categoria = normCategoria(it.categoria);
       const capacidade_kg = toNumOrNull(it.capacidade_kg);
-      const ciclos =
-        it.ciclos_mes ?? it.ciclos ?? it.ciclosMes ?? it.ciclos_mes; // ✅ aceita ambos
-      const ciclos_mes = toNonNegInt(ciclos);
+
+      // aceita `ciclos` (frontend) ou `ciclos_mes` (legado)
+      const ciclos_in = it.ciclos ?? it.ciclos_mes ?? it.ciclosMes;
+      const ciclos_mes = toNonNegInt(ciclos_in);
 
       return {
         auditoria_id: auditoriaId,
@@ -173,7 +174,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     }
 
     // ✅ Upsert por chave composta (auditoria_id, categoria, capacidade_kg)
-    // (precisa UNIQUE no banco, mas você disse "sql ok")
     const { data: saved, error: upErr } = await supabase
       .from("auditoria_ciclos")
       .upsert(payload, { onConflict: "auditoria_id,categoria,capacidade_kg" })
