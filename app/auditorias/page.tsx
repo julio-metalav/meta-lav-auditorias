@@ -37,7 +37,6 @@ function pickMonth(a: Aud) {
 }
 
 function unwrapData<T>(payload: any): T[] {
-  // aceita: [ ... ]  OU  { data: [ ... ] }
   if (Array.isArray(payload)) return payload as T[];
   if (payload && Array.isArray(payload.data)) return payload.data as T[];
   return [];
@@ -60,47 +59,58 @@ export default function AuditoriasPage() {
     status: "aberta",
   });
 
-  // ✅ só GESTOR cria auditoria (se quiser permitir interno, volta aqui)
+  // ✅ gestor cria; interno também pode criar se você quiser (troque para role !== "auditor")
   const canCreate = me?.role === "gestor";
+
+  const openPath = useMemo(() => {
+    if (me?.role === "auditor") return "auditor/auditoria";
+    if (me?.role === "interno") return "interno/auditoria";
+    return "auditoria"; // gestor
+  }, [me?.role]);
 
   async function loadAll() {
     setLoading(true);
     setErr(null);
+
     try {
-      const [mRes, aRes, cRes, uRes] = await Promise.all([
-        fetch("/api/me", { cache: "no-store" }),
-        fetch("/api/auditorias", { cache: "no-store" }),
-        fetch("/api/condominios", { cache: "no-store" }),
-        fetch("/api/users", { cache: "no-store" }),
-      ]);
-
+      const mRes = await fetch("/api/me", { cache: "no-store" });
       const m = await mRes.json().catch(() => ({}));
-      const a = await aRes.json().catch(() => ({}));
-      const c = await cRes.json().catch(() => ({}));
-      const u = await uRes.json().catch(() => ({}));
-
       if (!mRes.ok) throw new Error(m?.error ?? "Erro em /api/me");
       if (m?.error) throw new Error(m.error);
       setMe(m);
 
+      // carrega auditorias (auditor recebe só as dele)
+      const aRes = await fetch("/api/auditorias", { cache: "no-store" });
+      const a = await aRes.json().catch(() => ({}));
       if (!aRes.ok) throw new Error(a?.error ?? "Erro em /api/auditorias");
       if (a?.error) throw new Error(a.error);
       setAuditorias(unwrapData<Aud>(a));
 
+      // condos ajudam no formulário do gestor
+      const cRes = await fetch("/api/condominios", { cache: "no-store" });
+      const c = await cRes.json().catch(() => ({}));
       if (!cRes.ok) throw new Error(c?.error ?? "Erro em /api/condominios");
       if (c?.error) throw new Error(c.error);
       setCondos(unwrapData<Condo>(c));
 
-      if (!uRes.ok) throw new Error(u?.error ?? "Erro em /api/users");
-      if (u?.error) throw new Error(u.error);
+      // ⚠️ IMPORTANTE: a rota do projeto é /usuarios (não /users)
+      // Só precisa disso se for criar auditoria (gestor)
+      if (m?.role === "gestor") {
+        const uRes = await fetch("/api/usuarios", { cache: "no-store" });
+        const u = await uRes.json().catch(() => ({}));
+        if (!uRes.ok) throw new Error(u?.error ?? "Erro em /api/usuarios");
+        if (u?.error) throw new Error(u.error);
 
-      const rawUsers = unwrapData<any>(u);
-      const list = rawUsers.map((x: any) => ({
-        id: x.id,
-        email: x.email ?? x.profiles?.email ?? null,
-        role: x.role ?? x.profiles?.role ?? null,
-      }));
-      setAuditores(list);
+        const rawUsers = unwrapData<any>(u);
+        const list = rawUsers.map((x: any) => ({
+          id: x.id,
+          email: x.email ?? x.profiles?.email ?? null,
+          role: x.role ?? x.profiles?.role ?? null,
+        }));
+        setAuditores(list);
+      } else {
+        setAuditores([]);
+      }
     } catch (e: any) {
       setErr(e?.message ?? "Erro ao carregar");
     } finally {
@@ -202,8 +212,9 @@ export default function AuditoriasPage() {
                   onChange={(e) => setForm({ ...form, status: e.target.value })}
                 >
                   <option value="aberta">aberta</option>
+                  <option value="em_andamento">em_andamento</option>
                   <option value="em_conferencia">em_conferencia</option>
-                  <option value="fechada">fechada</option>
+                  <option value="final">final</option>
                 </select>
               </div>
             </div>
@@ -246,26 +257,18 @@ export default function AuditoriasPage() {
           <div key={a.id} className="card">
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontWeight: 700 }}>
-                  {a.condominios?.nome ?? "Condomínio"}
-                </div>
+                <div style={{ fontWeight: 700 }}>{a.condominios?.nome ?? "Condomínio"}</div>
                 <div className="small">
-                  {a.condominios?.cidade ?? ""}/{a.condominios?.uf ?? ""} •{" "}
-                  {pickMonth(a) || "mês n/d"} • status: <b>{a.status ?? "n/d"}</b>
+                  {a.condominios?.cidade ?? ""}/{a.condominios?.uf ?? ""} • {pickMonth(a) || "mês n/d"} • status:{" "}
+                  <b>{a.status ?? "n/d"}</b>
                 </div>
-                <div className="small">
-                  Auditor: {a.profiles?.email ?? a.auditor_id ?? "n/d"}
-                </div>
+                <div className="small">Auditor: {a.profiles?.email ?? a.auditor_id ?? "n/d"}</div>
                 <div className="small">ID: {a.id}</div>
               </div>
 
               <div className="row" style={{ alignItems: "center", justifyContent: "flex-end" }}>
-                <button className="btn" onClick={() => router.push(`/auditor/auditoria/${a.id}`)}>
-                  Abrir (Auditor)
-                </button>
-
-                <button className="btn" onClick={() => router.push(`/interno/auditoria/${a.id}`)}>
-                  Abrir (Interno)
+                <button className="btn primary" onClick={() => router.push(`/${openPath}/${a.id}`)}>
+                  Abrir
                 </button>
               </div>
             </div>
