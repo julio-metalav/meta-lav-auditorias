@@ -67,9 +67,17 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     conector_bala: false,
   });
 
-  // fluxo "tirou -> conferiu -> salvar": guardamos um arquivo pendente por slot
+  // fluxo "tirou -> conferiu -> salvar"
   const [pendingFile, setPendingFile] = useState<Partial<Record<FotoKind, File>>>({});
-  const [pendingUrl, setPendingUrl] = useState<Partial<Record<FotoKind, string>>>({}); // objectURL preview
+  const [pendingUrl, setPendingUrl] = useState<Partial<Record<FotoKind, string>>>({});
+  const [showPreview, setShowPreview] = useState<Record<FotoKind, boolean>>({
+    agua: false,
+    energia: false,
+    gas: false,
+    quimicos: false,
+    bombonas: false,
+    conector_bala: false,
+  });
 
   function setOkMsg(msg: string) {
     setOk(msg);
@@ -92,6 +100,21 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     if (kind === "quimicos") return a.foto_quimicos_url ?? null;
     if (kind === "bombonas") return a.foto_bombonas_url ?? null;
     return a.foto_conector_bala_url ?? null;
+  }
+
+  function filenameFromFile(f?: File) {
+    if (!f) return "";
+    return f.name || "foto.jpg";
+  }
+
+  function shortUrl(u: string) {
+    // mostra só o final, pra não poluir
+    try {
+      const parts = u.split("/");
+      return parts.slice(-2).join("/");
+    } catch {
+      return u;
+    }
   }
 
   async function carregar() {
@@ -173,18 +196,14 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       fd.append("kind", kind);
       fd.append("file", file);
 
-      const res = await fetch(`/api/auditorias/${id}/fotos`, {
-        method: "POST",
-        body: fd,
-      });
-
+      const res = await fetch(`/api/auditorias/${id}/fotos`, { method: "POST", body: fd });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "Erro ao enviar foto");
 
       const saved: Aud | null = json?.auditoria ?? null;
       if (saved) setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...saved }));
 
-      // limpa pendência do slot (já salvou)
+      // limpa pendência + fecha preview
       const url = pendingUrl[kind];
       if (url) URL.revokeObjectURL(url);
 
@@ -198,6 +217,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         delete copy[kind];
         return copy;
       });
+      setShowPreview((p) => ({ ...p, [kind]: false }));
 
       setOkMsg(`Foto salva ✅ (${FOTO_LABEL[kind]})`);
     } catch (e: any) {
@@ -210,15 +230,13 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   function onPick(kind: FotoKind, file?: File | null) {
     if (!file) return;
 
-    // cria preview local (conferência)
     const url = URL.createObjectURL(file);
-
-    // se já tinha preview pendente, libera
     const old = pendingUrl[kind];
     if (old) URL.revokeObjectURL(old);
 
     setPendingFile((p) => ({ ...p, [kind]: file }));
     setPendingUrl((p) => ({ ...p, [kind]: url }));
+    setShowPreview((p) => ({ ...p, [kind]: false })); // por padrão: NÃO mostrar foto
   }
 
   function cancelPending(kind: FotoKind) {
@@ -235,6 +253,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       delete copy[kind];
       return copy;
     });
+    setShowPreview((p) => ({ ...p, [kind]: false }));
   }
 
   const checklist = useMemo(() => {
@@ -242,12 +261,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
     const leituraAguaOk = (leitura_agua ?? "").trim().length > 0;
     const leituraEnergiaOk = (leitura_energia ?? "").trim().length > 0;
-    // gás é opcional sempre:
-    const leituraGasOk = true;
 
+    // gás é opcional sempre
     const fotoAguaOk = !!a?.foto_agua_url;
     const fotoEnergiaOk = !!a?.foto_energia_url;
-    const fotoGasOk = true; // opcional
     const fotoQuimicosOk = !!a?.foto_quimicos_url;
     const fotoBombonasOk = !!a?.foto_bombonas_url;
     const fotoConectorOk = !!a?.foto_conector_bala_url;
@@ -255,7 +272,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     const fotosObrigatoriasOk =
       fotoAguaOk && fotoEnergiaOk && fotoQuimicosOk && fotoBombonasOk && fotoConectorOk;
 
-    const prontoCampo = leituraAguaOk && leituraEnergiaOk && leituraGasOk && fotosObrigatoriasOk;
+    const prontoCampo = leituraAguaOk && leituraEnergiaOk && fotosObrigatoriasOk;
 
     const faltas: string[] = [];
     if (!leituraAguaOk) faltas.push("Leitura de água");
@@ -266,11 +283,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     if (!fotoBombonasOk) faltas.push("Foto das bombonas (detergente+amaciante)");
     if (!fotoConectorOk) faltas.push("Foto do conector bala conectado");
 
-    return {
-      prontoCampo,
-      faltas,
-    };
-  }, [aud, leitura_agua, leitura_energia, leitura_gas]);
+    return { prontoCampo, faltas };
+  }, [aud, leitura_agua, leitura_energia]);
 
   useEffect(() => {
     carregar();
@@ -280,7 +294,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   useEffect(() => {
     return () => {
       if (okTimer.current) window.clearTimeout(okTimer.current);
-      // libera todos previews pendentes
       Object.values(pendingUrl).forEach((u) => u && URL.revokeObjectURL(u));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -319,14 +332,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>
       )}
 
-      {/* CHECKLIST DO CAMPO */}
       <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-gray-800">Conferência rápida (campo)</div>
-            <div className="mt-1 text-xs text-gray-500">
-              Gás é opcional. O objetivo é sair do condomínio com tudo comprovado por foto.
-            </div>
+            <div className="mt-1 text-xs text-gray-500">Gás é opcional. Fotos obrigatórias não aparecem na tela — só link.</div>
 
             {checklist.prontoCampo ? (
               <div className="mt-2 text-sm font-semibold text-green-700">✅ Campo concluído</div>
@@ -341,7 +351,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
             disabled={!checklist.prontoCampo || saving || loading || !aud}
             onClick={() => salvarRascunho({ status: "final" })}
-            title={!checklist.prontoCampo ? "Complete as leituras e fotos obrigatórias" : "Marcar como concluída em campo"}
           >
             {saving ? "Salvando..." : "Concluir em campo ✅"}
           </button>
@@ -396,9 +405,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
         <div className="mt-6 rounded-2xl border p-4">
           <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (6 slots)</div>
-          <div className="text-xs text-gray-500">
-            Fluxo rápido: <b>tirou → conferiu → salvar</b>. (Gás é opcional.)
-          </div>
+          <div className="text-xs text-gray-500">Fluxo: tirou → (opcional ver prévia) → salvar. Depois some e vira link.</div>
 
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
             {kinds.map((kind) => {
@@ -411,24 +418,55 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 <div key={kind} className="rounded-2xl border p-3">
                   <div className="text-sm font-semibold">{FOTO_LABEL[kind]}</div>
 
-                  <div className="mt-2">
-                    {pUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={pUrl} alt={`${kind}-pending`} className="h-48 w-full rounded-xl object-cover" />
-                    ) : savedUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={savedUrl} alt={kind} className="h-48 w-full rounded-xl object-cover" />
-                    ) : (
-                      <div className="flex h-48 items-center justify-center rounded-xl border bg-gray-50 text-sm text-gray-500">
-                        Sem foto
+                  {/* Área "clean": sem foto */}
+                  <div className="mt-2 rounded-xl border bg-gray-50 p-3 text-sm">
+                    {pFile ? (
+                      <div className="text-gray-700">
+                        <b>Pendente:</b> {filenameFromFile(pFile)}
                       </div>
+                    ) : savedUrl ? (
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-gray-700">
+                          <b>Salva ✅</b> <span className="text-xs text-gray-500">({shortUrl(savedUrl)})</span>
+                        </div>
+                        <a
+                          className="rounded-lg border bg-white px-3 py-1 text-xs hover:bg-gray-100"
+                          href={savedUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Abrir
+                        </a>
+                      </div>
+                    ) : (
+                      <div className="text-gray-500">Sem foto</div>
                     )}
                   </div>
+
+                  {/* Prévia opcional (só se pendente) */}
+                  {pUrl && (
+                    <div className="mt-2">
+                      <button
+                        type="button"
+                        className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
+                        onClick={() => setShowPreview((p) => ({ ...p, [kind]: !p[kind] }))}
+                      >
+                        {showPreview[kind] ? "Ocultar prévia" : "Ver prévia"}
+                      </button>
+
+                      {showPreview[kind] && (
+                        <div className="mt-2">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={pUrl} alt={`${kind}-preview`} className="h-48 w-full rounded-xl object-cover" />
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Ações */}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <label className="cursor-pointer rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-                      Tirar foto
+                      📷 Tirar foto
                       <input
                         type="file"
                         accept="image/*"
@@ -443,7 +481,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                     </label>
 
                     <label className="cursor-pointer rounded-xl border px-4 py-2 text-sm hover:bg-gray-50">
-                      Galeria
+                      🖼️ Galeria
                       <input
                         type="file"
                         accept="image/*"
@@ -456,7 +494,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                       />
                     </label>
 
-                    {/* Se tem pendente, aparece salvar/cancelar */}
                     {pFile && (
                       <>
                         <button
@@ -465,7 +502,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                           disabled={busy}
                           onClick={() => uploadFoto(kind, pFile)}
                         >
-                          {busy ? "Enviando..." : "Salvar"}
+                          {busy ? "Enviando..." : "Salvar ✅"}
                         </button>
 
                         <button
@@ -480,9 +517,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                     )}
                   </div>
 
-                  {kind === "gas" && (
-                    <div className="mt-2 text-xs text-gray-500">Opcional: se não existir gás, pode deixar sem.</div>
-                  )}
+                  {kind === "gas" && <div className="mt-2 text-xs text-gray-500">Opcional: se não existir gás, pode deixar sem.</div>}
                 </div>
               );
             })}
