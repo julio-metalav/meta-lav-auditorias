@@ -1,117 +1,200 @@
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { cookies } from "next/headers";
+import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
 
-type Linha = {
-  categoria: "lavadora" | "secadora";
-  capacidade_kg: number;
-  ciclos: number;
-};
+type Role = "auditor" | "interno" | "gestor";
 
-async function getRole(supabase: ReturnType<typeof supabaseServer>, userId: string) {
-  const { data, error } = await supabase
+async function getUserRole(supabase: any): Promise<Role | null> {
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !auth?.user) return null;
+
+  const { data: prof, error: profErr } = await supabase
     .from("profiles")
     .select("role")
-    .eq("id", userId)
-    .maybeSingle();
+    .eq("id", auth.user.id)
+    .single();
 
-  if (error) throw error;
-  return (data?.role ?? null) as string | null;
+  if (profErr) return null;
+  return (prof?.role ?? null) as Role | null;
 }
 
-export async function GET(_req: Request, ctx: { params: { id: string } }) {
+function roleGte(role: Role | null, min: Exclude<Role, "auditor">): boolean {
+  const w: Record<Role, number> = { auditor: 1, interno: 2, gestor: 3 };
+  if (!role) return false;
+  return (w[role] ?? 0) >= (w[min] ?? 0);
+}
+
+function normCategoria(v: any) {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "lavadora" || s === "secadora") return s;
+  return "";
+}
+
+function toNumOrNull(v: any) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toNonNegInt(v: any) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  const i = Math.trunc(n);
+  return i < 0 ? 0 : i;
+}
+
+export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
-    const supabase = supabaseServer();
+    const supabase = createRouteHandlerClient({ cookies });
+    const auditoriaId = params.id;
 
-    const { data: auth, error: authErr } = await supabase.auth.getUser();
-    if (authErr || !auth?.user) {
-      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
-    }
-
-    const auditoriaId = ctx.params.id;
-
-    // pega a auditoria (pra descobrir o condominio_id)
+    // 1) auditoria (precisa existir)
     const { data: aud, error: audErr } = await supabase
       .from("auditorias")
-      .select("id, condominio_id")
+      .select("id, condominio_id, ano_mes, mes_ref, status")
       .eq("id", auditoriaId)
-      .maybeSingle();
+      .single();
 
-    if (audErr) throw audErr;
-    if (!aud) return NextResponse.json({ error: "Auditoria não encontrada." }, { status: 404 });
+    if (audErr || !aud) {
+      return NextResponse.json(
+        { error: audErr?.message ?? "Auditoria não encontrada" },
+        { status: 404 }
+      );
+    }
 
-    // máquinas do condomínio
+    // 2) máquinas do condomínio
     const { data: maquinas, error: maqErr } = await supabase
       .from("condominio_maquinas")
-      .select("categoria, capacidade_kg, quantidade, valor_ciclo, ativo")
+      .select(
+        "id, condominio_id, categoria, capacidade_kg, quantidade, valor_ciclo, limpeza_quimica_ciclos, limpeza_mecanica_ciclos"
+      )
       .eq("condominio_id", aud.condominio_id)
-      .eq("ativo", true)
       .order("categoria", { ascending: true })
       .order("capacidade_kg", { ascending: true });
 
-    if (maqErr) throw maqErr;
+    if (maqErr) {
+      return NextResponse.json({ error: maqErr.message }, { status: 400 });
+    }
 
-    // ciclos já lançados para essa auditoria
-    const { data: ciclos, error: cicErr } = await supabase
+    // 3) ciclos já lançados (normaliza para `ciclos`)
+    const { data: ciclosRaw, error: cicErr } = await supabase
       .from("auditoria_ciclos")
-      .select("categoria, capacidade_kg, ciclos")
+      .select("id, auditoria_id, categoria, capacidade_kg, ciclos_mes")
       .eq("auditoria_id", auditoriaId);
 
-    if (cicErr) throw cicErr;
+    if (cicErr) {
+      return NextResponse.json({ error: cicErr.message }, { status: 400 });
+    }
+
+    const ciclos = (ciclosRaw ?? []).map((c: any) => ({
+      id: c.id,
+      auditoria_id: c.auditoria_id,
+      categoria: c.categoria,
+      capacidade_kg: c.capacidade_kg ?? null,
+      ciclos: Number(c.ciclos_mes ?? 0), // ✅ compatível com o frontend
+      ciclos_mes: Number(c.ciclos_mes ?? 0), // mantém também por compat
+    }));
 
     return NextResponse.json({
+      auditoria: aud,
       condominio_id: aud.condominio_id,
       maquinas: maquinas ?? [],
-      ciclos: ciclos ?? [],
+      ciclos,
     });
   } catch (e: any) {
     return NextResponse.json(
-      { error: e?.message ?? "Erro ao carregar ciclos" },
+      { error: e?.message ?? "Erro inesperado" },
       { status: 500 }
     );
   }
 }
 
-export async function POST(req: Request, ctx: { params: { id: string } }) {
+export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {
-    const supabase = supabaseServer();
+    const supabase = createRouteHandlerClient({ cookies });
+    const role = await getUserRole(supabase);
 
-    const { data: auth, error: authErr } = await supabase.auth.getUser();
-    if (authErr || !auth?.user) {
-      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    // Permissão: interno/gestor
+    if (!roleGte(role, "interno")) {
+      return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
     }
 
-    const role = await getRole(supabase, auth.user.id);
-    if (role !== "interno" && role !== "gestor") {
-      return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
+    const auditoriaId = params.id;
+
+    // garante auditoria existe (evita FK/erros esquisitos)
+    const { data: aud, error: audErr } = await supabase
+      .from("auditorias")
+      .select("id")
+      .eq("id", auditoriaId)
+      .single();
+
+    if (audErr || !aud) {
+      return NextResponse.json(
+        { error: audErr?.message ?? "Auditoria não encontrada" },
+        { status: 404 }
+      );
     }
 
-    const auditoriaId = ctx.params.id;
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
 
-    const linhas: Linha[] = Array.isArray(body?.linhas) ? body.linhas : [];
-    if (!linhas.length) {
-      return NextResponse.json({ error: "Nenhuma linha enviada." }, { status: 400 });
+    // aceita lista ou 1 item
+    const items = Array.isArray(body) ? body : body ? [body] : [];
+
+    // ✅ array vazio = OK (no-op). Isso elimina "Nenhuma linha enviada."
+    if (items.length === 0) {
+      return NextResponse.json({ ok: true, upserted: 0 });
     }
 
-    const payload = linhas.map((l) => ({
-      auditoria_id: auditoriaId,
-      categoria: l.categoria,
-      capacidade_kg: Number(l.capacidade_kg),
-      ciclos: Number(l.ciclos ?? 0),
-    }));
+    const payload = items.map((it: any) => {
+      const categoria = normCategoria(it.categoria);
+      const capacidade_kg = toNumOrNull(it.capacidade_kg);
+      const ciclos =
+        it.ciclos_mes ?? it.ciclos ?? it.ciclosMes ?? it.ciclos_mes; // ✅ aceita ambos
+      const ciclos_mes = toNonNegInt(ciclos);
 
-    const { error } = await supabase
+      return {
+        auditoria_id: auditoriaId,
+        categoria,
+        capacidade_kg,
+        ciclos_mes,
+      };
+    });
+
+    for (const p of payload) {
+      if (!p.categoria) {
+        return NextResponse.json({ error: "categoria é obrigatória" }, { status: 400 });
+      }
+      if (p.capacidade_kg !== null && !Number.isFinite(Number(p.capacidade_kg))) {
+        return NextResponse.json({ error: "capacidade_kg inválido" }, { status: 400 });
+      }
+      if (!Number.isFinite(Number(p.ciclos_mes)) || Number(p.ciclos_mes) < 0) {
+        return NextResponse.json({ error: "ciclos inválido" }, { status: 400 });
+      }
+    }
+
+    // ✅ Upsert por chave composta (auditoria_id, categoria, capacidade_kg)
+    // (precisa UNIQUE no banco, mas você disse "sql ok")
+    const { data: saved, error: upErr } = await supabase
       .from("auditoria_ciclos")
-      .upsert(payload, { onConflict: "auditoria_id,categoria,capacidade_kg" });
+      .upsert(payload, { onConflict: "auditoria_id,categoria,capacidade_kg" })
+      .select("id, auditoria_id, categoria, capacidade_kg, ciclos_mes");
 
-    if (error) throw error;
+    if (upErr) {
+      return NextResponse.json({ error: upErr.message }, { status: 400 });
+    }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({
+      ok: true,
+      upserted: saved?.length ?? 0,
+      data: (saved ?? []).map((r: any) => ({
+        ...r,
+        ciclos: Number(r.ciclos_mes ?? 0),
+      })),
+    });
   } catch (e: any) {
     return NextResponse.json(
-      { error: e?.message ?? "Erro ao salvar ciclos" },
+      { error: e?.message ?? "Erro inesperado" },
       { status: 500 }
     );
   }
 }
-
