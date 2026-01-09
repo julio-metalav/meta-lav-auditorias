@@ -530,4 +530,3 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     </div>
   );
 }
-
