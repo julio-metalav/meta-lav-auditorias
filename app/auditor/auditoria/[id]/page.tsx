@@ -31,6 +31,15 @@ type Aud = {
 type Me = { id: string; email: string | null; name: string | null };
 type UserRow = { id: string; email: string | null };
 
+type Role = "auditor" | "interno" | "gestor" | null;
+
+type HistItem = {
+  de_status: string | null;
+  para_status: string | null;
+  created_at: string;
+  actor?: { id: string; email: string | null; role: string | null } | null;
+};
+
 function pickMonth(a: Aud) {
   return (a.ano_mes ?? a.mes_ref ?? "") as string;
 }
@@ -68,6 +77,12 @@ async function safeReadJson(res: Response): Promise<any> {
   }
 }
 
+function fmtBR(dt: string) {
+  const d = new Date(dt);
+  if (Number.isNaN(d.getTime())) return dt;
+  return d.toLocaleString("pt-BR");
+}
+
 export default function AuditorAuditoriaPage({ params }: { params: { id: string } }) {
   const id = params.id;
 
@@ -101,6 +116,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   const [pendingFile, setPendingFile] = useState<Partial<Record<FotoKind, File>>>({});
   const [pendingUrl, setPendingUrl] = useState<Partial<Record<FotoKind, string>>>({});
   const [previewKind, setPreviewKind] = useState<FotoKind | null>(null);
+
+  // ✅ Histórico de status (somente leitura para interno/gestor)
+  const [histLoading, setHistLoading] = useState(false);
+  const [histErr, setHistErr] = useState<string | null>(null);
+  const [histRole, setHistRole] = useState<Role>(null);
+  const [histData, setHistData] = useState<HistItem[]>([]);
 
   function setOkMsg(msg: string) {
     setOk(msg);
@@ -163,6 +184,29 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     return s === "em_conferencia" || s === "final";
   }, [aud?.status]);
 
+  const canSeeHistorico = useMemo(() => {
+    return histRole === "interno" || histRole === "gestor";
+  }, [histRole]);
+
+  async function carregarHistorico() {
+    setHistLoading(true);
+    setHistErr(null);
+
+    try {
+      const res = await fetch(`/api/auditorias/${id}/historico`, { cache: "no-store" });
+      const json = await safeReadJson(res);
+      if (!res.ok) throw new Error(json?.error ?? "Erro ao carregar histórico");
+
+      setHistRole((json?.role ?? null) as Role);
+      setHistData(Array.isArray(json?.data) ? (json.data as HistItem[]) : []);
+    } catch (e: any) {
+      setHistErr(e?.message ?? "Falha ao carregar histórico");
+      // não zera role/dados à força — evita flicker
+    } finally {
+      setHistLoading(false);
+    }
+  }
+
   async function carregarTudo() {
     setLoading(true);
     setErr(null);
@@ -196,6 +240,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
       setAud(found);
       applyFromAud(found);
+
+      // 4) histórico (independente — só mostra se role for interno/gestor)
+      carregarHistorico();
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao carregar");
     } finally {
@@ -237,6 +284,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       }
 
       setOkMsg(extra?.status ? "Concluída em campo ✅" : "Salvo ✓");
+
+      // se mudou status, atualiza histórico
+      if (extra?.status) carregarHistorico();
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao salvar");
     } finally {
@@ -420,12 +470,71 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
       {ok && <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>}
 
+      {/* ✅ Histórico de status (somente interno/gestor) */}
+      {canSeeHistorico && (
+        <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-gray-800">Histórico de status</div>
+              <div className="mt-1 text-xs text-gray-500">Somente leitura.</div>
+            </div>
+
+            <button
+              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+              onClick={carregarHistorico}
+              disabled={histLoading}
+              title="Atualizar histórico"
+            >
+              {histLoading ? "Carregando..." : "Atualizar"}
+            </button>
+          </div>
+
+          {histErr && <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{histErr}</div>}
+
+          {!histErr && !histLoading && histData.length === 0 && (
+            <div className="mt-3 text-sm text-gray-600">Ainda não há registros de mudança de status.</div>
+          )}
+
+          {histData.length > 0 && (
+            <div className="mt-3 overflow-hidden rounded-xl border">
+              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600">
+                <div className="col-span-4">Data/Hora</div>
+                <div className="col-span-4">Status</div>
+                <div className="col-span-4">Quem</div>
+              </div>
+
+              <div className="divide-y">
+                {histData.map((h, idx) => {
+                  const de = (h.de_status ?? "—").toString();
+                  const para = (h.para_status ?? "—").toString();
+                  const who = h.actor?.email ?? h.actor?.id ?? "—";
+                  const whoRole = h.actor?.role ? ` • ${h.actor.role}` : "";
+                  return (
+                    <div key={`${h.created_at}-${idx}`} className="grid grid-cols-12 px-3 py-2 text-sm">
+                      <div className="col-span-4 text-gray-700">{fmtBR(h.created_at)}</div>
+                      <div className="col-span-4 text-gray-800">
+                        <span className="font-mono text-xs text-gray-600">{de}</span> →{" "}
+                        <span className="font-mono text-xs text-gray-600">{para}</span>
+                      </div>
+                      <div className="col-span-4 text-gray-700">
+                        {who}
+                        <span className="text-xs text-gray-500">{whoRole}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-gray-800">Conferência (campo)</div>
             {concluida ? (
-              <div className="mt-1 text-sm font-semibold text-green-700">✔️ Já concluída</div>
+              <div className="mt-1 text-sm font-semibold text-green-700"✔️ Já concluída</div>
             ) : checklist.prontoCampo ? (
               <div className="mt-1 text-sm font-semibold text-green-700">✅ Campo pronto</div>
             ) : (
