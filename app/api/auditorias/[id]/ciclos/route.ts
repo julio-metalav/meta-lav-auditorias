@@ -49,8 +49,14 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     const { data: auth, error: authErr } = await supabase.auth.getUser();
     if (authErr || !auth?.user) {
-      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
-    }
+     return NextResponse.json({
+  __build: "ciclos-v2-coluna-ciclos",
+  auditoria,
+  condominio_id: (aud as any).condominio_id,
+  maquinas: maquinas ?? [],
+  ciclos,
+});
+
 
     const { data: aud, error: audErr } = await supabase
       .from("auditorias")
