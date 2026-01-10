@@ -392,6 +392,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             Mês: <b>{aud ? pickMonth(aud) : "-"}</b> • Status: <b>{aud?.status ?? "-"}</b>
           </div>
           <div className="mt-1 font-mono text-xs text-gray-400">ID: {id}</div>
+<div className="mt-2 rounded-xl border bg-yellow-50 p-2 text-xs text-yellow-900">
+  <b>BUILD:</b> auditor-ui-v3 • status="{aud?.status ?? "-"}" • concluida="{String(concluida)}"
+</div>
+
         </div>
 
         <button
