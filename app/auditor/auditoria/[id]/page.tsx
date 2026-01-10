@@ -598,7 +598,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
         <div className="mt-6 rounded-2xl border p-4">
           <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (checklist)</div>
-          <div className="text-xs text-gray-500">Tocar em "Tirar" -> depois "Salvar".</div>
+          <div className="text-xs text-gray-500">Tocar em "Tirar" - depois "Salvar".</div>
 
           <div className="mt-3 divide-y rounded-xl border">
             {FOTO_ITEMS.map((item) => {
