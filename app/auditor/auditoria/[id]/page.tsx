@@ -148,6 +148,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     return me.id !== aud.auditor_id;
   }, [me?.id, aud?.auditor_id]);
 
+  const concluida = useMemo(() => {
+    const s = String(aud?.status ?? "").toLowerCase();
+    return s === "em_conferencia" || s === "final";
+  }, [aud?.status]);
+
   async function carregarTudo() {
     setLoading(true);
     setErr(null);
@@ -192,7 +197,13 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     setOk(null);
 
     if (!aud) return setErr("Auditoria não carregada.");
-    if (mismatch) return setErr(`Sem permissão: você está logado como "${meLabel}", mas esta auditoria é de "${assignedAuditorLabel}".`);
+    if (mismatch)
+      return setErr(`Sem permissão: você está logado como "${meLabel}", mas esta auditoria é de "${assignedAuditorLabel}".`);
+
+    // ✅ não deixa concluir duas vezes
+    if (extra?.status && concluida) {
+      return setOkMsg("Já está concluída ✔️");
+    }
 
     setSaving(true);
     try {
@@ -262,7 +273,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     setOk(null);
 
     if (!aud) return setErr("Auditoria não carregada.");
-    if (mismatch) return setErr(`Sem permissão: você está logado como "${meLabel}", mas esta auditoria é de "${assignedAuditorLabel}".`);
+    if (mismatch)
+      return setErr(`Sem permissão: você está logado como "${meLabel}", mas esta auditoria é de "${assignedAuditorLabel}".`);
 
     if (!file.type.startsWith("image/")) return setErr("Envie apenas imagem.");
 
@@ -353,6 +365,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
   const disableAll = loading || saving || !aud || mismatch;
 
+  const concluirDisabled = !checklist.prontoCampo || disableAll || concluida;
+
   return (
     <div className="mx-auto max-w-4xl p-6">
       <div className="mb-4 flex items-center justify-between">
@@ -402,22 +416,30 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-gray-800">Conferência (campo)</div>
-            {checklist.prontoCampo ? (
+
+            {concluida ? (
+              <div className="mt-1 text-sm font-semibold text-green-700">✔️ Já concluída</div>
+            ) : checklist.prontoCampo ? (
               <div className="mt-1 text-sm font-semibold text-green-700">✅ Campo pronto</div>
             ) : (
               <div className="mt-1 text-sm text-red-700">
                 Faltando: <b>{checklist.faltas.join(", ")}</b>
               </div>
             )}
+
             <div className="mt-1 text-xs text-gray-500">Gás é opcional.</div>
           </div>
 
           <button
             className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
-            disabled={!checklist.prontoCampo || disableAll}
-            onClick={() => salvarRascunho({ status: "em_conferencia" })}
+            disabled={concluirDisabled}
+            onClick={() => {
+              if (concluida) return;
+              salvarRascunho({ status: "em_conferencia" });
+            }}
+            title={concluida ? "Já concluída" : !checklist.prontoCampo ? "Complete o checklist" : "Concluir em campo"}
           >
-            {saving ? "Salvando..." : "Concluir em campo ✅"}
+            {concluida ? "Concluída ✔️" : saving ? "Salvando..." : "Concluir em campo ✅"}
           </button>
         </div>
       </div>
@@ -631,11 +653,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             </div>
             <div className="mt-3">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={pendingUrl[previewKind] as string}
-                alt="preview"
-                className="max-h-[70vh] w-full rounded-xl object-contain"
-              />
+              <img src={pendingUrl[previewKind] as string} alt="preview" className="max-h-[70vh] w-full rounded-xl object-contain" />
             </div>
           </div>
         </div>
