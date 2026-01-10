@@ -50,7 +50,7 @@ function adminClient() {
   return createAdminClient(url, service, { auth: { persistSession: false } });
 }
 
-async function requireManager() {
+async function requireAuth() {
   const supabase = supabaseServer();
 
   const { data: auth, error: authErr } = await supabase.auth.getUser();
@@ -67,16 +67,25 @@ async function requireManager() {
   if (profErr) return { ok: false as const, status: 500, msg: profErr.message };
 
   const role = (prof?.role as Role) ?? null;
-  if (role !== "gestor" && role !== "interno") {
-    return { ok: false as const, status: 403, msg: "Sem permissão" };
-  }
-
   return { ok: true as const, user: auth.user, role };
 }
 
-// GET /api/users -> lista usuários do Auth + role do profiles
+async function requireManager() {
+  const gate = await requireAuth();
+  if (!gate.ok) return gate;
+
+  if (gate.role !== "gestor" && gate.role !== "interno") {
+    return { ok: false as const, status: 403, msg: "Sem permissão" };
+  }
+
+  return gate;
+}
+
+// GET /api/users
+// - interno/gestor: lista usuários do Auth + role do profiles
+// - auditor: retorna só {id, email} (mínimo pra UI traduzir auditor_id -> email)
 export async function GET() {
-  const gate = await requireManager();
+  const gate = await requireAuth();
   if (!gate.ok) return NextResponse.json({ error: gate.msg }, { status: gate.status });
 
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -88,6 +97,24 @@ export async function GET() {
 
   const admin = adminClient();
 
+  // Auditor: retorna mínimo
+  if (gate.role === "auditor") {
+    const { data: profs, error: profErr } = await admin
+      .from("profiles")
+      .select("id, email")
+      .not("email", "is", null);
+
+    if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
+
+    const out = (profs ?? []).map((p: any) => ({
+      id: p.id,
+      email: p.email ?? null,
+    }));
+
+    return NextResponse.json(out);
+  }
+
+  // Interno/Gestor: retorna completo (auth users + role)
   const { data: usersData, error: usersErr } = await admin.auth.admin.listUsers({
     page: 1,
     perPage: 200,
@@ -104,7 +131,7 @@ export async function GET() {
 
   if (profErr) return NextResponse.json({ error: profErr.message }, { status: 500 });
 
-  const roleById = new Map((profs ?? []).map((p) => [p.id, p.role]));
+  const roleById = new Map((profs ?? []).map((p: any) => [p.id, p.role]));
 
   const out = (usersData?.users ?? []).map((u) => ({
     id: u.id,
@@ -116,7 +143,7 @@ export async function GET() {
   return NextResponse.json(out);
 }
 
-// POST /api/users -> cria usuário + grava role em profiles
+// POST /api/users -> cria usuário + grava role em profiles (somente interno/gestor)
 export async function POST(req: Request) {
   const gate = await requireManager();
   if (!gate.ok) return NextResponse.json({ error: gate.msg }, { status: gate.status });
@@ -166,4 +193,3 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ ok: true, id: created.user.id, email, role });
 }
-
