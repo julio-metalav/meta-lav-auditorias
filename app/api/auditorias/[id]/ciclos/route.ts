@@ -52,7 +52,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
     }
 
-    // ✅ Banco real: NÃO existe ano_mes. Só mes_ref.
     const { data: aud, error: audErr } = await supabase
       .from("auditorias")
       .select("id, condominio_id, mes_ref, status")
@@ -79,22 +78,24 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: maqErr.message }, { status: 400 });
     }
 
+    // ✅ BANCO REAL: coluna é "ciclos"
     const { data: ciclosRaw, error: cicErr } = await supabase
       .from("auditoria_ciclos")
-      .select("id, auditoria_id, categoria, capacidade_kg, ciclos_mes")
+      .select("id, auditoria_id, categoria, capacidade_kg, ciclos")
       .eq("auditoria_id", auditoriaId);
 
     if (cicErr) {
       return NextResponse.json({ error: cicErr.message }, { status: 400 });
     }
 
+    // compat: devolve também ciclos_mes (alias)
     const ciclos = (ciclosRaw ?? []).map((c: any) => ({
       id: c.id,
       auditoria_id: c.auditoria_id,
       categoria: c.categoria,
       capacidade_kg: c.capacidade_kg ?? null,
-      ciclos: Number(c.ciclos_mes ?? 0),
-      ciclos_mes: Number(c.ciclos_mes ?? 0),
+      ciclos: Number(c.ciclos ?? 0),
+      ciclos_mes: Number(c.ciclos ?? 0),
     }));
 
     // compat: devolve ano_mes como alias do mes_ref
@@ -149,12 +150,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ ok: true, upserted: 0 });
     }
 
+    // ✅ BANCO REAL: salva em "ciclos"
     const payload = items.map((it: any) => {
       const categoria = normCategoria(it.categoria);
       const capacidade_kg = toNumOrNull(it.capacidade_kg);
       const ciclos_in = it.ciclos ?? it.ciclos_mes ?? it.ciclosMes;
-      const ciclos_mes = toNonNegInt(ciclos_in);
-      return { auditoria_id: auditoriaId, categoria, capacidade_kg, ciclos_mes };
+      const ciclos = toNonNegInt(ciclos_in);
+      return { auditoria_id: auditoriaId, categoria, capacidade_kg, ciclos };
     });
 
     for (const p of payload) {
@@ -162,7 +164,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       if (p.capacidade_kg !== null && !Number.isFinite(Number(p.capacidade_kg))) {
         return NextResponse.json({ error: "capacidade_kg inválido" }, { status: 400 });
       }
-      if (!Number.isFinite(Number(p.ciclos_mes)) || Number(p.ciclos_mes) < 0) {
+      if (!Number.isFinite(Number(p.ciclos)) || Number(p.ciclos) < 0) {
         return NextResponse.json({ error: "ciclos inválido" }, { status: 400 });
       }
     }
@@ -170,14 +172,18 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const { data: saved, error: upErr } = await supabase
       .from("auditoria_ciclos")
       .upsert(payload, { onConflict: "auditoria_id,categoria,capacidade_kg" })
-      .select("id, auditoria_id, categoria, capacidade_kg, ciclos_mes");
+      .select("id, auditoria_id, categoria, capacidade_kg, ciclos");
 
     if (upErr) return NextResponse.json({ error: upErr.message }, { status: 400 });
 
     return NextResponse.json({
       ok: true,
       upserted: saved?.length ?? 0,
-      data: (saved ?? []).map((r: any) => ({ ...r, ciclos: Number(r.ciclos_mes ?? 0) })),
+      data: (saved ?? []).map((r: any) => ({
+        ...r,
+        ciclos: Number(r.ciclos ?? 0),
+        ciclos_mes: Number(r.ciclos ?? 0), // compat
+      })),
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
