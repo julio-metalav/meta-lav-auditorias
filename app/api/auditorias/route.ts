@@ -27,18 +27,19 @@ function isMonth01(iso: string) {
 type Schema = {
   table: string;
   condoCol: string;
-  monthCol: string;
-  auditorCol: string;
+  monthCol: string; // mes_ref OU ano_mes dependendo da tabela
+  auditorCol: string; // auditor_id OU user_id
   statusCol: string;
 };
 
 async function detectSchema(admin: ReturnType<typeof supabaseAdmin>): Promise<Schema> {
+  // ✅ REGRA FIXA DO SEU BANCO: em "auditorias" a coluna correta é mes_ref (NUNCA ano_mes)
   const candidates: Schema[] = [
-    { table: "auditorias", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "auditor_id", statusCol: "status" },
+    // auditorias (real)
     { table: "auditorias", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "auditor_id", statusCol: "status" },
-    { table: "auditorias", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "user_id", statusCol: "status" },
     { table: "auditorias", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "user_id", statusCol: "status" },
 
+    // tabelas alternativas (legado/compat)
     { table: "auditoria_mes", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "auditor_id", statusCol: "status" },
     { table: "auditoria_mes", condoCol: "condominio_id", monthCol: "mes_ref", auditorCol: "auditor_id", statusCol: "status" },
     { table: "auditoria_mes", condoCol: "condominio_id", monthCol: "ano_mes", auditorCol: "user_id", statusCol: "status" },
@@ -55,20 +56,19 @@ async function detectSchema(admin: ReturnType<typeof supabaseAdmin>): Promise<Sc
   }
 
   throw new Error(
-    "Não encontrei uma tabela válida de auditorias. Esperava colunas: id, condominio_id, (ano_mes ou mes_ref), (auditor_id/user_id), status."
+    "Não encontrei uma tabela válida de auditorias. Esperava colunas: id, condominio_id, (mes_ref ou ano_mes), (auditor_id/user_id), status."
   );
 }
 
 export async function GET() {
   const ctx = await getUserAndRole();
-  // ctx pode existir, mas sem user logado
   if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
   const role = (ctx.role ?? null) as Role | null;
 
-  // ✅ auditor pode listar as auditorias DELE
+  // auditor pode listar as auditorias DELE
   const canAuditor = role === "auditor";
-  // ✅ interno/gestor podem listar todas
+  // interno/gestor podem listar todas
   const canStaff = roleGte(role, "interno");
 
   if (!canAuditor && !canStaff) {
@@ -82,7 +82,6 @@ export async function GET() {
 
     let q = admin.from(sch.table).select("*").order(sch.monthCol, { ascending: false });
 
-    // auditor: filtra pelo próprio usuário (id do auth)
     if (canAuditor && !canStaff) {
       q = q.eq(sch.auditorCol, ctx.user.id);
     }
@@ -110,14 +109,18 @@ export async function GET() {
     const normalized = list.map((r: any) => {
       const condominio_id = r[sch.condoCol];
       const auditor_id = r[sch.auditorCol];
-      const ano_mes = r[sch.monthCol];
+      const mes_ref = r[sch.monthCol];
       const status = r[sch.statusCol];
 
       return {
         id: r.id,
         condominio_id,
         auditor_id,
-        ano_mes,
+
+        // ✅ compat: frontend pode continuar lendo ano_mes
+        ano_mes: mes_ref,
+        mes_ref,
+
         status,
         condominios: condoMap.get(condominio_id) ?? null,
         profiles: profMap.get(auditor_id) ?? null,
@@ -134,7 +137,6 @@ export async function POST(req: Request) {
   const ctx = await getUserAndRole();
   if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
-  // criar auditoria: somente interno/gestor
   if (!roleGte(ctx.role as Role | null, "interno")) {
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
   }
@@ -143,11 +145,10 @@ export async function POST(req: Request) {
 
   try {
     const sch = await detectSchema(admin);
-
     const body = await req.json().catch(() => ({}));
 
     const condominio_id = String(body?.condominio_id ?? "").trim();
-    const mes = String(body?.ano_mes ?? body?.mes_ref ?? "").trim();
+    const mes = String(body?.mes_ref ?? body?.ano_mes ?? "").trim(); // aceita os dois, salva no monthCol real
     const auditor_id = String(body?.auditor_id ?? "").trim();
     const status = normalizeStatus(body?.status);
 
@@ -187,11 +188,17 @@ export async function POST(req: Request) {
     const { data, error } = await admin.from(sch.table).insert(insertRow).select("*").single();
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
+    const savedMes = data[sch.monthCol];
+
     return NextResponse.json({
       id: data.id,
       condominio_id: data[sch.condoCol],
       auditor_id: data[sch.auditorCol],
-      ano_mes: data[sch.monthCol],
+
+      // ✅ compat
+      ano_mes: savedMes,
+      mes_ref: savedMes,
+
       status: data[sch.statusCol],
     });
   } catch (e: any) {
