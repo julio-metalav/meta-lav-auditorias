@@ -201,7 +201,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       setHistData(Array.isArray(json?.data) ? (json.data as HistItem[]) : []);
     } catch (e: any) {
       setHistErr(e?.message ?? "Falha ao carregar histórico");
-      // não zera role/dados à força — evita flicker
     } finally {
       setHistLoading(false);
     }
@@ -534,8 +533,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           <div>
             <div className="text-sm font-semibold text-gray-800">Conferência (campo)</div>
             {concluida ? (
-              <div className="mt-1 text-sm font-semibold text-green-700"✔️ Já concluída</div>
-            ) : checklist.prontoCampo ? (
+             {concluida ? (
+  <div className="mt-1 text-sm font-semibold text-green-700">✔️ Já concluída</div>
+) : checklist.prontoCampo ? (
+
               <div className="mt-1 text-sm font-semibold text-green-700">✅ Campo pronto</div>
             ) : (
               <div className="mt-1 text-sm text-red-700">
