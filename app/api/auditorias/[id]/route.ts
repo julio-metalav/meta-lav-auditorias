@@ -1,60 +1,122 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+type Role = "auditor" | "interno" | "gestor";
+type Status = "aberta" | "em_andamento" | "em_conferencia" | "final";
+
+function roleRank(role: Role | null) {
+  const w: Record<Role, number> = { auditor: 1, interno: 2, gestor: 3 };
+  if (!role) return 0;
+  return w[role] ?? 0;
+}
+
+function roleGte(role: Role | null, min: Role) {
+  return roleRank(role) >= roleRank(min);
+}
+
+async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise<Role | null> {
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !auth?.user) return null;
+
+  const { data: prof, error: profErr } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", auth.user.id)
+    .single();
+
+  if (profErr) return null;
+  return (prof?.role ?? null) as Role | null;
+}
+
+function normalizeStatus(input: any): Status | null {
+  const s = String(input ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
+  if (s === "aberta") return "aberta";
+  if (s === "em_andamento") return "em_andamento";
+  if (s === "em_conferencia") return "em_conferencia";
+  if (s === "final") return "final";
+  return null;
+}
+
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   try {
-    const id = params.id;
-    const body = await req.json();
-
     const supabase = supabaseServer();
+    const auditoriaId = params.id;
 
-    // 1) usuário logado
+    // auth obrigatório
     const { data: auth, error: authErr } = await supabase.auth.getUser();
-    const user = auth?.user;
-
+    const user = auth?.user ?? null;
     if (authErr || !user) {
       return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
     }
 
-    // 2) Confere se a auditoria existe e se pertence ao auditor logado
-    const { data: aud, error: findErr } = await supabase
+    // carrega auditoria (para checar auditor_id)
+    const { data: aud, error: audErr } = await supabase
       .from("auditorias")
-      .select("id,auditor_id")
-      .eq("id", id)
-      .maybeSingle();
-
-    if (findErr) return NextResponse.json({ error: findErr.message }, { status: 400 });
-    if (!aud) return NextResponse.json({ error: "Auditoria não encontrada." }, { status: 404 });
-
-    // ✅ permissão REAL: só o auditor dono pode salvar
-    if (aud.auditor_id !== user.id) {
-      return NextResponse.json({ error: "Sem permissão (auditoria não é sua)." }, { status: 403 });
-    }
-
-    // 3) Campos permitidos
-    const payload: any = {};
-
-    if ("leitura_agua" in body) payload.leitura_agua = body.leitura_agua ?? null;
-    if ("leitura_energia" in body) payload.leitura_energia = body.leitura_energia ?? null;
-    if ("leitura_gas" in body) payload.leitura_gas = body.leitura_gas ?? null;
-    if ("observacoes" in body) payload.observacoes = body.observacoes ?? null;
-
-    // status opcional (auditor pode concluir em campo)
-    if ("status" in body) payload.status = body.status ?? null;
-
-    if (Object.keys(payload).length === 0) {
-      return NextResponse.json({ error: "Nada para atualizar." }, { status: 400 });
-    }
-
-    // 4) Atualiza e retorna (sem ano_mes)
-    const { data: updated, error: updErr } = await supabase
-      .from("auditorias")
-      .update(payload)
-      .eq("id", id)
-      .select("*")
+      .select("id, auditor_id, status, leitura_agua, leitura_energia, leitura_gas, observacoes")
+      .eq("id", auditoriaId)
       .single();
 
-    if (updErr) return NextResponse.json({ error: updErr.message }, { status: 400 });
+    if (audErr || !aud) {
+      return NextResponse.json(
+        { error: audErr?.message ?? "Auditoria não encontrada" },
+        { status: 404 }
+      );
+    }
+
+    const role = await getUserRole(supabase);
+
+    // permissão:
+    // - auditor só edita a própria auditoria
+    // - interno/gestor edita qualquer
+    const isOwnerAuditor = !!aud.auditor_id && aud.auditor_id === user.id;
+    const canEdit = isOwnerAuditor || roleGte(role, "interno");
+
+    if (!canEdit) {
+      return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+
+    // monta patch permitido
+    const patch: any = {};
+
+    if (typeof body?.leitura_agua === "string") patch.leitura_agua = body.leitura_agua;
+    if (typeof body?.leitura_energia === "string") patch.leitura_energia = body.leitura_energia;
+    if (typeof body?.leitura_gas === "string") patch.leitura_gas = body.leitura_gas;
+    if (typeof body?.observacoes === "string") patch.observacoes = body.observacoes;
+
+    // status: só aceita valores válidos
+    if (body?.status !== undefined) {
+      const st = normalizeStatus(body.status);
+      if (!st) {
+        return NextResponse.json({ error: "Status inválido" }, { status: 400 });
+      }
+      patch.status = st;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      // sempre retorna JSON para evitar erro no front
+      return NextResponse.json({ auditoria: aud });
+    }
+
+    const { data: updated, error: upErr } = await supabase
+      .from("auditorias")
+      .update(patch)
+      .eq("id", auditoriaId)
+      .select("id, auditor_id, status, leitura_agua, leitura_energia, leitura_gas, observacoes")
+      .single();
+
+    if (upErr) {
+      return NextResponse.json({ error: upErr.message }, { status: 400 });
+    }
 
     return NextResponse.json({ auditoria: updated });
   } catch (e: any) {
