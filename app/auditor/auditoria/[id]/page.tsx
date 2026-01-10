@@ -45,14 +45,11 @@ const FOTO_ITEMS: FotoItem[] = [
 ];
 
 async function safeReadJson(res: Response): Promise<any> {
-  // ✅ evita "Unexpected end of JSON input" quando o backend responde vazio
   const ct = res.headers.get("content-type") ?? "";
   const text = await res.text().catch(() => "");
   if (!text) return {};
 
-  // se não parece JSON, devolve como texto (para debug)
   if (!ct.includes("application/json")) {
-    // tenta parse mesmo assim (às vezes vem JSON sem header)
     try {
       return JSON.parse(text);
     } catch {
@@ -153,7 +150,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     return s === "em_conferencia" || s === "final";
   }, [aud?.status]);
 
-  async function carregarTudo() {
+  async function carregarTudo(): Promise<void> {
     setLoading(true);
     setErr(null);
     setOk(null);
@@ -222,12 +219,18 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       const json = await safeReadJson(res);
       if (!res.ok) throw new Error(json?.error ?? "Erro ao salvar");
 
+      // ✅ tenta aplicar retorno se existir
       const saved: Aud | null = json?.auditoria ?? null;
       if (saved) {
         setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...saved }));
         applyFromAud(saved);
       } else {
         setDirty(false);
+      }
+
+      // ✅ se foi "Concluir", força reload pra pegar status real (mesmo que API não retorne auditoria)
+      if (extra?.status) {
+        await carregarTudo();
       }
 
       setOkMsg(extra?.status ? "Concluída em campo ✅" : "Salvo ✓");
