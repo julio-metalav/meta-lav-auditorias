@@ -47,15 +47,15 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     const supabase = supabaseServer();
     const auditoriaId = params.id;
 
-    // (opcional) exigir login também no GET
     const { data: auth, error: authErr } = await supabase.auth.getUser();
     if (authErr || !auth?.user) {
       return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
     }
 
+    // ✅ Banco real: NÃO existe ano_mes. Só mes_ref.
     const { data: aud, error: audErr } = await supabase
       .from("auditorias")
-      .select("id, condominio_id, ano_mes, mes_ref, status")
+      .select("id, condominio_id, mes_ref, status")
       .eq("id", auditoriaId)
       .single();
 
@@ -71,7 +71,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       .select(
         "id, condominio_id, categoria, capacidade_kg, quantidade, valor_ciclo, limpeza_quimica_ciclos, limpeza_mecanica_ciclos"
       )
-      .eq("condominio_id", aud.condominio_id)
+      .eq("condominio_id", (aud as any).condominio_id)
       .order("categoria", { ascending: true })
       .order("capacidade_kg", { ascending: true });
 
@@ -97,9 +97,15 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       ciclos_mes: Number(c.ciclos_mes ?? 0),
     }));
 
+    // compat: devolve ano_mes como alias do mes_ref
+    const auditoria = {
+      ...(aud as any),
+      ano_mes: (aud as any).mes_ref ?? null,
+    };
+
     return NextResponse.json({
-      auditoria: aud,
-      condominio_id: aud.condominio_id,
+      auditoria,
+      condominio_id: (aud as any).condominio_id,
       maquinas: maquinas ?? [],
       ciclos,
     });
@@ -123,7 +129,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
     }
 
-    // garante auditoria existe
     const { data: aud, error: audErr } = await supabase
       .from("auditorias")
       .select("id")
@@ -138,11 +143,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     }
 
     const body = await req.json().catch(() => null);
-
-    // aceita lista ou 1 item
     const items = Array.isArray(body) ? body : body ? [body] : [];
 
-    // ✅ array vazio = OK (no-op)
     if (items.length === 0) {
       return NextResponse.json({ ok: true, upserted: 0 });
     }
@@ -152,14 +154,11 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       const capacidade_kg = toNumOrNull(it.capacidade_kg);
       const ciclos_in = it.ciclos ?? it.ciclos_mes ?? it.ciclosMes;
       const ciclos_mes = toNonNegInt(ciclos_in);
-
       return { auditoria_id: auditoriaId, categoria, capacidade_kg, ciclos_mes };
     });
 
     for (const p of payload) {
-      if (!p.categoria) {
-        return NextResponse.json({ error: "categoria é obrigatória" }, { status: 400 });
-      }
+      if (!p.categoria) return NextResponse.json({ error: "categoria é obrigatória" }, { status: 400 });
       if (p.capacidade_kg !== null && !Number.isFinite(Number(p.capacidade_kg))) {
         return NextResponse.json({ error: "capacidade_kg inválido" }, { status: 400 });
       }
@@ -173,9 +172,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       .upsert(payload, { onConflict: "auditoria_id,categoria,capacidade_kg" })
       .select("id, auditoria_id, categoria, capacidade_kg, ciclos_mes");
 
-    if (upErr) {
-      return NextResponse.json({ error: upErr.message }, { status: 400 });
-    }
+    if (upErr) return NextResponse.json({ error: upErr.message }, { status: 400 });
 
     return NextResponse.json({
       ok: true,
