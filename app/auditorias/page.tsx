@@ -12,7 +12,7 @@ type Me = {
 };
 
 type Condo = { id: string; nome: string; cidade: string; uf: string };
-type Auditor = { id: string; email?: string | null; role?: Role | null };
+type Usuario = { id: string; email?: string | null; role?: Role | null };
 
 type Aud = {
   id: string;
@@ -48,7 +48,7 @@ export default function AuditoriasPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [auditorias, setAuditorias] = useState<Aud[]>([]);
   const [condos, setCondos] = useState<Condo[]>([]);
-  const [auditores, setAuditores] = useState<Auditor[]>([]);
+  const [usuarios, setUsuarios] = useState<Usuario[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -59,13 +59,15 @@ export default function AuditoriasPage() {
     status: "aberta",
   });
 
-  // ✅ gestor cria; interno também pode criar se você quiser (troque para role !== "auditor")
-  const canCreate = me?.role === "gestor";
+  // ✅ Mapa congelado: interno pode tudo (menos relatórios sensíveis)
+  // então interno + gestor podem criar; auditor não.
+  const canCreate = me?.role === "interno" || me?.role === "gestor";
 
   const openPath = useMemo(() => {
+    // ✅ Interno entra como interno (mas pode fazer o que o auditor faz por outras telas também)
     if (me?.role === "auditor") return "auditor/auditoria";
     if (me?.role === "interno") return "interno/auditoria";
-    return "auditoria"; // gestor
+    return "auditoria"; // gestor (ou redirect inteligente decide)
   }, [me?.role]);
 
   async function loadAll() {
@@ -79,23 +81,20 @@ export default function AuditoriasPage() {
       if (m?.error) throw new Error(m.error);
       setMe(m);
 
-      // carrega auditorias (auditor recebe só as dele)
       const aRes = await fetch("/api/auditorias", { cache: "no-store" });
       const a = await aRes.json().catch(() => ({}));
       if (!aRes.ok) throw new Error(a?.error ?? "Erro em /api/auditorias");
       if (a?.error) throw new Error(a.error);
       setAuditorias(unwrapData<Aud>(a));
 
-      // condos ajudam no formulário do gestor
       const cRes = await fetch("/api/condominios", { cache: "no-store" });
       const c = await cRes.json().catch(() => ({}));
       if (!cRes.ok) throw new Error(c?.error ?? "Erro em /api/condominios");
       if (c?.error) throw new Error(c.error);
       setCondos(unwrapData<Condo>(c));
 
-      // ⚠️ IMPORTANTE: a rota do projeto é /usuarios (não /users)
-      // Só precisa disso se for criar auditoria (gestor)
-      if (m?.role === "gestor") {
+      // ✅ interno/gestor precisam listar usuários pra escolher auditor
+      if (m?.role === "interno" || m?.role === "gestor") {
         const uRes = await fetch("/api/usuarios", { cache: "no-store" });
         const u = await uRes.json().catch(() => ({}));
         if (!uRes.ok) throw new Error(u?.error ?? "Erro em /api/usuarios");
@@ -107,9 +106,9 @@ export default function AuditoriasPage() {
           email: x.email ?? x.profiles?.email ?? null,
           role: x.role ?? x.profiles?.role ?? null,
         }));
-        setAuditores(list);
+        setUsuarios(list);
       } else {
-        setAuditores([]);
+        setUsuarios([]);
       }
     } catch (e: any) {
       setErr(e?.message ?? "Erro ao carregar");
@@ -227,11 +226,11 @@ export default function AuditoriasPage() {
                 onChange={(e) => setForm({ ...form, auditor_id: e.target.value })}
               >
                 <option value="">Selecione...</option>
-                {auditores
-                  .filter((a) => (a.role ?? "auditor") === "auditor")
-                  .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.email ?? a.id}
+                {usuarios
+                  .filter((u) => (u.role ?? "auditor") === "auditor")
+                  .map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.email ?? u.id}
                     </option>
                   ))}
               </select>
@@ -270,6 +269,13 @@ export default function AuditoriasPage() {
                 <button className="btn primary" onClick={() => router.push(`/${openPath}/${a.id}`)}>
                   Abrir
                 </button>
+
+                {/* Interno (e gestor) também podem abrir a tela do auditor (campo) se quiser */}
+                {(me?.role === "interno" || me?.role === "gestor") && (
+                  <button className="btn" onClick={() => router.push(`/auditor/auditoria/${a.id}`)}>
+                    Abrir (Campo)
+                  </button>
+                )}
               </div>
             </div>
           </div>
