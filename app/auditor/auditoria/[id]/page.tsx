@@ -23,6 +23,9 @@ type Aud = {
   foto_conector_bala_url?: string | null;
 
   condominios?: { nome: string; cidade: string; uf: string } | null;
+
+  // quando /api/auditorias traz join de profiles
+  profiles?: { id?: string; email?: string | null; role?: string | null } | null;
 };
 
 type Me = { id: string; email: string | null; name: string | null };
@@ -45,6 +48,7 @@ const FOTO_ITEMS: FotoItem[] = [
 ];
 
 async function safeReadJson(res: Response): Promise<any> {
+  // evita "Unexpected end of JSON input" quando o backend responde vazio
   const ct = res.headers.get("content-type") ?? "";
   const text = await res.text().catch(() => "");
   if (!text) return {};
@@ -129,9 +133,18 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   }, [users]);
 
   const assignedAuditorLabel = useMemo(() => {
-    if (!aud?.auditor_id) return "—";
-    return userEmailById.get(aud.auditor_id) ?? aud.auditor_id;
-  }, [aud?.auditor_id, userEmailById]);
+    // 1) tenta via /api/users (se tiver permissão)
+    if (aud?.auditor_id) {
+      const fromUsers = userEmailById.get(aud.auditor_id);
+      if (fromUsers) return fromUsers;
+    }
+    // 2) fallback via join de profiles vindo de /api/auditorias
+    const fromJoin = aud?.profiles?.email;
+    if (fromJoin) return fromJoin;
+
+    // 3) fallback final: UUID
+    return aud?.auditor_id ?? "—";
+  }, [aud?.auditor_id, aud?.profiles?.email, userEmailById]);
 
   const meLabel = useMemo(() => {
     if (!me) return "—";
@@ -146,11 +159,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   }, [me?.id, aud?.auditor_id]);
 
   const concluida = useMemo(() => {
-    const s = String(aud?.status ?? "").toLowerCase();
+    const s = String(aud?.status ?? "").trim().toLowerCase();
     return s === "em_conferencia" || s === "final";
   }, [aud?.status]);
 
-  async function carregarTudo(): Promise<void> {
+  async function carregarTudo() {
     setLoading(true);
     setErr(null);
     setOk(null);
@@ -163,6 +176,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       setMe(meJson);
 
       // 2) lista de users (pra traduzir auditor_id -> email)
+      //    OBS: pode dar 403 para auditor. Sem estresse: usamos fallback do join "profiles".
       try {
         const uRes = await fetch("/api/users", { cache: "no-store" });
         const uJson = await safeReadJson(uRes);
@@ -194,13 +208,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     setOk(null);
 
     if (!aud) return setErr("Auditoria não carregada.");
-    if (mismatch)
-      return setErr(`Sem permissão: você está logado como "${meLabel}", mas esta auditoria é de "${assignedAuditorLabel}".`);
-
-    // ✅ não deixa concluir duas vezes
-    if (extra?.status && concluida) {
-      return setOkMsg("Já está concluída ✔️");
-    }
+    if (mismatch) return setErr(`Sem permissão: você está logado como "${meLabel}", mas esta auditoria é de "${assignedAuditorLabel}".`);
+    if (concluida) return setErr("Esta auditoria já está em conferência. Não dá pra alterar em campo.");
 
     setSaving(true);
     try {
@@ -219,18 +228,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       const json = await safeReadJson(res);
       if (!res.ok) throw new Error(json?.error ?? "Erro ao salvar");
 
-      // ✅ tenta aplicar retorno se existir
       const saved: Aud | null = json?.auditoria ?? null;
       if (saved) {
         setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...saved }));
         applyFromAud(saved);
       } else {
         setDirty(false);
-      }
-
-      // ✅ se foi "Concluir", força reload pra pegar status real (mesmo que API não retorne auditoria)
-      if (extra?.status) {
-        await carregarTudo();
       }
 
       setOkMsg(extra?.status ? "Concluída em campo ✅" : "Salvo ✓");
@@ -276,8 +279,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     setOk(null);
 
     if (!aud) return setErr("Auditoria não carregada.");
-    if (mismatch)
-      return setErr(`Sem permissão: você está logado como "${meLabel}", mas esta auditoria é de "${assignedAuditorLabel}".`);
+    if (mismatch) return setErr(`Sem permissão: você está logado como "${meLabel}", mas esta auditoria é de "${assignedAuditorLabel}".`);
+    if (concluida) return setErr("Esta auditoria já está em conferência. Não dá pra alterar fotos em campo.");
 
     if (!file.type.startsWith("image/")) return setErr("Envie apenas imagem.");
 
@@ -366,9 +369,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     ? `${aud.condominios.nome} • ${aud.condominios.cidade}/${aud.condominios.uf}`
     : aud?.condominio_id ?? "";
 
-  const disableAll = loading || saving || !aud || mismatch;
-
-  const concluirDisabled = !checklist.prontoCampo || disableAll || concluida;
+  const disableAll = loading || saving || !aud || mismatch || concluida;
 
   return (
     <div className="mx-auto max-w-4xl p-6">
@@ -392,10 +393,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             Mês: <b>{aud ? pickMonth(aud) : "-"}</b> • Status: <b>{aud?.status ?? "-"}</b>
           </div>
           <div className="mt-1 font-mono text-xs text-gray-400">ID: {id}</div>
-<div className="mt-2 rounded-xl border bg-yellow-50 p-2 text-xs text-yellow-900">
-  <b>BUILD:</b> auditor-ui-v3 • status="{aud?.status ?? "-"}" • concluida="{String(concluida)}"
-</div>
-
         </div>
 
         <button
@@ -410,9 +407,13 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       {mismatch && (
         <div className="mb-4 rounded-2xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
           <b>Atenção:</b> você está logado como <b>{meLabel}</b>, mas esta auditoria pertence a <b>{assignedAuditorLabel}</b>.
-          <div className="mt-1 text-xs text-red-700">
-            Para lançar dados em campo, faça login com o usuário correto (o auditor atribuído).
-          </div>
+          <div className="mt-1 text-xs text-red-700">Para lançar dados em campo, faça login com o usuário correto (o auditor atribuído).</div>
+        </div>
+      )}
+
+      {concluida && !mismatch && (
+        <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+          ✅ Esta auditoria já foi concluída em campo e está <b>em conferência</b>.
         </div>
       )}
 
@@ -423,7 +424,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-gray-800">Conferência (campo)</div>
-
             {concluida ? (
               <div className="mt-1 text-sm font-semibold text-green-700">✔️ Já concluída</div>
             ) : checklist.prontoCampo ? (
@@ -433,20 +433,17 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 Faltando: <b>{checklist.faltas.join(", ")}</b>
               </div>
             )}
-
             <div className="mt-1 text-xs text-gray-500">Gás é opcional.</div>
           </div>
 
           <button
-            className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
-            disabled={concluirDisabled}
-            onClick={() => {
-              if (concluida) return;
-              salvarRascunho({ status: "em_conferencia" });
-            }}
-            title={concluida ? "Já concluída" : !checklist.prontoCampo ? "Complete o checklist" : "Concluir em campo"}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+              concluida ? "bg-green-300" : "bg-green-600 hover:bg-green-700"
+            }`}
+            disabled={concluida || !checklist.prontoCampo || loading || saving || !aud || mismatch}
+            onClick={() => salvarRascunho({ status: "em_conferencia" })}
           >
-            {concluida ? "Concluída ✔️" : saving ? "Salvando..." : "Concluir em campo ✅"}
+            {saving ? "Salvando..." : concluida ? "Concluída ✓" : "Concluir em campo ✅"}
           </button>
         </div>
       </div>
@@ -515,7 +512,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
         <div className="mt-6 rounded-2xl border p-4">
           <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (checklist)</div>
-          <div className="text-xs text-gray-500">Tocar em “📷 Tirar” → depois “Salvar ✅”. Sem foto aparecendo.</div>
+          <div className="text-xs text-gray-500">Tocar em “📷 Tirar” → depois “Salvar ✅”.</div>
 
           <div className="mt-3 divide-y rounded-xl border">
             {FOTO_ITEMS.map((item) => {
