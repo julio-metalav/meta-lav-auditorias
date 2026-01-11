@@ -330,11 +330,7 @@ export default function AuditoriasPage() {
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2">
-                <a
-                  className="flex-1 rounded-xl border px-3 py-2 text-center text-sm hover:bg-gray-50"
-                  href={`/interno/auditoria/${a.id}`}
-                  title="Abrir (interno)"
-                >
+                <a className="flex-1 rounded-xl border px-3 py-2 text-center text-sm hover:bg-gray-50" href={`/interno/auditoria/${a.id}`}>
                   Abrir
                 </a>
 
@@ -403,11 +399,7 @@ export default function AuditoriasPage() {
                 <div className="col-span-2 truncate text-sm text-gray-700">{audLabel}</div>
 
                 <div className="col-span-2 flex justify-end gap-2">
-                  <a
-                    className="rounded-xl border px-3 py-2 text-xs font-semibold hover:bg-gray-50"
-                    href={`/interno/auditoria/${a.id}`}
-                    title="Abrir (interno)"
-                  >
+                  <a className="rounded-xl border px-3 py-2 text-xs font-semibold hover:bg-gray-50" href={`/interno/auditoria/${a.id}`}>
                     Abrir
                   </a>
 
@@ -432,12 +424,10 @@ export default function AuditoriasPage() {
         </div>
       </div>
 
-      {/* BuildTag: deixa visível qual build está no ar */}
-      <div className="mt-6">
-        <BuildTag />
-      </div>
+      {/* rodapé técnico (aparece só se NEXT_PUBLIC_BUILD_TAG estiver setado) */}
+      <BuildTag />
 
-      {/* só pra não ficar “unused” em TS se você ligar no futuro */}
+      {/* só pra não dar “unused” se você decidir usar o me depois */}
       {me ? null : null}
     </div>
   );
