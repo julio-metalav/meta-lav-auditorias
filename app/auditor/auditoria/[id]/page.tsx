@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+type FotoKind = "agua" | "energia" | "gas" | "quimicos" | "bombonas" | "conector_bala";
+
 type Aud = {
   id: string;
   condominio_id: string;
@@ -10,21 +12,29 @@ type Aud = {
   mes_ref?: string | null;
   status: string | null;
 
+  // schema NOVO (real)
+  agua_leitura?: number | null;
+  energia_leitura?: number | null;
+  gas_leitura?: number | null;
+
+  // schema ANTIGO (compat)
   leitura_agua?: string | null;
   leitura_energia?: string | null;
   leitura_gas?: string | null;
+
   observacoes?: string | null;
 
   foto_agua_url?: string | null;
   foto_energia_url?: string | null;
   foto_gas_url?: string | null;
+
+  // extras (podem existir no banco ou não; UI suporta)
   foto_quimicos_url?: string | null;
   foto_bombonas_url?: string | null;
   foto_conector_bala_url?: string | null;
 
   condominios?: { nome: string; cidade: string; uf: string } | null;
 
-  // quando /api/auditorias traz join de profiles
   profiles?: { id?: string; email?: string | null; role?: string | null } | null;
 };
 
@@ -39,11 +49,6 @@ type HistItem = {
   actor?: { id: string; email: string | null; role: string | null } | null;
 };
 
-function pickMonth(a: Aud) {
-  return (a.ano_mes ?? a.mes_ref ?? "") as string;
-}
-
-type FotoKind = "agua" | "energia" | "gas" | "quimicos" | "bombonas" | "conector_bala";
 type FotoItem = { kind: FotoKind; label: string; required: boolean; help?: string };
 
 const FOTO_ITEMS: FotoItem[] = [
@@ -59,7 +64,6 @@ async function safeReadJson(res: Response): Promise<any> {
   const ct = res.headers.get("content-type") ?? "";
   const text = await res.text().catch(() => "");
   if (!text) return {};
-
   if (!ct.includes("application/json")) {
     try {
       return JSON.parse(text);
@@ -67,7 +71,6 @@ async function safeReadJson(res: Response): Promise<any> {
       return { _raw: text };
     }
   }
-
   try {
     return JSON.parse(text);
   } catch {
@@ -79,6 +82,22 @@ function fmtBR(dt: string) {
   const d = new Date(dt);
   if (Number.isNaN(d.getTime())) return dt;
   return d.toLocaleString("pt-BR");
+}
+
+function pickMonth(a: Aud) {
+  return (a.ano_mes ?? a.mes_ref ?? "") as string;
+}
+
+function toNumberOrNull(v: string): number | null {
+  const t = String(v ?? "").trim();
+  if (!t) return null;
+  const n = Number(t.replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+function toText(v: any): string {
+  if (v === null || v === undefined) return "";
+  return String(v);
 }
 
 export default function AuditorAuditoriaPage({ params }: { params: { id: string } }) {
@@ -96,9 +115,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   const okTimer = useRef<number | null>(null);
 
   const [obs, setObs] = useState("");
-  const [leitura_agua, setLeituraAgua] = useState("");
-  const [leitura_energia, setLeituraEnergia] = useState("");
-  const [leitura_gas, setLeituraGas] = useState("");
+  const [agua_leitura, setAguaLeitura] = useState("");
+  const [energia_leitura, setEnergiaLeitura] = useState("");
+  const [gas_leitura, setGasLeitura] = useState("");
 
   const [dirty, setDirty] = useState(false);
 
@@ -129,9 +148,21 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
   function applyFromAud(a: Aud) {
     setObs(a.observacoes ?? "");
-    setLeituraAgua(a.leitura_agua ?? "");
-    setLeituraEnergia(a.leitura_energia ?? "");
-    setLeituraGas(a.leitura_gas ?? "");
+
+    // Preferência: schema novo (number) -> string
+    const aAg = a.agua_leitura ?? null;
+    const aEn = a.energia_leitura ?? null;
+    const aGs = a.gas_leitura ?? null;
+
+    if (aAg !== null && aAg !== undefined) setAguaLeitura(toText(aAg));
+    else setAguaLeitura(a.leitura_agua ?? "");
+
+    if (aEn !== null && aEn !== undefined) setEnergiaLeitura(toText(aEn));
+    else setEnergiaLeitura(a.leitura_energia ?? "");
+
+    if (aGs !== null && aGs !== undefined) setGasLeitura(toText(aGs));
+    else setGasLeitura(a.leitura_gas ?? "");
+
     setDirty(false);
   }
 
@@ -218,6 +249,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         // ignora
       }
 
+      // Mantém como está (lista) para não mexer na API agora
       const res = await fetch("/api/auditorias", { cache: "no-store" });
       const json = await safeReadJson(res);
       if (!res.ok) throw new Error(json?.error ?? "Erro ao carregar auditorias");
@@ -247,13 +279,14 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
     setSaving(true);
     try {
+      // IMPORTANTE: manda APENAS os campos do schema real
       const res = await fetch(`/api/auditorias/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          leitura_agua,
-          leitura_energia,
-          leitura_gas,
+          agua_leitura: toNumberOrNull(agua_leitura),
+          energia_leitura: toNumberOrNull(energia_leitura),
+          gas_leitura: toNumberOrNull(gas_leitura),
           observacoes: obs,
           ...(extra ?? {}),
         }),
@@ -334,7 +367,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       }
 
       const saved: Aud | null = json?.auditoria ?? null;
-      if (saved) setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...saved }));
+      if (saved) {
+        setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...saved }));
+        // NÃO chama applyFromAud aqui: não queremos sobrescrever leituras enquanto o cara está digitando
+      }
 
       const url = pendingUrl[kind];
       if (url) URL.revokeObjectURL(url);
@@ -363,8 +399,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   const checklist = useMemo(() => {
     const a = aud;
 
-    const leituraAguaOk = (leitura_agua ?? "").trim().length > 0;
-    const leituraEnergiaOk = (leitura_energia ?? "").trim().length > 0;
+    const leituraAguaOk = (agua_leitura ?? "").trim().length > 0;
+    const leituraEnergiaOk = (energia_leitura ?? "").trim().length > 0;
 
     const fotoAguaOk = !!a?.foto_agua_url;
     const fotoEnergiaOk = !!a?.foto_energia_url;
@@ -385,7 +421,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     if (!fotoConectorOk) faltas.push("Foto conector");
 
     return { prontoCampo, faltas };
-  }, [aud, leitura_agua, leitura_energia]);
+  }, [aud, agua_leitura, energia_leitura]);
 
   useEffect(() => {
     carregarTudo();
@@ -523,9 +559,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           </div>
 
           <button
-            className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
-              concluida ? "bg-green-300" : "bg-green-600 hover:bg-green-700"
-            }`}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${concluida ? "bg-green-300" : "bg-green-600 hover:bg-green-700"}`}
             disabled={concluida || !checklist.prontoCampo || loading || saving || !aud || mismatch}
             onClick={() => salvarRascunho({ status: "em_conferencia" })}
           >
@@ -542,13 +576,14 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             <label className="mb-1 block text-xs text-gray-600">Leitura Agua</label>
             <input
               className="w-full rounded-xl border px-3 py-2"
-              value={leitura_agua}
+              value={agua_leitura}
               onChange={(e) => {
-                setLeituraAgua(e.target.value);
+                setAguaLeitura(e.target.value);
                 setDirty(true);
               }}
               placeholder="ex: 12345"
               disabled={disableAll}
+              inputMode="decimal"
             />
           </div>
 
@@ -556,13 +591,14 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             <label className="mb-1 block text-xs text-gray-600">Leitura Energia</label>
             <input
               className="w-full rounded-xl border px-3 py-2"
-              value={leitura_energia}
+              value={energia_leitura}
               onChange={(e) => {
-                setLeituraEnergia(e.target.value);
+                setEnergiaLeitura(e.target.value);
                 setDirty(true);
               }}
               placeholder="ex: 67890"
               disabled={disableAll}
+              inputMode="decimal"
             />
           </div>
 
@@ -570,13 +606,14 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             <label className="mb-1 block text-xs text-gray-600">Leitura Gas (opcional)</label>
             <input
               className="w-full rounded-xl border px-3 py-2"
-              value={leitura_gas}
+              value={gas_leitura}
               onChange={(e) => {
-                setLeituraGas(e.target.value);
+                setGasLeitura(e.target.value);
                 setDirty(true);
               }}
               placeholder="se nao tiver, deixe vazio"
               disabled={disableAll}
+              inputMode="decimal"
             />
           </div>
         </div>
@@ -653,11 +690,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    <label
-                      className={`cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
-                        disableAll ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
-                      }`}
-                    >
+                    <label className={`cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${disableAll ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"}`}>
                       Tirar
                       <input
                         type="file"
@@ -689,9 +722,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                     {pend && (
                       <>
                         <button
-                          className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
-                            disableAll ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
-                          }`}
+                          className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${disableAll ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"}`}
                           disabled={disableAll || busy}
                           onClick={() => uploadFoto(item.kind, pendingFile[item.kind] as File)}
                         >

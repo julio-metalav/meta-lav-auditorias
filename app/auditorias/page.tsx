@@ -16,6 +16,7 @@ type Aud = {
   id: string;
   condominio_id: string;
   auditor_id: string | null;
+  ano_mes?: string | null;
   mes_ref?: string | null;
   status: string | null;
   created_at?: string | null;
@@ -31,7 +32,7 @@ function monthISO(d = new Date()) {
 }
 
 function pickMonth(a: Aud) {
-  return (a.mes_ref ?? "") as string;
+  return (a.mes_ref ?? a.ano_mes ?? "") as string;
 }
 
 function statusLabel(s: string | null) {
@@ -77,7 +78,7 @@ export default function AuditoriasPage() {
 
   const [form, setForm] = useState({
     condominio_id: "",
-    mes_ref: monthISO(),
+    ano_mes: monthISO(),
     auditor_id: "",
   });
 
@@ -148,7 +149,8 @@ export default function AuditoriasPage() {
     setOk(null);
 
     if (!form.condominio_id) return setErr("Selecione um condomínio.");
-    if (!form.mes_ref) return setErr("Informe o mês (YYYY-MM-01).");
+    if (!form.ano_mes) return setErr("Informe o mês (YYYY-MM-01).");
+    if (!form.auditor_id) return setErr("Selecione o auditor (obrigatório).");
 
     setSaving(true);
     try {
@@ -157,7 +159,7 @@ export default function AuditoriasPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           condominio_id: form.condominio_id,
-          mes_ref: form.mes_ref,
+          ano_mes: form.ano_mes,
           status: "aberta",
           auditor_id: form.auditor_id || null,
         }),
@@ -208,15 +210,15 @@ export default function AuditoriasPage() {
   const isInternoOuGestor = me?.role === "interno" || me?.role === "gestor";
 
   return (
-    <div className="mx-auto max-w-5xl p-4 md:p-6">
-      <div className="mb-4 flex items-center justify-between">
-        <div>
+    <div className="mx-auto max-w-5xl p-4 sm:p-6">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold">Auditorias</h1>
           <div className="text-xs text-gray-500">Lista (interno/gestor)</div>
         </div>
 
         <button
-          className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+          className="shrink-0 rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
           onClick={carregar}
           disabled={loading || saving}
         >
@@ -259,15 +261,15 @@ export default function AuditoriasPage() {
             <label className="mb-1 block text-xs text-gray-600">Mês (YYYY-MM-01)</label>
             <input
               className="w-full rounded-xl border px-3 py-2"
-              value={form.mes_ref}
-              onChange={(e) => setForm((p) => ({ ...p, mes_ref: e.target.value }))}
+              value={form.ano_mes}
+              onChange={(e) => setForm((p) => ({ ...p, ano_mes: e.target.value }))}
               disabled={saving || loading}
               placeholder="2026-01-01"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-xs text-gray-600">Auditor (opcional)</label>
+            <label className="mb-1 block text-xs text-gray-600">Auditor (obrigatório)</label>
             <select
               className="w-full rounded-xl border px-3 py-2"
               value={form.auditor_id}
@@ -286,7 +288,7 @@ export default function AuditoriasPage() {
 
         <div className="mt-4">
           <button
-            className="rounded-xl bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            className="w-full rounded-xl bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 md:w-auto"
             onClick={criarAuditoria}
             disabled={saving || loading}
           >
@@ -295,79 +297,78 @@ export default function AuditoriasPage() {
         </div>
       </div>
 
-      {/* Lista - MOBILE (cards) */}
-      <div className="md:hidden space-y-3">
-        {auditorias.map((a) => {
-          const condo =
-            a.condominios?.nome
-              ? `${a.condominios.nome} • ${a.condominios.cidade}/${a.condominios.uf}`
-              : condoLabel.get(a.condominio_id) ?? a.condominio_id;
+      {/* LISTA - MOBILE (cards) */}
+      <div className="md:hidden">
+        <div className="space-y-3">
+          {auditorias.map((a) => {
+            const condo =
+              a.condominios?.nome
+                ? `${a.condominios.nome} • ${a.condominios.cidade}/${a.condominios.uf}`
+                : condoLabel.get(a.condominio_id) ?? a.condominio_id;
 
-          const status = a.status ?? "-";
-          const audLabel =
-            (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
-            a.profiles?.email ??
-            (a.auditor_id ?? "—");
+            const status = a.status ?? "-";
+            const audLabel =
+              (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
+              a.profiles?.email ??
+              (a.auditor_id ?? "—");
 
-          const isEmConferencia = String(a.status ?? "").toLowerCase() === "em_conferencia";
-          const isFinal = String(a.status ?? "").toLowerCase() === "final";
-          const podeReabrir = isEmConferencia || isFinal;
+            const isEmConferencia = String(a.status ?? "").toLowerCase() === "em_conferencia";
+            const isFinal = String(a.status ?? "").toLowerCase() === "final";
+            const podeReabrir = isEmConferencia || isFinal;
 
-          return (
-            <div key={a.id} className="rounded-2xl border bg-white p-4 shadow-sm">
-              <div className="text-sm font-semibold text-gray-900">{condo}</div>
-              <div className="mt-1 font-mono text-[11px] text-gray-400 break-all">{a.id}</div>
-
-              <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                <div>
-                  <div className="text-[11px] text-gray-500">Mês</div>
-                  <div className="font-medium text-gray-800">{pickMonth(a) || "-"}</div>
+            return (
+              <div key={a.id} className="rounded-2xl border bg-white p-4 shadow-sm">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-gray-900">{condo}</div>
+                  <div className="mt-1 font-mono text-[11px] text-gray-400">{a.id}</div>
                 </div>
 
-                <div className="text-right">
-                  <div className="text-[11px] text-gray-500">Status</div>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+                  <span className="text-gray-500">Mês:</span>
+                  <span className="font-semibold text-gray-800">{pickMonth(a) || "-"}</span>
+
+                  <span className="ml-2 text-gray-500">Status:</span>
                   <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${badgeClass(status)}`}>
                     {statusLabel(status)}
                   </span>
                 </div>
 
-                <div className="col-span-2">
-                  <div className="text-[11px] text-gray-500">Auditor</div>
-                  <div className="truncate text-gray-800">{audLabel}</div>
+                <div className="mt-2 text-sm text-gray-700">
+                  <span className="text-gray-500">Auditor:</span> <span className="font-semibold">{audLabel}</span>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <a
+                    className="flex-1 rounded-xl border px-3 py-2 text-center text-sm hover:bg-gray-50"
+                    href={`/interno/auditoria/${a.id}`}
+                    title="Abrir (interno)"
+                  >
+                    Abrir
+                  </a>
+
+                  <button
+                    className={`flex-1 rounded-xl px-3 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                      podeReabrir ? "bg-orange-600 hover:bg-orange-700" : "bg-orange-300"
+                    }`}
+                    onClick={() => reabrirAuditoria(a.id)}
+                    disabled={!podeReabrir || loading || saving}
+                    title={podeReabrir ? "Reabrir auditoria" : "Só reabre quando estiver em conferência ou final"}
+                  >
+                    Reabrir
+                  </button>
                 </div>
               </div>
+            );
+          })}
 
-              <div className="mt-4 flex gap-2">
-                <a
-                  className="flex-1 rounded-xl border px-3 py-2 text-center text-xs font-semibold hover:bg-gray-50"
-                  href={`/interno/auditoria/${a.id}`}
-                  title="Abrir (interno)"
-                >
-                  Abrir
-                </a>
-
-                <button
-                  className={`flex-1 rounded-xl px-3 py-2 text-xs font-semibold text-white disabled:opacity-50 ${
-                    podeReabrir ? "bg-orange-600 hover:bg-orange-700" : "bg-orange-300"
-                  }`}
-                  onClick={() => reabrirAuditoria(a.id)}
-                  disabled={!podeReabrir || loading || saving}
-                  title={podeReabrir ? "Reabrir auditoria" : "Só reabre quando estiver em conferência ou final"}
-                >
-                  Reabrir
-                </button>
-              </div>
-            </div>
-          );
-        })}
-
-        {!loading && auditorias.length === 0 && (
-          <div className="rounded-2xl border bg-white p-4 text-sm text-gray-600">Nenhuma auditoria encontrada.</div>
-        )}
+          {!loading && auditorias.length === 0 && (
+            <div className="rounded-2xl border bg-white p-4 text-sm text-gray-600">Nenhuma auditoria encontrada.</div>
+          )}
+        </div>
       </div>
 
-      {/* Lista - DESKTOP (tabela atual) */}
-      <div className="hidden md:block overflow-hidden rounded-2xl border bg-white shadow-sm">
+      {/* LISTA - DESKTOP (tabela) */}
+      <div className="hidden overflow-hidden rounded-2xl border bg-white shadow-sm md:block">
         <div className="grid grid-cols-12 bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-600">
           <div className="col-span-5">Condomínio</div>
           <div className="col-span-2">Mês</div>

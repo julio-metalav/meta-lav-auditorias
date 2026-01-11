@@ -9,6 +9,7 @@ export const dynamic = "force-dynamic";
 const BUCKET = "auditorias";
 
 type Role = "auditor" | "interno" | "gestor";
+type Status = "aberta" | "em_andamento" | "em_conferencia" | "final";
 
 // Mapeia o tipo de foto ("kind") para a coluna na tabela auditorias
 const kindToColumn: Record<string, string> = {
@@ -24,14 +25,18 @@ async function getRole(supabase: ReturnType<typeof supabaseServer>): Promise<Rol
   const { data: auth, error: authErr } = await supabase.auth.getUser();
   if (authErr || !auth?.user) return null;
 
-  const { data: prof, error } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", auth.user.id)
-    .single();
-
+  const { data: prof, error } = await supabase.from("profiles").select("role").eq("id", auth.user.id).single();
   if (error) return null;
+
   return (prof?.role ?? null) as Role | null;
+}
+
+function normalizeStatus(input: any): Status {
+  const s = String(input ?? "aberta").trim().toLowerCase();
+  if (s === "em conferencia" || s === "em_conferencia") return "em_conferencia";
+  if (s === "em andamento" || s === "em_andamento") return "em_andamento";
+  if (s === "final") return "final";
+  return "aberta";
 }
 
 function extFromFileName(name: string) {
@@ -62,8 +67,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     // 2) role do usuário (auditor/interno/gestor)
     const role = await getRole(supabase);
+    if (!role) return NextResponse.json({ error: "Sem role." }, { status: 403 });
 
-    // 3) Admin client (service role) para upload e update sem depender de RLS (Row Level Security)
+    // 3) Admin client (service role) para upload e update sem depender de RLS
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -76,12 +82,10 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
 
-    // 4) Permissão:
-    // - interno/gestor podem
-    // - auditor só pode se for o auditor da auditoria
+    // 4) Carrega auditoria (precisa status + auditor_id pra regra de permissão)
     const { data: aud, error: audErr } = await admin
       .from("auditorias")
-      .select("id,auditor_id")
+      .select("id,auditor_id,status")
       .eq("id", auditoriaId)
       .single();
 
@@ -89,11 +93,18 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: audErr?.message ?? "Auditoria não encontrada." }, { status: 404 });
     }
 
+    const statusAtual = normalizeStatus(aud.status);
     const isStaff = role === "interno" || role === "gestor";
     const isOwnerAuditor = role === "auditor" && aud.auditor_id === user.id;
 
+    // Permissão base
     if (!isStaff && !isOwnerAuditor) {
       return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
+    }
+
+    // Auditor NÃO pode alterar após em_conferencia/final
+    if (role === "auditor" && !isStaff && (statusAtual === "em_conferencia" || statusAtual === "final")) {
+      return NextResponse.json({ error: "Auditor não pode alterar fotos após em_conferencia/final." }, { status: 403 });
     }
 
     // 5) FormData: kind + file
@@ -129,16 +140,23 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     // 7) Salva URL na coluna certa em auditorias
     const col = kindToColumn[kind];
-    const { data: updated, error: updErr } = await admin
+
+    // IMPORTANTE: não retornar auditoria inteira (evita apagar campos no front).
+    const { data: updatedRow, error: updErr } = await admin
       .from("auditorias")
       .update({ [col]: publicUrl })
       .eq("id", auditoriaId)
-      .select("*")
+      .select(`${col}`)
       .single();
 
     if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
 
-    return NextResponse.json({ ok: true, kind, url: publicUrl, auditoria: updated });
+    return NextResponse.json({
+      ok: true,
+      kind,
+      url: publicUrl,
+      updated: updatedRow, // vem só { foto_xxx_url: "..." }
+    });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
