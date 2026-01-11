@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/gerar-auditorias-mensais",
+      "schedule": "0 3 25 * *"
+    }
+  ]
+}
