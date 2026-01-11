@@ -207,8 +207,6 @@ export default function AuditoriasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const isInternoOuGestor = me?.role === "interno" || me?.role === "gestor";
-
   return (
     <div className="mx-auto max-w-5xl p-4 sm:p-6">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -232,12 +230,6 @@ export default function AuditoriasPage() {
       {/* Criar auditoria */}
       <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm">
         <div className="mb-3 text-sm font-semibold text-gray-800">Criar auditoria</div>
-
-        {!isInternoOuGestor && (
-          <div className="rounded-xl border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">
-            Você não está como interno/gestor. Se estiver logado como auditor, essa tela pode ter limitações.
-          </div>
-        )}
 
         <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
           <div>
@@ -298,73 +290,71 @@ export default function AuditoriasPage() {
       </div>
 
       {/* LISTA - MOBILE (cards) */}
-      <div className="md:hidden">
-        <div className="space-y-3">
-          {auditorias.map((a) => {
-            const condo =
-              a.condominios?.nome
-                ? `${a.condominios.nome} • ${a.condominios.cidade}/${a.condominios.uf}`
-                : condoLabel.get(a.condominio_id) ?? a.condominio_id;
+      <div className="space-y-3 md:hidden">
+        {auditorias.map((a) => {
+          const condo =
+            a.condominios?.nome
+              ? `${a.condominios.nome} • ${a.condominios.cidade}/${a.condominios.uf}`
+              : condoLabel.get(a.condominio_id) ?? a.condominio_id;
 
-            const status = a.status ?? "-";
-            const audLabel =
-              (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
-              a.profiles?.email ??
-              (a.auditor_id ?? "—");
+          const status = a.status ?? "-";
+          const audLabel =
+            (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
+            a.profiles?.email ??
+            (a.auditor_id ?? "—");
 
-            const isEmConferencia = String(a.status ?? "").toLowerCase() === "em_conferencia";
-            const isFinal = String(a.status ?? "").toLowerCase() === "final";
-            const podeReabrir = isEmConferencia || isFinal;
+          const isEmConferencia = String(a.status ?? "").toLowerCase() === "em_conferencia";
+          const isFinal = String(a.status ?? "").toLowerCase() === "final";
+          const podeReabrir = isEmConferencia || isFinal;
 
-            return (
-              <div key={a.id} className="rounded-2xl border bg-white p-4 shadow-sm">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-gray-900">{condo}</div>
-                  <div className="mt-1 font-mono text-[11px] text-gray-400">{a.id}</div>
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-                  <span className="text-gray-500">Mês:</span>
-                  <span className="font-semibold text-gray-800">{pickMonth(a) || "-"}</span>
-
-                  <span className="ml-2 text-gray-500">Status:</span>
-                  <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${badgeClass(status)}`}>
-                    {statusLabel(status)}
-                  </span>
-                </div>
-
-                <div className="mt-2 text-sm text-gray-700">
-                  <span className="text-gray-500">Auditor:</span> <span className="font-semibold">{audLabel}</span>
-                </div>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <a
-                    className="flex-1 rounded-xl border px-3 py-2 text-center text-sm hover:bg-gray-50"
-                    href={`/interno/auditoria/${a.id}`}
-                    title="Abrir (interno)"
-                  >
-                    Abrir
-                  </a>
-
-                  <button
-                    className={`flex-1 rounded-xl px-3 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
-                      podeReabrir ? "bg-orange-600 hover:bg-orange-700" : "bg-orange-300"
-                    }`}
-                    onClick={() => reabrirAuditoria(a.id)}
-                    disabled={!podeReabrir || loading || saving}
-                    title={podeReabrir ? "Reabrir auditoria" : "Só reabre quando estiver em conferência ou final"}
-                  >
-                    Reabrir
-                  </button>
-                </div>
+          return (
+            <div key={a.id} className="rounded-2xl border bg-white p-4 shadow-sm">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-gray-900">{condo}</div>
+                <div className="mt-1 font-mono text-[11px] text-gray-400">{a.id}</div>
               </div>
-            );
-          })}
 
-          {!loading && auditorias.length === 0 && (
-            <div className="rounded-2xl border bg-white p-4 text-sm text-gray-600">Nenhuma auditoria encontrada.</div>
-          )}
-        </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-gray-500">Mês:</span>
+                <span className="font-semibold text-gray-800">{pickMonth(a) || "-"}</span>
+
+                <span className="ml-2 text-gray-500">Status:</span>
+                <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${badgeClass(status)}`}>
+                  {statusLabel(status)}
+                </span>
+              </div>
+
+              <div className="mt-2 text-sm text-gray-700">
+                <span className="text-gray-500">Auditor:</span> <span className="font-semibold">{audLabel}</span>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <a
+                  className="flex-1 rounded-xl border px-3 py-2 text-center text-sm hover:bg-gray-50"
+                  href={`/interno/auditoria/${a.id}`}
+                  title="Abrir (interno)"
+                >
+                  Abrir
+                </a>
+
+                <button
+                  className={`flex-1 rounded-xl px-3 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                    podeReabrir ? "bg-orange-600 hover:bg-orange-700" : "bg-orange-300"
+                  }`}
+                  onClick={() => reabrirAuditoria(a.id)}
+                  disabled={!podeReabrir || loading || saving}
+                  title={podeReabrir ? "Reabrir auditoria" : "Só reabre quando estiver em conferência ou final"}
+                >
+                  Reabrir
+                </button>
+              </div>
+            </div>
+          );
+        })}
+
+        {!loading && auditorias.length === 0 && (
+          <div className="rounded-2xl border bg-white p-4 text-sm text-gray-600">Nenhuma auditoria encontrada.</div>
+        )}
       </div>
 
       {/* LISTA - DESKTOP (tabela) */}
