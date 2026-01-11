@@ -17,32 +17,32 @@ async function safeJson(req: Request) {
   }
 }
 
-function unauthorized() {
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
-
 function nowIso() {
   return new Date().toISOString();
 }
 
+function deny(reason: string) {
+  // ✅ NÃO vaza segredo. Só explica a causa.
+  return NextResponse.json({ error: "Não autenticado", reason }, { status: 401 });
+}
+
 export async function POST(req: Request) {
-  // ✅ Proteção por segredo (obrigatória)
   const auth = req.headers.get("authorization") ?? "";
   const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
-  const secret = process.env.CRON_SECRET?.trim();
+  const secret = (process.env.CRON_SECRET ?? "").trim();
 
-  if (!secret || !token || token !== secret) return unauthorized();
+  // 🔎 Diagnóstico claro
+  if (!secret) return deny("CRON_SECRET ausente no ambiente deste deploy (Vercel env var não aplicada / sem redeploy)");
+  if (!token) return deny("Header Authorization ausente (precisa de 'Authorization: Bearer <segredo>')");
+  if (token !== secret) return deny("Token inválido (segredo diferente do CRON_SECRET deste deploy)");
 
-  // ✅ supabaseAdmin é uma FUNÇÃO que retorna o client
   const admin = supabaseAdmin();
 
   const body = await safeJson(req);
   const forcedMesRef = body?.mes_ref ? String(body.mes_ref) : null;
-
   const mes_ref = forcedMesRef ?? monthISO(new Date());
 
   // ✅ 1) Carregar condomínios ativos
-  // Tentativa 1: existe coluna "ativo"?
   let condos: Array<{ id: string }> = [];
 
   const r1 = await admin.from("condominios").select("id, ativo");
@@ -51,7 +51,6 @@ export async function POST(req: Request) {
     const ativos = rows.filter((c) => c?.ativo === true).map((c) => ({ id: String(c.id) }));
     condos = ativos;
   } else {
-    // Fallback: não tem coluna "ativo" → pega todos
     const r2 = await admin.from("condominios").select("id");
     if (r2.error) {
       return NextResponse.json(
@@ -73,23 +72,19 @@ export async function POST(req: Request) {
   }
 
   // ✅ 2) Upsert das auditorias do mês (idempotente)
-  // Chave: (condominio_id, mes_ref) - protegida por unique index no banco
   const payloadBase = condos.map((c) => ({
     condominio_id: c.id,
     mes_ref,
-    // compat: alguns lugares ainda usam ano_mes/mes_ref
     ano_mes: mes_ref,
     status: "aberta",
   }));
 
-  // Faz em lotes (evita payload gigante)
   const CHUNK = 200;
   let upserted = 0;
 
   for (let i = 0; i < payloadBase.length; i += CHUNK) {
     const chunk = payloadBase.slice(i, i + CHUNK);
 
-    // Tentativa A: com ano_mes
     const a = await admin
       .from("auditorias")
       .upsert(chunk as any, { onConflict: "condominio_id,mes_ref", ignoreDuplicates: false })
@@ -100,7 +95,6 @@ export async function POST(req: Request) {
       continue;
     }
 
-    // Fallback B: sem ano_mes (se coluna não existir)
     const chunkB = chunk.map(({ ano_mes, ...rest }) => rest);
     const b = await admin
       .from("auditorias")
