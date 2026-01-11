@@ -56,6 +56,20 @@ async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise
   return (prof?.role ?? null) as Role | null;
 }
 
+function buildChecklistMissing(effective: AudRow) {
+  const missing: string[] = [];
+
+  if (effective.agua_leitura == null) missing.push("Leitura de água");
+  if (effective.energia_leitura == null) missing.push("Leitura de energia");
+  if (effective.gas_leitura == null) missing.push("Leitura de gás");
+
+  if (!effective.foto_agua_url) missing.push("Foto do medidor de água");
+  if (!effective.foto_energia_url) missing.push("Foto do medidor de energia");
+  if (!effective.foto_gas_url) missing.push("Foto do medidor de gás");
+
+  return missing;
+}
+
 // ---------- GET ----------
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
@@ -151,24 +165,35 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       return NextResponse.json({ error: "Auditor não pode editar após em_conferencia/final" }, { status: 403 });
     }
 
-    // Auditor NÃO pode reabrir (voltar status)
-    if (isOnlyAuditor && nextStatus && nextStatus !== prevStatus) {
-      const allowedForward: Record<Status, Status[]> = {
-        aberta: ["em_andamento", "em_conferencia", "final"],
-        em_andamento: ["em_conferencia", "final"],
-        em_conferencia: ["final"],
-        final: [],
-      };
+    // Só gestor pode editar auditoria final (qualquer coisa)
+    if (!isGestor && prevStatus === "final") {
+      return NextResponse.json({ error: "Somente gestor pode editar auditoria final" }, { status: 403 });
+    }
 
-      const ok = allowedForward[prevStatus].includes(nextStatus);
-      if (!ok) {
-        return NextResponse.json({ error: "Auditor não pode reabrir/voltar status" }, { status: 403 });
+    // Auditor: mudança de status SUPER restrita (só pode CONCLUIR -> em_conferencia)
+    if (isOnlyAuditor && nextStatus && nextStatus !== prevStatus) {
+      const canConclude =
+        (prevStatus === "aberta" || prevStatus === "em_andamento") && nextStatus === "em_conferencia";
+
+      if (!canConclude) {
+        return NextResponse.json(
+          { error: "Auditor só pode concluir em campo (status em_conferencia). Não pode reabrir nem finalizar." },
+          { status: 403 }
+        );
       }
     }
 
-    // Só gestor pode editar auditoria final
-    if (!isGestor && prevStatus === "final") {
-      return NextResponse.json({ error: "Somente gestor pode editar auditoria final" }, { status: 403 });
+    // ✅ FINALIZAÇÃO: interno OU gestor, somente em_conferencia -> final
+    if (nextStatus === "final" && prevStatus !== "final") {
+      if (!roleGte(role, "interno")) {
+        return NextResponse.json({ error: "Somente interno/gestor pode finalizar auditoria" }, { status: 403 });
+      }
+      if (prevStatus !== "em_conferencia") {
+        return NextResponse.json(
+          { error: "Só é possível finalizar quando a auditoria estiver em_conferencia" },
+          { status: 400 }
+        );
+      }
     }
 
     // 4) Patch (apenas campos existentes)
@@ -185,6 +210,28 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (body?.foto_gas_url !== undefined) patch.foto_gas_url = body.foto_gas_url ?? null;
 
     if (nextStatus) patch.status = nextStatus;
+
+    // 4.1) Blindagem: se vai para em_conferencia, checklist deve estar completo
+    if (nextStatus === "em_conferencia" && prevStatus !== "em_conferencia") {
+      const effective: AudRow = {
+        ...aud,
+        ...patch,
+        foto_agua_url: (patch.foto_agua_url ?? aud.foto_agua_url ?? null) as any,
+        foto_energia_url: (patch.foto_energia_url ?? aud.foto_energia_url ?? null) as any,
+        foto_gas_url: (patch.foto_gas_url ?? aud.foto_gas_url ?? null) as any,
+      };
+
+      const missing = buildChecklistMissing(effective);
+      if (missing.length > 0) {
+        return NextResponse.json(
+          {
+            error: "Checklist incompleto. Não é possível concluir (em_conferencia).",
+            missing,
+          },
+          { status: 400 }
+        );
+      }
+    }
 
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ ok: true, auditoria: aud });
@@ -230,7 +277,6 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         note,
       };
 
-      // log NÃO pode quebrar o patch
       await (supabase.from("auditoria_status_logs") as any).insert(logPayload);
     }
 

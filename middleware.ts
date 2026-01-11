@@ -1,37 +1,56 @@
-import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
+import { createServerClient } from "@supabase/ssr";
 
-const PUBLIC_FILE = /\.(.*)$/;
+export async function middleware(req: NextRequest) {
+  let res = NextResponse.next();
 
-// middleware é SEMPRE Edge -> NÃO pode importar supabase-js aqui.
-export function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+  const pathname = req.nextUrl.pathname;
 
-  // libera arquivos, assets e páginas públicas
-  if (
-    pathname.startsWith("/login") ||
+  // Libera rotas públicas e assets
+  const isPublic =
+    pathname === "/login" ||
+    pathname.startsWith("/auth") ||
     pathname.startsWith("/_next") ||
-    pathname.startsWith("/favicon") ||
-    pathname.startsWith("/public") ||
-    PUBLIC_FILE.test(pathname)
-  ) {
-    return NextResponse.next();
+    pathname === "/favicon.ico";
+
+  if (isPublic) return res;
+
+  // Supabase SSR (middleware)
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return req.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            res.cookies.set(name, value, options);
+          });
+        },
+      },
+    }
+  );
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  // Autenticado: segue
+  if (user) return res;
+
+  // Não autenticado:
+  // - /api/* => 401 JSON (não redireciona)
+  if (pathname.startsWith("/api/")) {
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
   }
 
-  // Só checa se tem cookie de sessão do Supabase (sem validar)
-  const hasSbCookie =
-    req.cookies.get("sb-access-token") ||
-    req.cookies.get("sb-refresh-token") ||
-    Array.from(req.cookies.getAll()).some((c) => c.name.startsWith("sb-"));
-
-  if (!hasSbCookie) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("next", pathname);
-    return NextResponse.redirect(url);
-  }
-
-  return NextResponse.next();
+  // - páginas => redirect /login?next=...
+  const url = req.nextUrl.clone();
+  url.pathname = "/login";
+  url.searchParams.set("next", pathname);
+  return NextResponse.redirect(url);
 }
 
 export const config = {

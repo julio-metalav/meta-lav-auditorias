@@ -71,6 +71,7 @@ body {
   border: 1px solid #ddd;
   font-size: 14px;
 }
+
 /* ===== Layout base ===== */
 .container {
   max-width: 1200px;
@@ -78,4 +79,36 @@ body {
   margin-right: auto;
   padding-left: 16px;
   padding-right: 16px;
+}
+
+/* ===== Topbar / Brand ===== */
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo {
+  height: 56px; /* desktop */
+  width: auto;
+  object-fit: contain;
+}
+
+.brandTitle {
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+/* ===== Ajuste mobile ===== */
+@media (max-width: 768px) {
+  .logo {
+    height: 72px; /* mobile continua confortável */
+  }
 }

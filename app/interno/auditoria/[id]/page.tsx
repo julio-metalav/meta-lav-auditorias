@@ -67,9 +67,13 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   // linhas (maquinas + ciclos)
   const [linhas, setLinhas] = useState<Linha[]>([]);
 
-  // estado do botão
+  // estado do botão salvar ciclos
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
+
+  // estado do botão finalizar
+  const [finishing, setFinishing] = useState(false);
+  const [finishedOk, setFinishedOk] = useState(false);
 
   // snapshot pra detectar mudança sem ficar comparando com raw
   const lastSavedRef = useRef<string>("");
@@ -84,6 +88,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     setLoading(true);
     setErr(null);
     setSavedOk(false);
+    setFinishedOk(false);
 
     try {
       const r = await fetch(`/api/auditorias/${auditoriaId}/ciclos`, { cache: "no-store" });
@@ -128,6 +133,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auditoriaId]);
 
   const totalEstimado = useMemo(() => {
@@ -145,6 +151,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     setErr(null);
     setSaving(true);
     setSavedOk(false);
+    setFinishedOk(false);
 
     try {
       const payload = linhas.map((l) => ({
@@ -162,12 +169,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error ?? "Erro ao salvar");
 
-      // marca como salvo
       lastSavedRef.current = serializeState(linhas);
       setSavedOk(true);
-
-      // opcional: recarregar pra garantir consistência (desligado para UX)
-      // await load();
     } catch (e: any) {
       setErr(e.message);
     } finally {
@@ -175,11 +178,42 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
+  async function finalizar() {
+    setErr(null);
+    setFinishing(true);
+    setFinishedOk(false);
+
+    try {
+      if (dirty) {
+        throw new Error("Existem mudanças não salvas nos ciclos. Clique em Salvar antes de finalizar.");
+      }
+
+      const r = await fetch(`/api/auditorias/${auditoriaId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "final", note: "Finalizado pelo interno" }),
+      });
+
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error ?? "Erro ao finalizar");
+
+      setFinishedOk(true);
+
+      // Recarrega (pra refletir status na API / cache e qualquer regra extra)
+      await load();
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setFinishing(false);
+    }
+  }
+
   function setCiclos(i: number, v: string) {
-    const raw = v.replace(/[^\d]/g, "");
-    const n = raw === "" ? 0 : Number(raw);
+    const rawv = v.replace(/[^\d]/g, "");
+    const n = rawv === "" ? 0 : Number(rawv);
     setLinhas((prev) => prev.map((l, idx) => (idx === i ? { ...l, ciclos: n } : l)));
     setSavedOk(false);
+    setFinishedOk(false);
   }
 
   if (loading) return <div style={{ padding: 16 }}>Carregando…</div>;
@@ -205,23 +239,41 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           <div className="small" style={{ marginTop: 6 }}>
             ID: <code>{auditoriaId}</code>
           </div>
+          <div className="small" style={{ marginTop: 6 }}>
+            Status atual: <b>{String(raw?.auditoria?.status ?? "—")}</b>
+            {finishedOk && (
+              <>
+                {" "}
+                • <b style={{ color: "green" }}>Finalizado ✅</b>
+              </>
+            )}
+          </div>
         </div>
 
         <div className="row">
-          <button className="btn" onClick={load} disabled={saving}>
+          <button className="btn" onClick={load} disabled={saving || finishing}>
             Recarregar
           </button>
 
           <button
             className={`btn ${dirty ? "primary" : ""}`}
             onClick={salvar}
-            disabled={!dirty || saving || !hasMaquinas}
+            disabled={!dirty || saving || !hasMaquinas || finishing}
             title={!hasMaquinas ? "Cadastre o parque de máquinas do condomínio" : ""}
           >
             {saving ? "Salvando..." : savedOk && !dirty ? "Salvo ✅" : "Salvar"}
           </button>
 
-          <button className="btn" onClick={() => router.push("/auditorias")} disabled={saving}>
+          <button
+            className={`btn ${!dirty && hasMaquinas ? "primary" : ""}`}
+            onClick={finalizar}
+            disabled={finishing || saving || dirty || !hasMaquinas}
+            title={dirty ? "Salve os ciclos antes de finalizar" : !hasMaquinas ? "Cadastre máquinas" : ""}
+          >
+            {finishing ? "Finalizando..." : "Finalizar"}
+          </button>
+
+          <button className="btn" onClick={() => router.push("/auditorias")} disabled={saving || finishing}>
             Voltar
           </button>
         </div>
@@ -261,6 +313,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                       inputMode="numeric"
                       value={String(l.ciclos ?? 0)}
                       onChange={(e) => setCiclos(i, e.target.value)}
+                      disabled={saving || finishing}
                     />
                     <div className="small" style={{ marginTop: 6 }}>
                       Estimado: <b>{brl(Number(l.ciclos || 0) * Number(l.valor_ciclo || 0))}</b>
@@ -281,7 +334,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               <button
                 className={`btn ${dirty ? "primary" : ""}`}
                 onClick={salvar}
-                disabled={!dirty || saving}
+                disabled={!dirty || saving || finishing}
               >
                 {saving ? "Salvando..." : savedOk && !dirty ? "Salvo ✅" : "Salvar"}
               </button>
@@ -289,6 +342,15 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           </div>
         </div>
       )}
+
+      <div className="card" style={{ marginTop: 16, background: "#fbfcff" }}>
+        <div style={{ fontWeight: 800 }}>Regras</div>
+        <ul className="small" style={{ marginTop: 8, paddingLeft: 18 }}>
+          <li>Interno pode finalizar auditoria (status: <code>final</code>).</li>
+          <li>Para finalizar, os ciclos devem estar salvos.</li>
+          <li>Relatórios gerenciais/sensíveis não são acessíveis ao Interno (isso fica fora desta tela).</li>
+        </ul>
+      </div>
     </AppShell>
   );
 }
