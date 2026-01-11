@@ -17,11 +17,6 @@ type Aud = {
   energia_leitura?: number | null;
   gas_leitura?: number | null;
 
-  // schema ANTIGO (compat)
-  leitura_agua?: string | null;
-  leitura_energia?: string | null;
-  leitura_gas?: string | null;
-
   observacoes?: string | null;
 
   foto_agua_url?: string | null;
@@ -34,13 +29,19 @@ type Aud = {
   foto_conector_bala_url?: string | null;
 
   condominios?: { nome: string; cidade: string; uf: string } | null;
-
   profiles?: { id?: string; email?: string | null; role?: string | null } | null;
 };
 
-type Me = { id: string; email: string | null; name: string | null };
-type UserRow = { id: string; email: string | null };
 type Role = "auditor" | "interno" | "gestor" | null;
+
+type MeState = {
+  id: string;
+  email: string | null;
+  name: string | null;
+  role: Role;
+};
+
+type UserRow = { id: string; email: string | null };
 
 type HistItem = {
   de_status: string | null;
@@ -52,10 +53,10 @@ type HistItem = {
 type FotoItem = { kind: FotoKind; label: string; required: boolean; help?: string };
 
 const FOTO_ITEMS: FotoItem[] = [
-  { kind: "agua", label: "Medidor de Agua", required: true },
+  { kind: "agua", label: "Medidor de Água", required: true },
   { kind: "energia", label: "Medidor de Energia", required: true },
-  { kind: "gas", label: "Medidor de Gas", required: false, help: "Opcional (se houver gas)" },
-  { kind: "quimicos", label: "Proveta (afericao de quimicos)", required: true },
+  { kind: "gas", label: "Medidor de Gás", required: false, help: "Opcional (se houver gás)" },
+  { kind: "quimicos", label: "Proveta (aferição de químicos)", required: true },
   { kind: "bombonas", label: "Bombonas (detergente + amaciante)", required: true, help: "Uma foto com as duas bombonas" },
   { kind: "conector_bala", label: "Conector bala conectado", required: true },
 ];
@@ -100,11 +101,18 @@ function toText(v: any): string {
   return String(v);
 }
 
+function roleRank(r: Role) {
+  if (r === "auditor") return 1;
+  if (r === "interno") return 2;
+  if (r === "gestor") return 3;
+  return 0;
+}
+
 export default function AuditorAuditoriaPage({ params }: { params: { id: string } }) {
   const id = params.id;
 
   const [aud, setAud] = useState<Aud | null>(null);
-  const [me, setMe] = useState<Me | null>(null);
+  const [me, setMe] = useState<MeState | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
 
   const [loading, setLoading] = useState(false);
@@ -134,7 +142,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   const [pendingUrl, setPendingUrl] = useState<Partial<Record<FotoKind, string>>>({});
   const [previewKind, setPreviewKind] = useState<FotoKind | null>(null);
 
-  // Historico (somente leitura para interno/gestor)
+  // Histórico (somente leitura para interno/gestor)
   const [histLoading, setHistLoading] = useState(false);
   const [histErr, setHistErr] = useState<string | null>(null);
   const [histRole, setHistRole] = useState<Role>(null);
@@ -149,19 +157,18 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   function applyFromAud(a: Aud) {
     setObs(a.observacoes ?? "");
 
-    // Preferência: schema novo (number) -> string
     const aAg = a.agua_leitura ?? null;
     const aEn = a.energia_leitura ?? null;
     const aGs = a.gas_leitura ?? null;
 
     if (aAg !== null && aAg !== undefined) setAguaLeitura(toText(aAg));
-    else setAguaLeitura(a.leitura_agua ?? "");
+    else setAguaLeitura("");
 
     if (aEn !== null && aEn !== undefined) setEnergiaLeitura(toText(aEn));
-    else setEnergiaLeitura(a.leitura_energia ?? "");
+    else setEnergiaLeitura("");
 
     if (aGs !== null && aGs !== undefined) setGasLeitura(toText(aGs));
-    else setGasLeitura(a.leitura_gas ?? "");
+    else setGasLeitura("");
 
     setDirty(false);
   }
@@ -194,14 +201,17 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
   const meLabel = useMemo(() => {
     if (!me) return "-";
-    return me.name ? `${me.name} (${me.email ?? me.id})` : me.email ?? me.id;
+    const base = me.name ? `${me.name} (${me.email ?? me.id})` : me.email ?? me.id;
+    return me.role ? `${base} - perfil: ${me.role}` : base;
   }, [me]);
 
+  // ✅ regra: interno/gestor NÃO bloqueia por mismatch
   const mismatch = useMemo(() => {
     if (!me?.id) return false;
     if (!aud?.auditor_id) return false;
+    if (roleRank(me.role) >= roleRank("interno")) return false;
     return me.id !== aud.auditor_id;
-  }, [me?.id, aud?.auditor_id]);
+  }, [me?.id, me?.role, aud?.auditor_id]);
 
   const concluida = useMemo(() => {
     const s = String(aud?.status ?? "").trim().toLowerCase();
@@ -219,12 +229,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     try {
       const res = await fetch(`/api/auditorias/${id}/historico`, { cache: "no-store" });
       const json = await safeReadJson(res);
-      if (!res.ok) throw new Error(json?.error ?? "Erro ao carregar historico");
+      if (!res.ok) throw new Error(json?.error ?? "Erro ao carregar histórico");
 
       setHistRole((json?.role ?? null) as Role);
       setHistData(Array.isArray(json?.data) ? (json.data as HistItem[]) : []);
     } catch (e: any) {
-      setHistErr(e?.message ?? "Falha ao carregar historico");
+      setHistErr(e?.message ?? "Falha ao carregar histórico");
     } finally {
       setHistLoading(false);
     }
@@ -236,10 +246,22 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     setOk(null);
 
     try {
+      // /api/me pode vir em dois formatos:
+      // A) { id, email, name }
+      // B) { user: { id, email, name }, role }
       const meRes = await fetch("/api/me", { cache: "no-store" });
       const meJson = await safeReadJson(meRes);
-      if (!meRes.ok) throw new Error(meJson?.error ?? "Erro ao identificar usuario logado");
-      setMe(meJson);
+      if (!meRes.ok) throw new Error(meJson?.error ?? "Erro ao identificar usuário logado");
+
+      const meObj = meJson?.user ? meJson.user : meJson;
+      const roleObj = (meJson?.role ?? null) as Role;
+
+      setMe({
+        id: meObj?.id,
+        email: meObj?.email ?? null,
+        name: meObj?.name ?? null,
+        role: roleObj,
+      });
 
       try {
         const uRes = await fetch("/api/users", { cache: "no-store" });
@@ -249,18 +271,18 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         // ignora
       }
 
-      // Mantém como está (lista) para não mexer na API agora
-      const res = await fetch("/api/auditorias", { cache: "no-store" });
+      // ✅ pega auditoria pelo ID (não lista)
+      const res = await fetch(`/api/auditorias/${id}`, { cache: "no-store" });
       const json = await safeReadJson(res);
-      if (!res.ok) throw new Error(json?.error ?? "Erro ao carregar auditorias");
+      if (!res.ok) throw new Error(json?.error ?? "Erro ao carregar auditoria");
 
-      const list: Aud[] = Array.isArray(json) ? json : json?.data ?? [];
-      const found = list.find((x) => x.id === id);
-      if (!found) throw new Error("Auditoria nao encontrada.");
+      const found: Aud | null = (json?.auditoria ?? null) as Aud | null;
+      if (!found) throw new Error("Auditoria não encontrada.");
 
       setAud(found);
       applyFromAud(found);
 
+      // histórico (se existir)
       carregarHistorico();
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao carregar");
@@ -273,13 +295,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     setErr(null);
     setOk(null);
 
-    if (!aud) return setErr("Auditoria nao carregada.");
-    if (mismatch) return setErr(`Sem permissao: logado como "${meLabel}", mas auditoria e de "${assignedAuditorLabel}".`);
-    if (concluida) return setErr("Esta auditoria ja esta em conferencia. Nao da pra alterar em campo.");
+    if (!aud) return setErr("Auditoria não carregada.");
+    if (mismatch) return setErr(`Sem permissão: logado como "${meLabel}", mas auditoria é de "${assignedAuditorLabel}".`);
+    if (concluida) return setErr("Esta auditoria já está em conferência/final. Não dá pra alterar em campo.");
 
     setSaving(true);
     try {
-      // IMPORTANTE: manda APENAS os campos do schema real
       const res = await fetch(`/api/auditorias/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -293,7 +314,13 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       });
 
       const json = await safeReadJson(res);
-      if (!res.ok) throw new Error(json?.error ?? "Erro ao salvar");
+      if (!res.ok) {
+        // se backend mandar missing (checklist), mostra
+        if (Array.isArray(json?.missing) && json.missing.length) {
+          throw new Error(`${json?.error ?? "Checklist incompleto"}: ${json.missing.join(", ")}`);
+        }
+        throw new Error(json?.error ?? "Erro ao salvar");
+      }
 
       const saved: Aud | null = json?.auditoria ?? null;
       if (saved) {
@@ -303,7 +330,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         setDirty(false);
       }
 
-      setOkMsg(extra?.status ? "Concluida em campo (OK)" : "Salvo (OK)");
+      setOkMsg(extra?.status ? "Concluída em campo (OK)" : "Salvo (OK)");
 
       if (extra?.status) carregarHistorico();
     } catch (e: any) {
@@ -347,9 +374,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     setErr(null);
     setOk(null);
 
-    if (!aud) return setErr("Auditoria nao carregada.");
-    if (mismatch) return setErr(`Sem permissao: logado como "${meLabel}", mas auditoria e de "${assignedAuditorLabel}".`);
-    if (concluida) return setErr("Esta auditoria ja esta em conferencia. Nao da pra alterar fotos em campo.");
+    if (!aud) return setErr("Auditoria não carregada.");
+    if (mismatch) return setErr(`Sem permissão: logado como "${meLabel}", mas auditoria é de "${assignedAuditorLabel}".`);
+    if (concluida) return setErr("Esta auditoria já está em conferência/final. Não dá pra alterar fotos em campo.");
     if (!file.type.startsWith("image/")) return setErr("Envie apenas imagem.");
 
     setUploading((p) => ({ ...p, [kind]: true }));
@@ -369,7 +396,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       const saved: Aud | null = json?.auditoria ?? null;
       if (saved) {
         setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...saved }));
-        // NÃO chama applyFromAud aqui: não queremos sobrescrever leituras enquanto o cara está digitando
       }
 
       const url = pendingUrl[kind];
@@ -396,6 +422,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
+  // ✅ checklist com gás opcional (front)
   const checklist = useMemo(() => {
     const a = aud;
 
@@ -412,9 +439,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     const prontoCampo = leituraAguaOk && leituraEnergiaOk && fotosObrigatoriasOk;
 
     const faltas: string[] = [];
-    if (!leituraAguaOk) faltas.push("Leitura de agua");
+    if (!leituraAguaOk) faltas.push("Leitura de água");
     if (!leituraEnergiaOk) faltas.push("Leitura de energia");
-    if (!fotoAguaOk) faltas.push("Foto agua");
+    if (!fotoAguaOk) faltas.push("Foto água");
     if (!fotoEnergiaOk) faltas.push("Foto energia");
     if (!fotoQuimicosOk) faltas.push("Foto proveta");
     if (!fotoBombonasOk) faltas.push("Foto bombonas");
@@ -438,13 +465,14 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
   const titulo = aud?.condominios ? `${aud.condominios.nome} - ${aud.condominios.cidade}/${aud.condominios.uf}` : aud?.condominio_id ?? "";
 
-  const disableAll = loading || saving || !aud || mismatch || concluida;
+  // interno/gestor podem editar mesmo se mismatch, mas se auditoria concluída não
+  const disableAll = loading || saving || !aud || concluida;
 
   return (
     <div className="mx-auto max-w-4xl p-6">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Auditoria (Auditor)</h1>
+          <h1 className="text-2xl font-semibold">Auditoria (Campo)</h1>
           <div className="text-sm text-gray-600">{titulo}</div>
 
           <div className="mt-2 rounded-xl border bg-white p-3 text-xs">
@@ -453,13 +481,13 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 <b>Logado como:</b> {meLabel}
               </div>
               <div className="text-gray-700">
-                <b>Auditoria atribuida a:</b> {assignedAuditorLabel}
+                <b>Auditoria atribuída a:</b> {assignedAuditorLabel}
               </div>
             </div>
           </div>
 
           <div className="mt-2 text-xs text-gray-500">
-            Mes: <b>{aud ? pickMonth(aud) : "-"}</b> - Status: <b>{aud?.status ?? "-"}</b>
+            Mês: <b>{aud ? pickMonth(aud) : "-"}</b> - Status: <b>{aud?.status ?? "-"}</b>
           </div>
           <div className="mt-1 font-mono text-xs text-gray-400">ID: {id}</div>
         </div>
@@ -471,14 +499,15 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
       {mismatch && (
         <div className="mb-4 rounded-2xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
-          <b>Atencao:</b> logado como <b>{meLabel}</b>, mas auditoria pertence a <b>{assignedAuditorLabel}</b>.
-          <div className="mt-1 text-xs text-red-700">Para lancar dados em campo, faca login com o usuario correto (o auditor atribuido).</div>
+          <b>Atenção:</b> logado como <b>{meLabel}</b>, mas auditoria pertence a <b>{assignedAuditorLabel}</b>.
+          <div className="mt-1 text-xs text-red-700">Para lançar dados como auditor, faça login com o usuário do auditor atribuído.</div>
+          <div className="mt-1 text-xs text-red-700">Obs: interno/gestor não são bloqueados por isso.</div>
         </div>
       )}
 
-      {concluida && !mismatch && (
+      {concluida && (
         <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
-          Esta auditoria ja foi concluida em campo e esta <b>em conferencia</b>.
+          Esta auditoria já foi concluída e está <b>{String(aud?.status ?? "").toLowerCase()}</b>.
         </div>
       )}
 
@@ -489,23 +518,18 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-gray-800">Historico de status</div>
+              <div className="text-sm font-semibold text-gray-800">Histórico de status</div>
               <div className="mt-1 text-xs text-gray-500">Somente leitura.</div>
             </div>
 
-            <button
-              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-              onClick={carregarHistorico}
-              disabled={histLoading}
-              title="Atualizar historico"
-            >
+            <button className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" onClick={carregarHistorico} disabled={histLoading} title="Atualizar histórico">
               {histLoading ? "Carregando..." : "Atualizar"}
             </button>
           </div>
 
           {histErr && <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{histErr}</div>}
 
-          {!histErr && !histLoading && histData.length === 0 && <div className="mt-3 text-sm text-gray-600">Ainda nao ha registros de mudanca de status.</div>}
+          {!histErr && !histLoading && histData.length === 0 && <div className="mt-3 text-sm text-gray-600">Ainda não há registros de mudança de status.</div>}
 
           {histData.length > 0 && (
             <div className="mt-3 overflow-hidden rounded-xl border">
@@ -543,10 +567,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-gray-800">Conferencia (campo)</div>
+            <div className="text-sm font-semibold text-gray-800">Conferência (campo)</div>
 
             {concluida ? (
-              <div className="mt-1 text-sm font-semibold text-green-700">Ja concluida</div>
+              <div className="mt-1 text-sm font-semibold text-green-700">Já concluída</div>
             ) : checklist.prontoCampo ? (
               <div className="mt-1 text-sm font-semibold text-green-700">Campo pronto</div>
             ) : (
@@ -555,7 +579,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
               </div>
             )}
 
-            <div className="mt-1 text-xs text-gray-500">Gas e opcional.</div>
+            <div className="mt-1 text-xs text-gray-500">Gás é opcional.</div>
           </div>
 
           <button
@@ -563,7 +587,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             disabled={concluida || !checklist.prontoCampo || loading || saving || !aud || mismatch}
             onClick={() => salvarRascunho({ status: "em_conferencia" })}
           >
-            {saving ? "Salvando..." : concluida ? "Concluida" : "Concluir em campo"}
+            {saving ? "Salvando..." : concluida ? "Concluída" : "Concluir em campo"}
           </button>
         </div>
       </div>
@@ -573,7 +597,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <div>
-            <label className="mb-1 block text-xs text-gray-600">Leitura Agua</label>
+            <label className="mb-1 block text-xs text-gray-600">Leitura Água</label>
             <input
               className="w-full rounded-xl border px-3 py-2"
               value={agua_leitura}
@@ -582,7 +606,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 setDirty(true);
               }}
               placeholder="ex: 12345"
-              disabled={disableAll}
+              disabled={disableAll || mismatch}
               inputMode="decimal"
             />
           </div>
@@ -597,13 +621,13 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 setDirty(true);
               }}
               placeholder="ex: 67890"
-              disabled={disableAll}
+              disabled={disableAll || mismatch}
               inputMode="decimal"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-xs text-gray-600">Leitura Gas (opcional)</label>
+            <label className="mb-1 block text-xs text-gray-600">Leitura Gás (opcional)</label>
             <input
               className="w-full rounded-xl border px-3 py-2"
               value={gas_leitura}
@@ -611,15 +635,15 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 setGasLeitura(e.target.value);
                 setDirty(true);
               }}
-              placeholder="se nao tiver, deixe vazio"
-              disabled={disableAll}
+              placeholder="se não tiver, deixe vazio"
+              disabled={disableAll || mismatch}
               inputMode="decimal"
             />
           </div>
         </div>
 
         <div className="mt-4">
-          <label className="mb-1 block text-xs text-gray-600">Observacoes</label>
+          <label className="mb-1 block text-xs text-gray-600">Observações</label>
           <textarea
             className="w-full rounded-xl border px-3 py-2"
             value={obs}
@@ -628,14 +652,14 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
               setDirty(true);
             }}
             rows={3}
-            placeholder="anote ocorrencias, etc."
-            disabled={disableAll}
+            placeholder="anote ocorrências, etc."
+            disabled={disableAll || mismatch}
           />
         </div>
 
         <div className="mt-6 rounded-2xl border p-4">
           <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (checklist)</div>
-          <div className="text-xs text-gray-500">Tocar em "Tirar" - depois "Salvar".</div>
+          <div className="text-xs text-gray-500">Tocar em “Tirar” → depois “Salvar”.</div>
 
           <div className="mt-3 divide-y rounded-xl border">
             {FOTO_ITEMS.map((item) => {
@@ -650,7 +674,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
               ) : pend ? (
                 <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">Pendente</span>
               ) : item.required ? (
-                <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">Obrigatoria</span>
+                <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">Obrigatória</span>
               ) : (
                 <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-700">Opcional</span>
               );
@@ -690,7 +714,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    <label className={`cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${disableAll ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"}`}>
+                    <label className={`cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"}`}>
                       Tirar
                       <input
                         type="file"
@@ -701,11 +725,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                           onPick(item.kind, e.target.files?.[0]);
                           e.currentTarget.value = "";
                         }}
-                        disabled={disableAll || busy}
+                        disabled={disableAll || mismatch || busy}
                       />
                     </label>
 
-                    <label className={`cursor-pointer rounded-xl border px-4 py-2 text-sm ${disableAll ? "opacity-50" : "hover:bg-gray-50"}`}>
+                    <label className={`cursor-pointer rounded-xl border px-4 py-2 text-sm ${disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"}`}>
                       Galeria
                       <input
                         type="file"
@@ -715,21 +739,21 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                           onPick(item.kind, e.target.files?.[0]);
                           e.currentTarget.value = "";
                         }}
-                        disabled={disableAll || busy}
+                        disabled={disableAll || mismatch || busy}
                       />
                     </label>
 
                     {pend && (
                       <>
                         <button
-                          className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${disableAll ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"}`}
-                          disabled={disableAll || busy}
+                          className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"}`}
+                          disabled={disableAll || mismatch || busy}
                           onClick={() => uploadFoto(item.kind, pendingFile[item.kind] as File)}
                         >
                           {busy ? "Enviando..." : "Salvar"}
                         </button>
 
-                        <button className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" disabled={disableAll || busy} onClick={() => cancelPending(item.kind)}>
+                        <button className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" disabled={disableAll || mismatch || busy} onClick={() => cancelPending(item.kind)}>
                           Refazer
                         </button>
                       </>
@@ -745,8 +769,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           <button
             className={`rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${dirty ? "bg-gray-400 hover:bg-gray-500" : "bg-green-600"}`}
             onClick={() => salvarRascunho()}
-            disabled={disableAll || !dirty}
-            title={dirty ? "Salvar alteracoes" : "Ja esta salvo"}
+            disabled={disableAll || mismatch || !dirty}
+            title={dirty ? "Salvar alterações" : "Já está salvo"}
           >
             {saving ? "Salvando..." : dirty ? "Salvar" : "Salvo"}
           </button>

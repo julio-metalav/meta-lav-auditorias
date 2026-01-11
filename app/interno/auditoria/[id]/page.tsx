@@ -273,9 +273,17 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
             {finishing ? "Finalizando..." : "Finalizar"}
           </button>
 
-          <button className="btn" onClick={() => router.push("/auditorias")} disabled={saving || finishing}>
-            Voltar
-          </button>
+          <button
+  className="btn"
+  onClick={() => {
+    router.refresh();
+    router.push("/auditorias");
+  }}
+  disabled={saving}
+>
+  Voltar
+</button>
+
         </div>
       </div>
 

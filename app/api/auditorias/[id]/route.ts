@@ -27,6 +27,11 @@ type AudRow = {
   foto_gas_url?: string | null;
 };
 
+type CondoRow = {
+  id: string;
+  usa_gas: boolean;
+};
+
 function roleGte(role: Role | null, min: Role) {
   const rank: Record<Role, number> = { auditor: 1, interno: 2, gestor: 3 };
   if (!role) return false;
@@ -56,16 +61,20 @@ async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise
   return (prof?.role ?? null) as Role | null;
 }
 
-function buildChecklistMissing(effective: AudRow) {
+function buildChecklistMissing(effective: AudRow, usaGas: boolean) {
   const missing: string[] = [];
 
   if (effective.agua_leitura == null) missing.push("Leitura de água");
   if (effective.energia_leitura == null) missing.push("Leitura de energia");
-  if (effective.gas_leitura == null) missing.push("Leitura de gás");
 
   if (!effective.foto_agua_url) missing.push("Foto do medidor de água");
   if (!effective.foto_energia_url) missing.push("Foto do medidor de energia");
-  if (!effective.foto_gas_url) missing.push("Foto do medidor de gás");
+
+  // Gás só entra no checklist se o condomínio usa_gas = true
+  if (usaGas) {
+    if (effective.gas_leitura == null) missing.push("Leitura de gás");
+    if (!effective.foto_gas_url) missing.push("Foto do medidor de gás");
+  }
 
   return missing;
 }
@@ -144,6 +153,25 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     const aud = audRaw as AudRow;
 
+    // 1.1) Carrega condomínio (pra saber se usa gás)
+    const { data: condoRaw, error: condoErr } = await (supabase.from("condominios") as any)
+      .select("id, usa_gas")
+      .eq("id", aud.condominio_id)
+      .maybeSingle();
+
+    if (condoErr) {
+      return NextResponse.json(
+        {
+          error:
+            "Erro ao ler condomínio. Confirme se existe a coluna condominios.usa_gas. Detalhe: " + condoErr.message,
+        },
+        { status: 400 }
+      );
+    }
+
+    const condo = (condoRaw ?? null) as CondoRow | null;
+    const usaGas = !!condo?.usa_gas;
+
     const isOwnerAuditor = !!aud.auditor_id && aud.auditor_id === user.id;
     const isManager = roleGte(role, "interno"); // interno ou gestor
     const isGestor = role === "gestor";
@@ -165,25 +193,37 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       return NextResponse.json({ error: "Auditor não pode editar após em_conferencia/final" }, { status: 403 });
     }
 
-    // Só gestor pode editar auditoria final (qualquer coisa)
+    // Só gestor pode editar auditoria final
     if (!isGestor && prevStatus === "final") {
       return NextResponse.json({ error: "Somente gestor pode editar auditoria final" }, { status: 403 });
     }
 
-    // Auditor: mudança de status SUPER restrita (só pode CONCLUIR -> em_conferencia)
+    // Auditor: status super restrito (só pode concluir -> em_conferencia)
     if (isOnlyAuditor && nextStatus && nextStatus !== prevStatus) {
       const canConclude =
         (prevStatus === "aberta" || prevStatus === "em_andamento") && nextStatus === "em_conferencia";
 
       if (!canConclude) {
         return NextResponse.json(
-          { error: "Auditor só pode concluir em campo (status em_conferencia). Não pode reabrir nem finalizar." },
+          {
+            error:
+              "Auditor só pode concluir em campo (status em_conferencia). Não pode reabrir nem finalizar.",
+          },
           { status: 403 }
         );
       }
     }
 
-    // ✅ FINALIZAÇÃO: interno OU gestor, somente em_conferencia -> final
+    // Reabrir: interno/gestor pode voltar de em_conferencia -> em_andamento/aberta
+    if (nextStatus && nextStatus !== prevStatus) {
+      const isReopen =
+        prevStatus === "em_conferencia" && (nextStatus === "em_andamento" || nextStatus === "aberta");
+      if (isReopen && !roleGte(role, "interno")) {
+        return NextResponse.json({ error: "Somente interno/gestor pode reabrir auditoria" }, { status: 403 });
+      }
+    }
+
+    // Finalização: interno/gestor, somente em_conferencia -> final
     if (nextStatus === "final" && prevStatus !== "final") {
       if (!roleGte(role, "interno")) {
         return NextResponse.json({ error: "Somente interno/gestor pode finalizar auditoria" }, { status: 403 });
@@ -196,7 +236,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       }
     }
 
-    // 4) Patch (apenas campos existentes)
+    // 4) Patch
     const patch: Partial<AudRow> & { status?: Status } = {};
 
     if (body?.agua_leitura !== undefined) patch.agua_leitura = toNumberOrNull(body.agua_leitura);
@@ -211,7 +251,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     if (nextStatus) patch.status = nextStatus;
 
-    // 4.1) Blindagem: se vai para em_conferencia, checklist deve estar completo
+    // 4.1) Blindagem: se vai para em_conferencia, checklist deve estar completo (com gás opcional)
     if (nextStatus === "em_conferencia" && prevStatus !== "em_conferencia") {
       const effective: AudRow = {
         ...aud,
@@ -221,12 +261,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         foto_gas_url: (patch.foto_gas_url ?? aud.foto_gas_url ?? null) as any,
       };
 
-      const missing = buildChecklistMissing(effective);
+      const missing = buildChecklistMissing(effective, usaGas);
       if (missing.length > 0) {
         return NextResponse.json(
           {
             error: "Checklist incompleto. Não é possível concluir (em_conferencia).",
             missing,
+            gas_opcional: !usaGas,
           },
           { status: 400 }
         );
@@ -234,7 +275,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
 
     if (Object.keys(patch).length === 0) {
-      return NextResponse.json({ ok: true, auditoria: aud });
+      return NextResponse.json({ ok: true, auditoria: aud, usa_gas: usaGas });
     }
 
     // 5) Update
@@ -263,7 +304,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     const updated = (updatedRaw ?? null) as AudRow | null;
 
-    // 6) Log de status (schema REAL: actor_id / actor_role / note)
+    // 6) Log de status
     if (nextStatus && normalizeStatus(aud.status) !== nextStatus) {
       const note =
         typeof body?.note === "string" && body.note.trim().length > 0 ? body.note.trim().slice(0, 500) : null;
@@ -280,7 +321,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       await (supabase.from("auditoria_status_logs") as any).insert(logPayload);
     }
 
-    return NextResponse.json({ ok: true, auditoria: updated });
+    return NextResponse.json({ ok: true, auditoria: updated, usa_gas: usaGas });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
