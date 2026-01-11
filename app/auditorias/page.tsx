@@ -359,12 +359,13 @@ export default function AuditoriasPage() {
 
       {/* LISTA - DESKTOP (tabela) */}
       <div className="hidden overflow-hidden rounded-2xl border bg-white shadow-sm md:block">
+        {/* ✅ grid ajustado: ações com mais espaço */}
         <div className="grid grid-cols-12 bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-600">
-          <div className="col-span-5">Condomínio</div>
+          <div className="col-span-4">Condomínio</div>
           <div className="col-span-2">Mês</div>
           <div className="col-span-2">Status</div>
           <div className="col-span-2">Auditor</div>
-          <div className="col-span-1 text-right">Ações</div>
+          <div className="col-span-2 text-right">Ações</div>
         </div>
 
         <div className="divide-y">
@@ -386,7 +387,7 @@ export default function AuditoriasPage() {
 
             return (
               <div key={a.id} className="grid grid-cols-12 items-center gap-2 px-4 py-3">
-                <div className="col-span-5 min-w-0">
+                <div className="col-span-4 min-w-0">
                   <div className="truncate text-sm font-semibold text-gray-900">{condo}</div>
                   <div className="mt-1 font-mono text-[11px] text-gray-400">{a.id}</div>
                 </div>
@@ -401,9 +402,9 @@ export default function AuditoriasPage() {
 
                 <div className="col-span-2 truncate text-sm text-gray-700">{audLabel}</div>
 
-                <div className="col-span-1 flex justify-end gap-2">
+                <div className="col-span-2 flex justify-end gap-2">
                   <a
-                    className="rounded-xl border px-3 py-1.5 text-xs hover:bg-gray-50"
+                    className="rounded-xl border px-3 py-2 text-xs font-semibold hover:bg-gray-50"
                     href={`/interno/auditoria/${a.id}`}
                     title="Abrir (interno)"
                   >
@@ -411,7 +412,7 @@ export default function AuditoriasPage() {
                   </a>
 
                   <button
-                    className={`rounded-xl px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 ${
+                    className={`rounded-xl px-3 py-2 text-xs font-semibold text-white disabled:opacity-50 ${
                       podeReabrir ? "bg-orange-600 hover:bg-orange-700" : "bg-orange-300"
                     }`}
                     onClick={() => reabrirAuditoria(a.id)}
@@ -430,6 +431,9 @@ export default function AuditoriasPage() {
           )}
         </div>
       </div>
+
+      {/* só pra não ficar “unused” em TS se você ligar no futuro */}
+      {me ? null : null}
     </div>
   );
 }
