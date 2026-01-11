@@ -25,11 +25,11 @@ type AudRow = {
   foto_agua_url?: string | null;
   foto_energia_url?: string | null;
   foto_gas_url?: string | null;
-};
 
-type CondoRow = {
-  id: string;
-  usa_gas: boolean;
+  // ✅ extras (fotos obrigatórias do checklist de campo)
+  foto_quimicos_url?: string | null;
+  foto_bombonas_url?: string | null;
+  foto_conector_bala_url?: string | null;
 };
 
 function roleGte(role: Role | null, min: Role) {
@@ -61,7 +61,15 @@ async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise
   return (prof?.role ?? null) as Role | null;
 }
 
-function buildChecklistMissing(effective: AudRow, usaGas: boolean) {
+/**
+ * ✅ Checklist de campo (gás opcional)
+ * Obrigatório:
+ * - leituras: água e energia
+ * - fotos: água, energia, químicos, bombonas, conector
+ * Opcional:
+ * - gás e foto gás
+ */
+function buildChecklistMissing(effective: AudRow) {
   const missing: string[] = [];
 
   if (effective.agua_leitura == null) missing.push("Leitura de água");
@@ -70,12 +78,11 @@ function buildChecklistMissing(effective: AudRow, usaGas: boolean) {
   if (!effective.foto_agua_url) missing.push("Foto do medidor de água");
   if (!effective.foto_energia_url) missing.push("Foto do medidor de energia");
 
-  // Gás só entra no checklist se o condomínio usa_gas = true
-  if (usaGas) {
-    if (effective.gas_leitura == null) missing.push("Leitura de gás");
-    if (!effective.foto_gas_url) missing.push("Foto do medidor de gás");
-  }
+  if (!effective.foto_quimicos_url) missing.push("Foto da proveta (químicos)");
+  if (!effective.foto_bombonas_url) missing.push("Foto das bombonas (detergente + amaciante)");
+  if (!effective.foto_conector_bala_url) missing.push("Foto do conector bala conectado");
 
+  // gás opcional: não exige gas_leitura nem foto_gas_url
   return missing;
 }
 
@@ -99,7 +106,10 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
         observacoes,
         foto_agua_url,
         foto_energia_url,
-        foto_gas_url
+        foto_gas_url,
+        foto_quimicos_url,
+        foto_bombonas_url,
+        foto_conector_bala_url
       `
       )
       .eq("id", id)
@@ -142,7 +152,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         observacoes,
         foto_agua_url,
         foto_energia_url,
-        foto_gas_url
+        foto_gas_url,
+        foto_quimicos_url,
+        foto_bombonas_url,
+        foto_conector_bala_url
       `
       )
       .eq("id", id)
@@ -152,25 +165,6 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (!audRaw) return NextResponse.json({ error: "Auditoria não encontrada" }, { status: 404 });
 
     const aud = audRaw as AudRow;
-
-    // 1.1) Carrega condomínio (pra saber se usa gás)
-    const { data: condoRaw, error: condoErr } = await (supabase.from("condominios") as any)
-      .select("id, usa_gas")
-      .eq("id", aud.condominio_id)
-      .maybeSingle();
-
-    if (condoErr) {
-      return NextResponse.json(
-        {
-          error:
-            "Erro ao ler condomínio. Confirme se existe a coluna condominios.usa_gas. Detalhe: " + condoErr.message,
-        },
-        { status: 400 }
-      );
-    }
-
-    const condo = (condoRaw ?? null) as CondoRow | null;
-    const usaGas = !!condo?.usa_gas;
 
     const isOwnerAuditor = !!aud.auditor_id && aud.auditor_id === user.id;
     const isManager = roleGte(role, "interno"); // interno ou gestor
@@ -198,28 +192,16 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       return NextResponse.json({ error: "Somente gestor pode editar auditoria final" }, { status: 403 });
     }
 
-    // Auditor: status super restrito (só pode concluir -> em_conferencia)
+    // Auditor: só pode concluir -> em_conferencia
     if (isOnlyAuditor && nextStatus && nextStatus !== prevStatus) {
       const canConclude =
         (prevStatus === "aberta" || prevStatus === "em_andamento") && nextStatus === "em_conferencia";
 
       if (!canConclude) {
         return NextResponse.json(
-          {
-            error:
-              "Auditor só pode concluir em campo (status em_conferencia). Não pode reabrir nem finalizar.",
-          },
+          { error: "Auditor só pode concluir em campo (status em_conferencia). Não pode reabrir nem finalizar." },
           { status: 403 }
         );
-      }
-    }
-
-    // Reabrir: interno/gestor pode voltar de em_conferencia -> em_andamento/aberta
-    if (nextStatus && nextStatus !== prevStatus) {
-      const isReopen =
-        prevStatus === "em_conferencia" && (nextStatus === "em_andamento" || nextStatus === "aberta");
-      if (isReopen && !roleGte(role, "interno")) {
-        return NextResponse.json({ error: "Somente interno/gestor pode reabrir auditoria" }, { status: 403 });
       }
     }
 
@@ -249,9 +231,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (body?.foto_energia_url !== undefined) patch.foto_energia_url = body.foto_energia_url ?? null;
     if (body?.foto_gas_url !== undefined) patch.foto_gas_url = body.foto_gas_url ?? null;
 
+    if (body?.foto_quimicos_url !== undefined) patch.foto_quimicos_url = body.foto_quimicos_url ?? null;
+    if (body?.foto_bombonas_url !== undefined) patch.foto_bombonas_url = body.foto_bombonas_url ?? null;
+    if (body?.foto_conector_bala_url !== undefined) patch.foto_conector_bala_url = body.foto_conector_bala_url ?? null;
+
     if (nextStatus) patch.status = nextStatus;
 
-    // 4.1) Blindagem: se vai para em_conferencia, checklist deve estar completo (com gás opcional)
+    // 4.1) Se vai para em_conferencia, checklist deve estar completo
     if (nextStatus === "em_conferencia" && prevStatus !== "em_conferencia") {
       const effective: AudRow = {
         ...aud,
@@ -259,15 +245,17 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         foto_agua_url: (patch.foto_agua_url ?? aud.foto_agua_url ?? null) as any,
         foto_energia_url: (patch.foto_energia_url ?? aud.foto_energia_url ?? null) as any,
         foto_gas_url: (patch.foto_gas_url ?? aud.foto_gas_url ?? null) as any,
+        foto_quimicos_url: (patch.foto_quimicos_url ?? aud.foto_quimicos_url ?? null) as any,
+        foto_bombonas_url: (patch.foto_bombonas_url ?? aud.foto_bombonas_url ?? null) as any,
+        foto_conector_bala_url: (patch.foto_conector_bala_url ?? aud.foto_conector_bala_url ?? null) as any,
       };
 
-      const missing = buildChecklistMissing(effective, usaGas);
+      const missing = buildChecklistMissing(effective);
       if (missing.length > 0) {
         return NextResponse.json(
           {
             error: "Checklist incompleto. Não é possível concluir (em_conferencia).",
             missing,
-            gas_opcional: !usaGas,
           },
           { status: 400 }
         );
@@ -275,7 +263,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
 
     if (Object.keys(patch).length === 0) {
-      return NextResponse.json({ ok: true, auditoria: aud, usa_gas: usaGas });
+      return NextResponse.json({ ok: true, auditoria: aud });
     }
 
     // 5) Update
@@ -295,7 +283,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         observacoes,
         foto_agua_url,
         foto_energia_url,
-        foto_gas_url
+        foto_gas_url,
+        foto_quimicos_url,
+        foto_bombonas_url,
+        foto_conector_bala_url
       `
       )
       .maybeSingle();
@@ -304,7 +295,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     const updated = (updatedRaw ?? null) as AudRow | null;
 
-    // 6) Log de status
+    // 6) Log de status (se existir tabela)
     if (nextStatus && normalizeStatus(aud.status) !== nextStatus) {
       const note =
         typeof body?.note === "string" && body.note.trim().length > 0 ? body.note.trim().slice(0, 500) : null;
@@ -321,7 +312,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       await (supabase.from("auditoria_status_logs") as any).insert(logPayload);
     }
 
-    return NextResponse.json({ ok: true, auditoria: updated, usa_gas: usaGas });
+    return NextResponse.json({ ok: true, auditoria: updated });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
