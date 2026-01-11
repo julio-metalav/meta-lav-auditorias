@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/auth";
+import { createHash, timingSafeEqual } from "crypto";
 
 function getTokenFromAuthHeader(auth: string | null) {
   const raw = String(auth ?? "").trim();
@@ -10,21 +11,69 @@ function getTokenFromAuthHeader(auth: string | null) {
   return raw; // se vier sem "Bearer"
 }
 
-function isAuthorized(req: Request) {
-  const secret = String(process.env.CRON_SECRET ?? "").trim();
-  if (!secret) return { ok: false, code: 500 as const, msg: "CRON_SECRET não configurado" };
+function safeEq(a: string, b: string) {
+  const aa = Buffer.from(String(a ?? ""), "utf8");
+  const bb = Buffer.from(String(b ?? ""), "utf8");
+  if (aa.length !== bb.length) return false;
+  return timingSafeEqual(aa, bb);
+}
 
+function sha256(s: string) {
+  return createHash("sha256").update(String(s ?? ""), "utf8").digest("hex");
+}
+
+function isAuthorized(req: Request) {
+  const secretRaw = String(process.env.CRON_SECRET ?? "");
+  const secret = secretRaw.trim();
+
+  if (!secret) {
+    return { ok: false as const, code: 500 as const, msg: "CRON_SECRET não configurado" };
+  }
+
+  // pega token de 3 lugares (ordem importa):
+  // 1) Authorization
+  // 2) x-cron-secret
+  // 3) query ?secret=...
   const authHeader = req.headers.get("authorization");
-  const token = getTokenFromAuthHeader(authHeader);
+  const tokenAuth = getTokenFromAuthHeader(authHeader);
+
+  const tokenHeaderAlt = String(req.headers.get("x-cron-secret") ?? "").trim();
+
+  let tokenQuery = "";
+  try {
+    const u = new URL(req.url);
+    tokenQuery = String(u.searchParams.get("secret") ?? "").trim();
+  } catch {
+    // ignora
+  }
+
+  const token = tokenAuth || tokenHeaderAlt || tokenQuery;
 
   // aceita tanto "TOKEN" quanto "Bearer TOKEN" no env (pra evitar pegadinha)
   const envIsBearer = secret.toLowerCase().startsWith("bearer ");
-  const envToken = envIsBearer ? secret.slice(7).trim() : secret;
+  const envToken = (envIsBearer ? secret.slice(7) : secret).trim();
 
-  const ok = token && token === envToken;
-  if (!ok) return { ok: false, code: 401 as const, msg: "Não autenticado" };
+  const ok = !!token && safeEq(token, envToken);
+  if (!ok) {
+    // Diagnóstico SEM vazar segredo (só tamanhos + presença de headers)
+    return {
+      ok: false as const,
+      code: 401 as const,
+      msg: "Não autenticado",
+      diag: {
+        hasAuthorization: !!authHeader,
+        hasXcron: !!tokenHeaderAlt,
+        hasQuerySecret: !!tokenQuery,
+        tokenLen: token.length,
+        envLen: envToken.length,
+        // hashes ajudam a comparar sem expor o valor (não é reversível na prática)
+        tokenSha256: token ? sha256(token) : null,
+        envSha256: envToken ? sha256(envToken) : null,
+      },
+    };
+  }
 
-  return { ok: true, code: 200 as const, msg: "ok" };
+  return { ok: true as const, code: 200 as const, msg: "ok" };
 }
 
 function monthISO(d = new Date()) {
@@ -37,7 +86,10 @@ export async function POST(req: Request) {
   // 1) Auth
   const auth = isAuthorized(req);
   if (!auth.ok) {
-    return NextResponse.json({ error: auth.msg }, { status: auth.code });
+    // inclui diag só quando 401 (pra gente enxergar o que chegou)
+    const body: any = { error: auth.msg };
+    if ((auth as any).diag) body.diag = (auth as any).diag;
+    return NextResponse.json(body, { status: auth.code });
   }
 
   // 2) Supabase Admin client
