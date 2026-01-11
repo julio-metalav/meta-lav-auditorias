@@ -1,6 +1,5 @@
 "use client";
 
-import { BuildTag } from "@/app/components/BuildTag";
 import { useEffect, useMemo, useState } from "react";
 
 type Role = "auditor" | "interno" | "gestor";
@@ -26,6 +25,8 @@ type Aud = {
   profiles?: { email?: string | null; role?: Role | null } | null;
 };
 
+type StatusKey = "todas" | "aberta" | "em_andamento" | "em_conferencia" | "final";
+
 function monthISO(d = new Date()) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -36,8 +37,17 @@ function pickMonth(a: Aud) {
   return (a.mes_ref ?? a.ano_mes ?? "") as string;
 }
 
+function normStatus(s: string | null): Exclude<StatusKey, "todas"> | "aberta" {
+  const x = String(s ?? "").trim().toLowerCase();
+  if (x === "aberta") return "aberta";
+  if (x === "em_andamento" || x === "em andamento") return "em_andamento";
+  if (x === "em_conferencia" || x === "em conferência" || x === "em conferencia") return "em_conferencia";
+  if (x === "final") return "final";
+  return "aberta";
+}
+
 function statusLabel(s: string | null) {
-  const x = String(s ?? "").toLowerCase();
+  const x = normStatus(s);
   if (x === "aberta") return "Aberta";
   if (x === "em_andamento") return "Em andamento";
   if (x === "em_conferencia") return "Em conferência";
@@ -46,7 +56,7 @@ function statusLabel(s: string | null) {
 }
 
 function badgeClass(s: string | null) {
-  const x = String(s ?? "").toLowerCase();
+  const x = normStatus(s);
   if (x === "aberta") return "bg-gray-100 text-gray-800";
   if (x === "em_andamento") return "bg-blue-100 text-blue-800";
   if (x === "em_conferencia") return "bg-yellow-100 text-yellow-900";
@@ -64,6 +74,29 @@ async function safeJson(res: Response) {
   }
 }
 
+function Chip({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+        active ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-700 hover:bg-gray-50",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
+
 export default function AuditoriasPage() {
   const [me, setMe] = useState<Me | null>(null);
 
@@ -76,6 +109,10 @@ export default function AuditoriasPage() {
 
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+
+  // UX: busca + filtro chips
+  const [q, setQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusKey>("todas");
 
   const [form, setForm] = useState({
     condominio_id: "",
@@ -208,6 +245,57 @@ export default function AuditoriasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // lista filtrada (busca + chips)
+  const filtered = useMemo(() => {
+    const qq = q.trim().toLowerCase();
+
+    return auditorias.filter((a) => {
+      const st = normStatus(a.status);
+      if (statusFilter !== "todas" && st !== statusFilter) return false;
+
+      if (!qq) return true;
+
+      const condo =
+        a.condominios?.nome
+          ? `${a.condominios.nome} • ${a.condominios.cidade}/${a.condominios.uf}`
+          : condoLabel.get(a.condominio_id) ?? a.condominio_id;
+
+      const audLabel =
+        (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
+        a.profiles?.email ??
+        (a.auditor_id ?? "—");
+
+      const hay = [
+        condo,
+        pickMonth(a) || "",
+        st,
+        a.status ?? "",
+        audLabel,
+        a.id,
+        a.condominio_id,
+        a.auditor_id ?? "",
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return hay.includes(qq);
+    });
+  }, [auditorias, q, statusFilter, condoLabel, auditorEmailById]);
+
+  // resumo topo
+  const summary = useMemo(() => {
+    const base = filtered;
+    const total = base.length;
+    const counts = { aberta: 0, em_andamento: 0, em_conferencia: 0, final: 0 } as Record<
+      Exclude<StatusKey, "todas">,
+      number
+    >;
+    for (const a of base) {
+      counts[normStatus(a.status)] += 1;
+    }
+    return { total, counts };
+  }, [filtered]);
+
   return (
     <div className="mx-auto max-w-5xl p-4 sm:p-6">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -228,9 +316,48 @@ export default function AuditoriasPage() {
       {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
       {ok && <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>}
 
+      {/* Barra de filtros (chips + busca + resumo) */}
+      <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-wrap gap-2">
+            <Chip active={statusFilter === "todas"} label="Todas" onClick={() => setStatusFilter("todas")} />
+            <Chip active={statusFilter === "aberta"} label="Abertas" onClick={() => setStatusFilter("aberta")} />
+            <Chip
+              active={statusFilter === "em_andamento"}
+              label="Em andamento"
+              onClick={() => setStatusFilter("em_andamento")}
+            />
+            <Chip
+              active={statusFilter === "em_conferencia"}
+              label="Em conferência"
+              onClick={() => setStatusFilter("em_conferencia")}
+            />
+            <Chip active={statusFilter === "final"} label="Final" onClick={() => setStatusFilter("final")} />
+          </div>
+
+          <div className="flex w-full flex-col gap-2 md:w-auto md:items-end">
+            <input
+              className="w-full rounded-xl border px-3 py-2 text-sm md:w-[320px]"
+              placeholder="Buscar condomínio, auditor, ID..."
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              disabled={loading || saving}
+            />
+
+            <div className="text-xs text-gray-600">
+              <b>{summary.total}</b> no filtro •{" "}
+              <span className="ml-1">Abertas: {summary.counts.aberta}</span> •{" "}
+              <span>Em andamento: {summary.counts.em_andamento}</span> •{" "}
+              <span>Em conferência: {summary.counts.em_conferencia}</span> •{" "}
+              <span>Final: {summary.counts.final}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Criar auditoria */}
       <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm">
-        <div className="mb-3 text-sm font-semibold text-gray-800">Criar auditoria</div>
+        <div className="mb-3 text-sm font-semibold text-gray-800">Criando auditoria</div>
 
         <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
           <div>
@@ -292,7 +419,7 @@ export default function AuditoriasPage() {
 
       {/* LISTA - MOBILE (cards) */}
       <div className="space-y-3 md:hidden">
-        {auditorias.map((a) => {
+        {filtered.map((a) => {
           const condo =
             a.condominios?.nome
               ? `${a.condominios.nome} • ${a.condominios.cidade}/${a.condominios.uf}`
@@ -304,9 +431,8 @@ export default function AuditoriasPage() {
             a.profiles?.email ??
             (a.auditor_id ?? "—");
 
-          const isEmConferencia = String(a.status ?? "").toLowerCase() === "em_conferencia";
-          const isFinal = String(a.status ?? "").toLowerCase() === "final";
-          const podeReabrir = isEmConferencia || isFinal;
+          const st = normStatus(a.status);
+          const podeReabrir = st === "em_conferencia" || st === "final";
 
           return (
             <div key={a.id} className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -330,7 +456,11 @@ export default function AuditoriasPage() {
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2">
-                <a className="flex-1 rounded-xl border px-3 py-2 text-center text-sm hover:bg-gray-50" href={`/interno/auditoria/${a.id}`}>
+                <a
+                  className="flex-1 rounded-xl border px-3 py-2 text-center text-sm hover:bg-gray-50"
+                  href={`/interno/auditoria/${a.id}`}
+                  title="Abrir (interno)"
+                >
                   Abrir
                 </a>
 
@@ -349,8 +479,8 @@ export default function AuditoriasPage() {
           );
         })}
 
-        {!loading && auditorias.length === 0 && (
-          <div className="rounded-2xl border bg-white p-4 text-sm text-gray-600">Nenhuma auditoria encontrada.</div>
+        {!loading && filtered.length === 0 && (
+          <div className="rounded-2xl border bg-white p-4 text-sm text-gray-600">Nenhuma auditoria no filtro.</div>
         )}
       </div>
 
@@ -365,7 +495,7 @@ export default function AuditoriasPage() {
         </div>
 
         <div className="divide-y">
-          {auditorias.map((a) => {
+          {filtered.map((a) => {
             const condo =
               a.condominios?.nome
                 ? `${a.condominios.nome} • ${a.condominios.cidade}/${a.condominios.uf}`
@@ -377,9 +507,8 @@ export default function AuditoriasPage() {
               a.profiles?.email ??
               (a.auditor_id ?? "—");
 
-            const isEmConferencia = String(a.status ?? "").toLowerCase() === "em_conferencia";
-            const isFinal = String(a.status ?? "").toLowerCase() === "final";
-            const podeReabrir = isEmConferencia || isFinal;
+            const st = normStatus(a.status);
+            const podeReabrir = st === "em_conferencia" || st === "final";
 
             return (
               <div key={a.id} className="grid grid-cols-12 items-center gap-2 px-4 py-3">
@@ -399,7 +528,11 @@ export default function AuditoriasPage() {
                 <div className="col-span-2 truncate text-sm text-gray-700">{audLabel}</div>
 
                 <div className="col-span-2 flex justify-end gap-2">
-                  <a className="rounded-xl border px-3 py-2 text-xs font-semibold hover:bg-gray-50" href={`/interno/auditoria/${a.id}`}>
+                  <a
+                    className="rounded-xl border px-3 py-2 text-xs font-semibold hover:bg-gray-50"
+                    href={`/interno/auditoria/${a.id}`}
+                    title="Abrir (interno)"
+                  >
                     Abrir
                   </a>
 
@@ -418,16 +551,13 @@ export default function AuditoriasPage() {
             );
           })}
 
-          {!loading && auditorias.length === 0 && (
-            <div className="px-4 py-6 text-sm text-gray-600">Nenhuma auditoria encontrada.</div>
+          {!loading && filtered.length === 0 && (
+            <div className="px-4 py-6 text-sm text-gray-600">Nenhuma auditoria no filtro.</div>
           )}
         </div>
       </div>
 
-      {/* rodapé técnico (aparece só se NEXT_PUBLIC_BUILD_TAG estiver setado) */}
-      <BuildTag />
-
-      {/* só pra não dar “unused” se você decidir usar o me depois */}
+      {/* me fica usado de leve (evita warning se você resolver ligar algo depois) */}
       {me ? null : null}
     </div>
   );
