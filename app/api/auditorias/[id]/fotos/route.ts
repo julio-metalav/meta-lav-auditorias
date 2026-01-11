@@ -141,7 +141,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     // 7) Salva URL na coluna certa em auditorias
     const col = kindToColumn[kind];
 
-    // IMPORTANTE: não retornar auditoria inteira (evita apagar campos no front).
+    // Retornamos SEMPRE no formato esperado pelo front: { auditoria: {...} }
+    // (mesmo que seja só a coluna atualizada).
     const { data: updatedRow, error: updErr } = await admin
       .from("auditorias")
       .update({ [col]: publicUrl })
@@ -155,7 +156,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       ok: true,
       kind,
       url: publicUrl,
-      updated: updatedRow, // vem só { foto_xxx_url: "..." }
+      auditoria: updatedRow, // ✅ o front do auditor espera isso
+      updated: updatedRow, // ✅ compat (se alguém já usa)
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
