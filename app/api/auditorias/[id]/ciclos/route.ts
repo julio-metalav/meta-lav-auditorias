@@ -51,10 +51,10 @@ function toNonNegInt(v: any) {
 /**
  * GET /api/auditorias/:id/ciclos
  * Retorna:
- * - auditoria (com aliases ano_mes)
+ * - auditoria (com alias ano_mes => mes_ref para compat)
  * - condominio_id
  * - maquinas
- * - ciclos (com alias ciclos_mes)
+ * - ciclos (com alias ciclos_mes para compat)
  */
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
@@ -73,9 +73,10 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
     }
 
+    // ✅ BANCO REAL: NÃO existe ano_mes. Usamos apenas mes_ref.
     const { data: aud, error: audErr } = await supabase
       .from("auditorias")
-      .select("id, condominio_id, mes_ref, ano_mes, status")
+      .select("id, condominio_id, mes_ref, status")
       .eq("id", auditoriaId)
       .single();
 
@@ -121,10 +122,10 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       ciclos_mes: Number(c.ciclos ?? 0),
     }));
 
-    // compat: devolve ano_mes como alias do mes_ref (se ano_mes estiver vazio)
+    // compat: devolve ano_mes como alias do mes_ref (sem depender de coluna inexistente)
     const auditoria = {
       ...(aud as any),
-      ano_mes: (aud as any).ano_mes ?? (aud as any).mes_ref ?? null,
+      ano_mes: (aud as any).mes_ref ?? null,
     };
 
     return NextResponse.json({
@@ -195,7 +196,10 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     for (const p of payload) {
       if (!p.categoria) {
-        return NextResponse.json({ error: "categoria é obrigatória (lavadora|secadora)" }, { status: 400 });
+        return NextResponse.json(
+          { error: "categoria é obrigatória (lavadora|secadora)" },
+          { status: 400 }
+        );
       }
       if (p.capacidade_kg !== null && !Number.isFinite(Number(p.capacidade_kg))) {
         return NextResponse.json({ error: "capacidade_kg inválido" }, { status: 400 });
