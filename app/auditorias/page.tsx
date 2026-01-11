@@ -16,7 +16,6 @@ type Aud = {
   id: string;
   condominio_id: string;
   auditor_id: string | null;
-  ano_mes?: string | null;
   mes_ref?: string | null;
   status: string | null;
   created_at?: string | null;
@@ -32,7 +31,7 @@ function monthISO(d = new Date()) {
 }
 
 function pickMonth(a: Aud) {
-  return (a.ano_mes ?? a.mes_ref ?? "") as string;
+  return (a.mes_ref ?? "") as string;
 }
 
 function statusLabel(s: string | null) {
@@ -78,7 +77,7 @@ export default function AuditoriasPage() {
 
   const [form, setForm] = useState({
     condominio_id: "",
-    ano_mes: monthISO(),
+    mes_ref: monthISO(),
     auditor_id: "",
   });
 
@@ -117,7 +116,6 @@ export default function AuditoriasPage() {
       if (cRes.ok) setCondos(Array.isArray(cJson) ? (cJson as Condo[]) : (cJson?.data ?? []));
 
       const list: Aud[] = Array.isArray(aJson) ? (aJson as Aud[]) : (aJson?.data ?? []);
-      // ordena do mais recente pro mais antigo (por mês, depois por created_at se tiver)
       list.sort((x, y) => {
         const mx = pickMonth(x) ?? "";
         const my = pickMonth(y) ?? "";
@@ -128,13 +126,11 @@ export default function AuditoriasPage() {
       });
       setAuditorias(list);
 
-      // /api/users pode ser protegido — mas aqui é /auditorias (interno/gestor), então deve funcionar.
       try {
         const uRes = await fetch("/api/users", { cache: "no-store" });
         const uJson = await safeJson(uRes);
         if (uRes.ok) {
           const arr = Array.isArray(uJson) ? uJson : uJson?.data ?? [];
-          // só auditores
           setAuditores((arr as AuditorUser[]).filter((u) => u.role === "auditor"));
         }
       } catch {
@@ -152,7 +148,7 @@ export default function AuditoriasPage() {
     setOk(null);
 
     if (!form.condominio_id) return setErr("Selecione um condomínio.");
-    if (!form.ano_mes) return setErr("Informe o mês (YYYY-MM-01).");
+    if (!form.mes_ref) return setErr("Informe o mês (YYYY-MM-01).");
 
     setSaving(true);
     try {
@@ -161,7 +157,7 @@ export default function AuditoriasPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           condominio_id: form.condominio_id,
-          ano_mes: form.ano_mes,
+          mes_ref: form.mes_ref,
           status: "aberta",
           auditor_id: form.auditor_id || null,
         }),
@@ -171,7 +167,6 @@ export default function AuditoriasPage() {
       if (!res.ok) throw new Error(json?.error ?? "Erro ao criar auditoria");
 
       setOk("Auditoria criada ✅");
-      // limpa só o condomínio (mês mantém)
       setForm((p) => ({ ...p, condominio_id: "" }));
       await carregar();
     } catch (e: any) {
@@ -213,7 +208,7 @@ export default function AuditoriasPage() {
   const isInternoOuGestor = me?.role === "interno" || me?.role === "gestor";
 
   return (
-    <div className="mx-auto max-w-5xl p-6">
+    <div className="mx-auto max-w-5xl p-4 md:p-6">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Auditorias</h1>
@@ -264,8 +259,8 @@ export default function AuditoriasPage() {
             <label className="mb-1 block text-xs text-gray-600">Mês (YYYY-MM-01)</label>
             <input
               className="w-full rounded-xl border px-3 py-2"
-              value={form.ano_mes}
-              onChange={(e) => setForm((p) => ({ ...p, ano_mes: e.target.value }))}
+              value={form.mes_ref}
+              onChange={(e) => setForm((p) => ({ ...p, mes_ref: e.target.value }))}
               disabled={saving || loading}
               placeholder="2026-01-01"
             />
@@ -300,8 +295,79 @@ export default function AuditoriasPage() {
         </div>
       </div>
 
-      {/* Lista */}
-      <div className="overflow-hidden rounded-2xl border bg-white shadow-sm">
+      {/* Lista - MOBILE (cards) */}
+      <div className="md:hidden space-y-3">
+        {auditorias.map((a) => {
+          const condo =
+            a.condominios?.nome
+              ? `${a.condominios.nome} • ${a.condominios.cidade}/${a.condominios.uf}`
+              : condoLabel.get(a.condominio_id) ?? a.condominio_id;
+
+          const status = a.status ?? "-";
+          const audLabel =
+            (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
+            a.profiles?.email ??
+            (a.auditor_id ?? "—");
+
+          const isEmConferencia = String(a.status ?? "").toLowerCase() === "em_conferencia";
+          const isFinal = String(a.status ?? "").toLowerCase() === "final";
+          const podeReabrir = isEmConferencia || isFinal;
+
+          return (
+            <div key={a.id} className="rounded-2xl border bg-white p-4 shadow-sm">
+              <div className="text-sm font-semibold text-gray-900">{condo}</div>
+              <div className="mt-1 font-mono text-[11px] text-gray-400 break-all">{a.id}</div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <div className="text-[11px] text-gray-500">Mês</div>
+                  <div className="font-medium text-gray-800">{pickMonth(a) || "-"}</div>
+                </div>
+
+                <div className="text-right">
+                  <div className="text-[11px] text-gray-500">Status</div>
+                  <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${badgeClass(status)}`}>
+                    {statusLabel(status)}
+                  </span>
+                </div>
+
+                <div className="col-span-2">
+                  <div className="text-[11px] text-gray-500">Auditor</div>
+                  <div className="truncate text-gray-800">{audLabel}</div>
+                </div>
+              </div>
+
+              <div className="mt-4 flex gap-2">
+                <a
+                  className="flex-1 rounded-xl border px-3 py-2 text-center text-xs font-semibold hover:bg-gray-50"
+                  href={`/interno/auditoria/${a.id}`}
+                  title="Abrir (interno)"
+                >
+                  Abrir
+                </a>
+
+                <button
+                  className={`flex-1 rounded-xl px-3 py-2 text-xs font-semibold text-white disabled:opacity-50 ${
+                    podeReabrir ? "bg-orange-600 hover:bg-orange-700" : "bg-orange-300"
+                  }`}
+                  onClick={() => reabrirAuditoria(a.id)}
+                  disabled={!podeReabrir || loading || saving}
+                  title={podeReabrir ? "Reabrir auditoria" : "Só reabre quando estiver em conferência ou final"}
+                >
+                  Reabrir
+                </button>
+              </div>
+            </div>
+          );
+        })}
+
+        {!loading && auditorias.length === 0 && (
+          <div className="rounded-2xl border bg-white p-4 text-sm text-gray-600">Nenhuma auditoria encontrada.</div>
+        )}
+      </div>
+
+      {/* Lista - DESKTOP (tabela atual) */}
+      <div className="hidden md:block overflow-hidden rounded-2xl border bg-white shadow-sm">
         <div className="grid grid-cols-12 bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-600">
           <div className="col-span-5">Condomínio</div>
           <div className="col-span-2">Mês</div>
@@ -359,7 +425,7 @@ export default function AuditoriasPage() {
                     }`}
                     onClick={() => reabrirAuditoria(a.id)}
                     disabled={!podeReabrir || loading || saving}
-                    title={podeReabrir ? "Reabrir auditoria para lançar dados novamente" : "Só reabre quando estiver em conferência ou final"}
+                    title={podeReabrir ? "Reabrir auditoria" : "Só reabre quando estiver em conferência ou final"}
                   >
                     Reabrir
                   </button>
