@@ -78,6 +78,9 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   // snapshot pra detectar mudança sem ficar comparando com raw
   const lastSavedRef = useRef<string>("");
 
+  // ✅ tick pra forçar re-render quando lastSavedRef mudar (ref não re-renderiza)
+  const [snapTick, setSnapTick] = useState(0);
+
   function serializeState(ls: Linha[]) {
     const obj: Record<string, number> = {};
     for (const l of ls) obj[linhaKey(l)] = Number(l.ciclos || 0);
@@ -123,6 +126,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
       const snap = serializeState(ls);
       lastSavedRef.current = snap;
+      setSnapTick((t) => t + 1); // ✅ força dirty recalcular
 
       setLoading(false);
     } catch (e: any) {
@@ -145,7 +149,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   const dirty = useMemo(() => {
     const now = serializeState(linhas);
     return now !== lastSavedRef.current;
-  }, [linhas]);
+    // ✅ snapTick entra pra recalcular quando lastSavedRef mudar
+  }, [linhas, snapTick]);
 
   async function salvar() {
     setErr(null);
@@ -169,7 +174,10 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error ?? "Erro ao salvar");
 
+      // ✅ atualiza snapshot e força dirty recalcular imediatamente
       lastSavedRef.current = serializeState(linhas);
+      setSnapTick((t) => t + 1);
+
       setSavedOk(true);
     } catch (e: any) {
       setErr(e.message);
@@ -274,16 +282,15 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           </button>
 
           <button
-  className="btn"
-  onClick={() => {
-    router.refresh();
-    router.push("/auditorias");
-  }}
-  disabled={saving}
->
-  Voltar
-</button>
-
+            className="btn"
+            onClick={() => {
+              router.refresh();
+              router.push("/auditorias");
+            }}
+            disabled={saving}
+          >
+            Voltar
+          </button>
         </div>
       </div>
 
