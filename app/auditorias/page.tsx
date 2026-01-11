@@ -1,5 +1,6 @@
 "use client";
 
+import { BuildTag } from "@/app/components/BuildTag";
 import { useEffect, useMemo, useState } from "react";
 
 type Role = "auditor" | "interno" | "gestor";
@@ -359,7 +360,6 @@ export default function AuditoriasPage() {
 
       {/* LISTA - DESKTOP (tabela) */}
       <div className="hidden overflow-hidden rounded-2xl border bg-white shadow-sm md:block">
-        {/* ✅ grid ajustado: ações com mais espaço */}
         <div className="grid grid-cols-12 bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-600">
           <div className="col-span-4">Condomínio</div>
           <div className="col-span-2">Mês</div>
@@ -430,6 +430,11 @@ export default function AuditoriasPage() {
             <div className="px-4 py-6 text-sm text-gray-600">Nenhuma auditoria encontrada.</div>
           )}
         </div>
+      </div>
+
+      {/* BuildTag: deixa visível qual build está no ar */}
+      <div className="mt-6">
+        <BuildTag />
       </div>
 
       {/* só pra não ficar “unused” em TS se você ligar no futuro */}
