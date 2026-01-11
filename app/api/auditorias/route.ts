@@ -80,6 +80,7 @@ export async function GET() {
   try {
     const sch = await detectSchema(admin);
 
+    // ⚠️ Aqui pode vir MUITA coisa (leituras, fotos, observações etc) — é exatamente o que queremos.
     let q = admin.from(sch.table).select("*").order(sch.monthCol, { ascending: false });
 
     if (canAuditor && !canStaff) {
@@ -112,19 +113,32 @@ export async function GET() {
       const mes_ref = r[sch.monthCol];
       const status = r[sch.statusCol];
 
-      return {
-        id: r.id,
-        condominio_id,
-        auditor_id,
+      // ✅ mantém tudo que veio do banco (inclui leituras/fotos/etc)
+      const out: any = { ...r };
 
-        // ✅ compat: frontend pode continuar lendo ano_mes
-        ano_mes: mes_ref,
-        mes_ref,
+      // ✅ normaliza chaves que o frontend espera
+      out.condominio_id = condominio_id;
+      out.auditor_id = auditor_id;
 
-        status,
-        condominios: condoMap.get(condominio_id) ?? null,
-        profiles: profMap.get(auditor_id) ?? null,
-      };
+      // ✅ compat mês: frontend pode continuar lendo ano_mes
+      out.mes_ref = mes_ref;
+      out.ano_mes = mes_ref;
+
+      // ✅ status preservado
+      out.status = status;
+
+      // ✅ joins
+      out.condominios = condoMap.get(condominio_id) ?? null;
+      out.profiles = profMap.get(auditor_id) ?? null;
+
+      // ✅ compat LEITURAS: seu banco hoje usa agua_leitura/energia_leitura/gas_leitura
+      // mas o frontend (auditor/auditoria/[id]) usa leitura_agua/leitura_energia/leitura_gas
+      // Então espelhamos, sem quebrar nada.
+      if (out.leitura_agua === undefined && out.agua_leitura !== undefined) out.leitura_agua = out.agua_leitura;
+      if (out.leitura_energia === undefined && out.energia_leitura !== undefined) out.leitura_energia = out.energia_leitura;
+      if (out.leitura_gas === undefined && out.gas_leitura !== undefined) out.leitura_gas = out.gas_leitura;
+
+      return out;
     });
 
     return NextResponse.json(normalized);
@@ -191,14 +205,13 @@ export async function POST(req: Request) {
     const savedMes = data[sch.monthCol];
 
     return NextResponse.json({
-      id: data.id,
+      ...data,
+
+      // ✅ normaliza/compat
       condominio_id: data[sch.condoCol],
       auditor_id: data[sch.auditorCol],
-
-      // ✅ compat
       ano_mes: savedMes,
       mes_ref: savedMes,
-
       status: data[sch.statusCol],
     });
   } catch (e: any) {
