@@ -315,7 +315,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
       const json = await safeReadJson(res);
       if (!res.ok) {
-        // se backend mandar missing (checklist), mostra
         if (Array.isArray(json?.missing) && json.missing.length) {
           throw new Error(`${json?.error ?? "Checklist incompleto"}: ${json.missing.join(", ")}`);
         }
@@ -332,7 +331,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
       setOkMsg(extra?.status ? "Concluída em campo (OK)" : "Salvo (OK)");
 
-      if (extra?.status) carregarHistorico();
+      // ✅ garante refletir status/joins do backend sem F5
+      if (extra?.status) {
+        await carregarTudo();
+      } else {
+        carregarHistorico();
+      }
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao salvar");
     } finally {
@@ -422,7 +426,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
-  // ✅ checklist com gás opcional (front)
+  /**
+   * ✅ Checklist alinhado ao BACKEND para permitir concluir (em_conferencia):
+   * - Leitura água + energia
+   * - Foto água + energia
+   * - Gás é opcional aqui (backend decide por usa_gas)
+   */
   const checklist = useMemo(() => {
     const a = aud;
 
@@ -431,21 +440,14 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
     const fotoAguaOk = !!a?.foto_agua_url;
     const fotoEnergiaOk = !!a?.foto_energia_url;
-    const fotoQuimicosOk = !!a?.foto_quimicos_url;
-    const fotoBombonasOk = !!a?.foto_bombonas_url;
-    const fotoConectorOk = !!a?.foto_conector_bala_url;
 
-    const fotosObrigatoriasOk = fotoAguaOk && fotoEnergiaOk && fotoQuimicosOk && fotoBombonasOk && fotoConectorOk;
-    const prontoCampo = leituraAguaOk && leituraEnergiaOk && fotosObrigatoriasOk;
+    const prontoCampo = leituraAguaOk && leituraEnergiaOk && fotoAguaOk && fotoEnergiaOk;
 
     const faltas: string[] = [];
     if (!leituraAguaOk) faltas.push("Leitura de água");
     if (!leituraEnergiaOk) faltas.push("Leitura de energia");
     if (!fotoAguaOk) faltas.push("Foto água");
     if (!fotoEnergiaOk) faltas.push("Foto energia");
-    if (!fotoQuimicosOk) faltas.push("Foto proveta");
-    if (!fotoBombonasOk) faltas.push("Foto bombonas");
-    if (!fotoConectorOk) faltas.push("Foto conector");
 
     return { prontoCampo, faltas };
   }, [aud, agua_leitura, energia_leitura]);
@@ -463,7 +465,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const titulo = aud?.condominios ? `${aud.condominios.nome} - ${aud.condominios.cidade}/${aud.condominios.uf}` : aud?.condominio_id ?? "";
+  const titulo = aud?.condominios
+    ? `${aud.condominios.nome} - ${aud.condominios.cidade}/${aud.condominios.uf}`
+    : aud?.condominio_id ?? "";
 
   // interno/gestor podem editar mesmo se mismatch, mas se auditoria concluída não
   const disableAll = loading || saving || !aud || concluida;
@@ -492,7 +496,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           <div className="mt-1 font-mono text-xs text-gray-400">ID: {id}</div>
         </div>
 
-        <button className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" onClick={carregarTudo} disabled={loading || saving}>
+        <button
+          className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+          onClick={carregarTudo}
+          disabled={loading || saving}
+        >
           {loading ? "Carregando..." : "Recarregar"}
         </button>
       </div>
@@ -500,7 +508,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       {mismatch && (
         <div className="mb-4 rounded-2xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
           <b>Atenção:</b> logado como <b>{meLabel}</b>, mas auditoria pertence a <b>{assignedAuditorLabel}</b>.
-          <div className="mt-1 text-xs text-red-700">Para lançar dados como auditor, faça login com o usuário do auditor atribuído.</div>
+          <div className="mt-1 text-xs text-red-700">
+            Para lançar dados como auditor, faça login com o usuário do auditor atribuído.
+          </div>
           <div className="mt-1 text-xs text-red-700">Obs: interno/gestor não são bloqueados por isso.</div>
         </div>
       )}
@@ -522,14 +532,21 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
               <div className="mt-1 text-xs text-gray-500">Somente leitura.</div>
             </div>
 
-            <button className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" onClick={carregarHistorico} disabled={histLoading} title="Atualizar histórico">
+            <button
+              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+              onClick={carregarHistorico}
+              disabled={histLoading}
+              title="Atualizar histórico"
+            >
               {histLoading ? "Carregando..." : "Atualizar"}
             </button>
           </div>
 
           {histErr && <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{histErr}</div>}
 
-          {!histErr && !histLoading && histData.length === 0 && <div className="mt-3 text-sm text-gray-600">Ainda não há registros de mudança de status.</div>}
+          {!histErr && !histLoading && histData.length === 0 && (
+            <div className="mt-3 text-sm text-gray-600">Ainda não há registros de mudança de status.</div>
+          )}
 
           {histData.length > 0 && (
             <div className="mt-3 overflow-hidden rounded-xl border">
@@ -549,7 +566,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                     <div key={`${h.created_at}-${idx}`} className="grid grid-cols-12 px-3 py-2 text-sm">
                       <div className="col-span-4 text-gray-700">{fmtBR(h.created_at)}</div>
                       <div className="col-span-4 text-gray-800">
-                        <span className="font-mono text-xs text-gray-600">{de}</span> {"->"} <span className="font-mono text-xs text-gray-600">{para}</span>
+                        <span className="font-mono text-xs text-gray-600">{de}</span> {"->"}{" "}
+                        <span className="font-mono text-xs text-gray-600">{para}</span>
                       </div>
                       <div className="col-span-4 text-gray-700">
                         {who}
@@ -579,11 +597,15 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
               </div>
             )}
 
-            <div className="mt-1 text-xs text-gray-500">Gás é opcional.</div>
+            <div className="mt-1 text-xs text-gray-500">
+              Gás é opcional (o sistema decide pelo condomínio).
+            </div>
           </div>
 
           <button
-            className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${concluida ? "bg-green-300" : "bg-green-600 hover:bg-green-700"}`}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+              concluida ? "bg-green-300" : "bg-green-600 hover:bg-green-700"
+            }`}
             disabled={concluida || !checklist.prontoCampo || loading || saving || !aud || mismatch}
             onClick={() => salvarRascunho({ status: "em_conferencia" })}
           >
@@ -714,7 +736,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    <label className={`cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"}`}>
+                    <label
+                      className={`cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
+                        disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
+                      }`}
+                    >
                       Tirar
                       <input
                         type="file"
@@ -729,7 +755,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                       />
                     </label>
 
-                    <label className={`cursor-pointer rounded-xl border px-4 py-2 text-sm ${disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"}`}>
+                    <label
+                      className={`cursor-pointer rounded-xl border px-4 py-2 text-sm ${
+                        disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
+                      }`}
+                    >
                       Galeria
                       <input
                         type="file"
@@ -746,14 +776,20 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                     {pend && (
                       <>
                         <button
-                          className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"}`}
+                          className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                            disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
+                          }`}
                           disabled={disableAll || mismatch || busy}
                           onClick={() => uploadFoto(item.kind, pendingFile[item.kind] as File)}
                         >
                           {busy ? "Enviando..." : "Salvar"}
                         </button>
 
-                        <button className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" disabled={disableAll || mismatch || busy} onClick={() => cancelPending(item.kind)}>
+                        <button
+                          className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                          disabled={disableAll || mismatch || busy}
+                          onClick={() => cancelPending(item.kind)}
+                        >
                           Refazer
                         </button>
                       </>
@@ -767,7 +803,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
         <div className="mt-4 flex gap-3">
           <button
-            className={`rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${dirty ? "bg-gray-400 hover:bg-gray-500" : "bg-green-600"}`}
+            className={`rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+              dirty ? "bg-gray-400 hover:bg-gray-500" : "bg-green-600"
+            }`}
             onClick={() => salvarRascunho()}
             disabled={disableAll || mismatch || !dirty}
             title={dirty ? "Salvar alterações" : "Já está salvo"}
@@ -792,7 +830,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             </div>
             <div className="mt-3">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={pendingUrl[previewKind] as string} alt="preview" className="max-h-[70vh] w-full rounded-xl object-contain" />
+              <img
+                src={pendingUrl[previewKind] as string}
+                alt="preview"
+                className="max-h-[70vh] w-full rounded-xl object-contain"
+              />
             </div>
           </div>
         </div>
