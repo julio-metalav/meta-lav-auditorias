@@ -6,17 +6,20 @@ import { supabaseServer } from "@/lib/supabaseServer";
 type Role = "auditor" | "interno" | "gestor";
 type Status = "aberta" | "em_andamento" | "em_conferencia" | "final";
 
+/**
+ * Schema REAL: public.auditorias
+ */
 type AudRow = {
   id: string;
   condominio_id: string;
   auditor_id: string | null;
-  ano_mes: string | null;
-  mes_ref: string | null;
+  mes_ref: string | null; // date ISO
   status: Status | string | null;
 
-  leitura_agua: string | null;
-  leitura_energia: string | null;
-  leitura_gas: string | null;
+  agua_leitura: number | null;
+  energia_leitura: number | null;
+  gas_leitura: number | null;
+
   observacoes: string | null;
 
   foto_agua_url?: string | null;
@@ -36,8 +39,13 @@ function normalizeStatus(input: any): Status {
   if (s === "em andamento" || s === "em_andamento") return "em_andamento";
   if (s === "aberta") return "aberta";
   if (s === "final") return "final";
-  // default seguro
   return "aberta";
+}
+
+function toNumberOrNull(v: any): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "number" ? v : Number(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
 }
 
 async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise<Role | null> {
@@ -54,19 +62,17 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     const supabase = supabaseServer();
     const id = params.id;
 
-    // CAST do builder para evitar GenericStringError no TS quando o select/join diverge do Database gerado
     const { data, error } = await (supabase.from("auditorias") as any)
       .select(
         `
         id,
         condominio_id,
         auditor_id,
-        ano_mes,
         mes_ref,
         status,
-        leitura_agua,
-        leitura_energia,
-        leitura_gas,
+        agua_leitura,
+        energia_leitura,
+        gas_leitura,
         observacoes,
         foto_agua_url,
         foto_energia_url,
@@ -98,19 +104,18 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const role = await getUserRole(supabase);
     if (!role) return NextResponse.json({ error: "Sem role" }, { status: 403 });
 
-    // 1) Carrega auditoria (CAST para matar GenericStringError)
+    // 1) Carrega auditoria
     const { data: audRaw, error: audErr } = await (supabase.from("auditorias") as any)
       .select(
         `
         id,
         condominio_id,
         auditor_id,
-        ano_mes,
         mes_ref,
         status,
-        leitura_agua,
-        leitura_energia,
-        leitura_gas,
+        agua_leitura,
+        energia_leitura,
+        gas_leitura,
         observacoes,
         foto_agua_url,
         foto_energia_url,
@@ -126,7 +131,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const aud = audRaw as AudRow;
 
     const isOwnerAuditor = !!aud.auditor_id && aud.auditor_id === user.id;
-    const isManager = roleGte(role, "interno");
+    const isManager = roleGte(role, "interno"); // interno ou gestor
     const isGestor = role === "gestor";
     const canEdit = isOwnerAuditor || isManager;
 
@@ -138,9 +143,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const nextStatus: Status | null = body?.status != null ? normalizeStatus(body.status) : null;
     const prevStatus: Status = normalizeStatus(aud.status);
 
-    // 3) Regras de travamento
-    // Auditor (não interno/gestor) NÃO pode editar após em_conferencia/final
+    // 3) Regras oficiais
     const isOnlyAuditor = role === "auditor" && !isManager && !isGestor;
+
+    // Auditor NÃO pode editar após em_conferencia/final
     if (isOnlyAuditor && (prevStatus === "em_conferencia" || prevStatus === "final")) {
       return NextResponse.json({ error: "Auditor não pode editar após em_conferencia/final" }, { status: 403 });
     }
@@ -160,18 +166,18 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       }
     }
 
-    // Só gestor pode mexer em auditoria final
+    // Só gestor pode editar auditoria final
     if (!isGestor && prevStatus === "final") {
       return NextResponse.json({ error: "Somente gestor pode editar auditoria final" }, { status: 403 });
     }
 
-    // 4) Monta patch
+    // 4) Patch (apenas campos existentes)
     const patch: Partial<AudRow> & { status?: Status } = {};
 
-    // campos editáveis
-    if (body?.leitura_agua !== undefined) patch.leitura_agua = body.leitura_agua ?? null;
-    if (body?.leitura_energia !== undefined) patch.leitura_energia = body.leitura_energia ?? null;
-    if (body?.leitura_gas !== undefined) patch.leitura_gas = body.leitura_gas ?? null;
+    if (body?.agua_leitura !== undefined) patch.agua_leitura = toNumberOrNull(body.agua_leitura);
+    if (body?.energia_leitura !== undefined) patch.energia_leitura = toNumberOrNull(body.energia_leitura);
+    if (body?.gas_leitura !== undefined) patch.gas_leitura = toNumberOrNull(body.gas_leitura);
+
     if (body?.observacoes !== undefined) patch.observacoes = body.observacoes ?? null;
 
     if (body?.foto_agua_url !== undefined) patch.foto_agua_url = body.foto_agua_url ?? null;
@@ -180,12 +186,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     if (nextStatus) patch.status = nextStatus;
 
-    // nada pra salvar
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ ok: true, auditoria: aud });
     }
 
-    // 5) Update auditoria
+    // 5) Update
     const { data: updatedRaw, error: updErr } = await (supabase.from("auditorias") as any)
       .update(patch)
       .eq("id", id)
@@ -194,12 +199,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         id,
         condominio_id,
         auditor_id,
-        ano_mes,
         mes_ref,
         status,
-        leitura_agua,
-        leitura_energia,
-        leitura_gas,
+        agua_leitura,
+        energia_leitura,
+        gas_leitura,
         observacoes,
         foto_agua_url,
         foto_energia_url,
@@ -212,16 +216,21 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     const updated = (updatedRaw ?? null) as AudRow | null;
 
-    // 6) Log de status (se mudou)
+    // 6) Log de status (schema REAL: actor_id / actor_role / note)
     if (nextStatus && normalizeStatus(aud.status) !== nextStatus) {
+      const note =
+        typeof body?.note === "string" && body.note.trim().length > 0 ? body.note.trim().slice(0, 500) : null;
+
       const logPayload = {
         auditoria_id: id,
         from_status: prevStatus,
         to_status: nextStatus,
-        changed_by: user.id,
+        actor_id: user.id,
+        actor_role: role,
+        note,
       };
 
-      // log não deve quebrar o patch
+      // log NÃO pode quebrar o patch
       await (supabase.from("auditoria_status_logs") as any).insert(logPayload);
     }
 
