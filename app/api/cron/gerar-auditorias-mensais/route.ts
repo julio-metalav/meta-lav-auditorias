@@ -8,57 +8,47 @@ function sha256(s: string) {
   return crypto.createHash("sha256").update(String(s ?? ""), "utf8").digest("hex");
 }
 
-function getTokenFromAuthHeader(auth: string | null) {
-  const raw = String(auth ?? "").trim();
+function norm(s: string | null | undefined) {
+  return String(s ?? "").trim();
+}
+
+function takeBearerOrRaw(auth: string | null) {
+  const raw = norm(auth);
   if (!raw) return "";
   if (raw.toLowerCase().startsWith("bearer ")) return raw.slice(7).trim();
-  return raw; // se vier sem "Bearer"
+  return raw;
 }
 
-function readAnyToken(req: Request) {
-  // Prioridades:
-  // 1) Authorization: Bearer TOKEN
-  // 2) x-cron-secret: TOKEN
-  // 3) ?token=TOKEN
-  const authHeader = req.headers.get("authorization");
-  const tokenFromAuth = getTokenFromAuthHeader(authHeader);
-  if (tokenFromAuth) return tokenFromAuth;
-
-  const x = req.headers.get("x-cron-secret");
-  if (x) return String(x).trim();
-
+function pickReqToken(req: Request) {
   const url = new URL(req.url);
-  const q = url.searchParams.get("token");
-  if (q) return String(q).trim();
 
-  return "";
+  // 1) Authorization: Bearer TOKEN
+  const t1 = takeBearerOrRaw(req.headers.get("authorization"));
+  if (t1) return { token: t1, source: "authorization" as const };
+
+  // 2) x-cron-secret: TOKEN
+  const t2 = norm(req.headers.get("x-cron-secret"));
+  if (t2) return { token: t2, source: "x-cron-secret" as const };
+
+  // 3) ?token=TOKEN
+  const t3 = norm(url.searchParams.get("token"));
+  if (t3) return { token: t3, source: "query" as const };
+
+  return { token: "", source: "none" as const };
 }
 
-function canSeeDiag(req: Request) {
-  // Diagnóstico só com PIN de emergência (para não vazar info de graça)
-  const pinEnv = String(process.env.EMERGENCY_PIN ?? "").trim();
+function pickEnvToken() {
+  // aceita CRON_SECRET = "TOKEN" ou "Bearer TOKEN"
+  const raw = norm(process.env.CRON_SECRET);
+  const token = raw.toLowerCase().startsWith("bearer ") ? raw.slice(7).trim() : raw;
+  return { raw, token };
+}
+
+function isEmergencyOk(req: Request) {
+  const pinEnv = norm(process.env.EMERGENCY_PIN);
   if (!pinEnv) return false;
-
-  const pinHeader = String(req.headers.get("x-emergency-pin") ?? "").trim();
-  if (!pinHeader) return false;
-
-  return pinHeader === pinEnv;
-}
-
-function isAuthorized(req: Request) {
-  const secretRaw = String(process.env.CRON_SECRET ?? "").trim();
-  if (!secretRaw) return { ok: false, code: 500 as const, msg: "CRON_SECRET não configurado" };
-
-  // Aceita env com ou sem "Bearer "
-  const envIsBearer = secretRaw.toLowerCase().startsWith("bearer ");
-  const envToken = (envIsBearer ? secretRaw.slice(7) : secretRaw).trim();
-
-  const token = readAnyToken(req);
-  const ok = token && token === envToken;
-
-  if (!ok) return { ok: false, code: 401 as const, msg: "Não autenticado", envToken, token };
-
-  return { ok: true, code: 200 as const, msg: "ok", envToken, token };
+  const pinReq = norm(req.headers.get("x-emergency-pin"));
+  return !!pinReq && pinReq === pinEnv;
 }
 
 function monthISO(d = new Date()) {
@@ -71,53 +61,67 @@ export async function POST(req: Request) {
   const url = new URL(req.url);
   const wantDiag = url.searchParams.get("diag") === "1";
 
-  // 1) Auth
-  const auth = isAuthorized(req);
+  // --- DIAG: libera se emergency pin bater (mesmo sem token correto)
+  if (wantDiag && isEmergencyOk(req)) {
+    const reqTok = pickReqToken(req);
+    const envTok = pickEnvToken();
 
-  // Diagnóstico (somente se mandar x-emergency-pin correto)
-  if (wantDiag && canSeeDiag(req)) {
-    const secretRaw = String(process.env.CRON_SECRET ?? "").trim();
-    const envIsBearer = secretRaw.toLowerCase().startsWith("bearer ");
-    const envToken = (envIsBearer ? secretRaw.slice(7) : secretRaw).trim();
-
-    const token = readAnyToken(req);
-
-    return NextResponse.json(
-      {
-        ok_auth: auth.ok,
-        // hashes (não expõe segredo)
-        envToken_sha256: sha256(envToken),
-        reqToken_sha256: sha256(token),
-        // metadados úteis
-        envToken_len: envToken.length,
-        reqToken_len: token.length,
-        envStartsWithBearer: envIsBearer,
-        hasAuthorizationHeader: !!req.headers.get("authorization"),
-        hasXCronSecretHeader: !!req.headers.get("x-cron-secret"),
-        hasQueryToken: url.searchParams.has("token"),
-        // para pegar pegadinha de espaços
-        envToken_preview: envToken.slice(0, 4) + "..." + envToken.slice(-4),
-        reqToken_preview: token.slice(0, 4) + "..." + token.slice(-4),
+    return NextResponse.json({
+      ok: true,
+      diag: true,
+      received: {
+        source: reqTok.source,
+        token_len: reqTok.token.length,
+        token_sha256: reqTok.token ? sha256(reqTok.token) : null,
       },
-      { status: 200 }
-    );
+      env: {
+        cron_secret_is_set: !!norm(process.env.CRON_SECRET),
+        cron_secret_raw_len: envTok.raw.length,
+        cron_secret_token_len: envTok.token.length,
+        cron_secret_token_sha256: envTok.token ? sha256(envTok.token) : null,
+        emergency_pin_is_set: !!norm(process.env.EMERGENCY_PIN),
+      },
+      headers_seen: {
+        has_authorization: !!norm(req.headers.get("authorization")),
+        has_x_cron_secret: !!norm(req.headers.get("x-cron-secret")),
+        has_x_emergency_pin: !!norm(req.headers.get("x-emergency-pin")),
+      },
+    });
   }
 
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.msg }, { status: auth.code });
+  // --- AUTH normal (exige CRON_SECRET)
+  const envTok = pickEnvToken();
+  if (!envTok.token) {
+    return NextResponse.json({ error: "CRON_SECRET não configurado" }, { status: 500 });
   }
 
-  // 2) Supabase Admin client
+  const reqTok = pickReqToken(req);
+  if (!reqTok.token || reqTok.token !== envTok.token) {
+    // se quiser diag e tiver emergency pin errado/ausente, mostra motivo sem vazar segredo
+    if (wantDiag) {
+      return NextResponse.json(
+        {
+          error: "Não autenticado",
+          diag_hint: "Use x-emergency-pin correto para liberar diag=1",
+          received: { source: reqTok.source, token_len: reqTok.token.length, token_sha256: reqTok.token ? sha256(reqTok.token) : null },
+          env: { cron_secret_token_len: envTok.token.length, cron_secret_token_sha256: sha256(envTok.token) },
+        },
+        { status: 401 }
+      );
+    }
+
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  }
+
+  // --- Supabase Admin client
   const sb = supabaseAdmin();
 
-  // 3) Qual mês criar? (mês corrente, no formato YYYY-MM-01)
+  // --- mês (corrente)
   const mes_ref = monthISO(new Date());
 
-  // 4) Pega condomínios ativos
+  // --- condomínios ativos
   const r1 = await sb.from("condominios").select("id, ativo");
-  if (r1.error) {
-    return NextResponse.json({ error: r1.error.message }, { status: 500 });
-  }
+  if (r1.error) return NextResponse.json({ error: r1.error.message }, { status: 500 });
 
   const rows = (r1.data ?? []) as any[];
   const ativos = rows.filter((c) => c?.ativo === true).map((c) => ({ id: String(c.id) }));
@@ -126,8 +130,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, mes_ref, criadas: 0, msg: "Nenhum condomínio ativo." });
   }
 
-  // 5) Monta auditorias do mês (idempotente)
-  // Observação: assume que existe UNIQUE (condominio_id, mes_ref) no banco.
+  // --- auditorias do mês (idempotente)
   const payload = ativos.map((c) => ({
     condominio_id: c.id,
     mes_ref,
@@ -135,15 +138,12 @@ export async function POST(req: Request) {
     auditor_id: null,
   }));
 
-  // 6) Upsert sem sobrescrever (ignora duplicadas)
   const r2 = await sb
     .from("auditorias")
     .upsert(payload as any, { onConflict: "condominio_id,mes_ref", ignoreDuplicates: true })
     .select("id");
 
-  if (r2.error) {
-    return NextResponse.json({ error: r2.error.message }, { status: 500 });
-  }
+  if (r2.error) return NextResponse.json({ error: r2.error.message }, { status: 500 });
 
   const criadas = Array.isArray(r2.data) ? r2.data.length : 0;
 
