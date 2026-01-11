@@ -97,6 +97,44 @@ function Chip({
   );
 }
 
+function Modal({
+  open,
+  title,
+  children,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+
+      <div className="relative w-full max-w-md rounded-2xl border bg-white p-4 shadow-xl">
+        <div className="mb-2 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-gray-900">{title}</div>
+          </div>
+
+          <button
+            type="button"
+            className="rounded-lg border px-2 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+            onClick={onClose}
+          >
+            Fechar
+          </button>
+        </div>
+
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export default function AuditoriasPage() {
   const [me, setMe] = useState<Me | null>(null);
 
@@ -120,6 +158,12 @@ export default function AuditoriasPage() {
     auditor_id: "",
   });
 
+  // Modal reabrir
+  const [reopenOpen, setReopenOpen] = useState(false);
+  const [reopenTarget, setReopenTarget] = useState<Aud | null>(null);
+  const [reopenMotivo, setReopenMotivo] = useState("");
+  const [reopenSaving, setReopenSaving] = useState(false);
+
   const condoLabel = useMemo(() => {
     const m = new Map<string, string>();
     condos.forEach((c) => m.set(c.id, `${c.nome} • ${c.cidade}/${c.uf}`));
@@ -131,6 +175,21 @@ export default function AuditoriasPage() {
     auditores.forEach((u) => m.set(u.id, u.email ?? u.id));
     return m;
   }, [auditores]);
+
+  function openReopenModal(a: Aud) {
+    setErr(null);
+    setOk(null);
+    setReopenTarget(a);
+    setReopenMotivo("");
+    setReopenOpen(true);
+  }
+
+  function closeReopenModal() {
+    if (reopenSaving) return;
+    setReopenOpen(false);
+    setReopenTarget(null);
+    setReopenMotivo("");
+  }
 
   async function carregar() {
     setLoading(true);
@@ -216,27 +275,37 @@ export default function AuditoriasPage() {
     }
   }
 
-  async function reabrirAuditoria(id: string) {
-    const motivo = window.prompt("Motivo da reabertura (obrigatório):");
-    if (!motivo || !motivo.trim()) return;
+  async function confirmarReabrir() {
+    const a = reopenTarget;
+    if (!a) return;
+
+    const motivo = reopenMotivo.trim();
+    if (!motivo) {
+      setErr("Motivo da reabertura é obrigatório.");
+      return;
+    }
 
     setErr(null);
     setOk(null);
+    setReopenSaving(true);
 
     try {
-      const res = await fetch(`/api/auditorias/${id}/reabrir`, {
+      const res = await fetch(`/api/auditorias/${a.id}/reabrir`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ motivo: motivo.trim() }),
+        body: JSON.stringify({ motivo }),
       });
 
       const json = await safeJson(res);
       if (!res.ok) throw new Error(json?.error ?? "Erro ao reabrir auditoria");
 
       setOk("Auditoria reaberta ✅");
+      closeReopenModal();
       await carregar();
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao reabrir");
+    } finally {
+      setReopenSaving(false);
     }
   }
 
@@ -296,6 +365,34 @@ export default function AuditoriasPage() {
     return { total, counts };
   }, [filtered]);
 
+  const reopenTitle = useMemo(() => {
+    if (!reopenTarget) return "Reabrir auditoria";
+    const condo =
+      reopenTarget.condominios?.nome
+        ? `${reopenTarget.condominios.nome} • ${reopenTarget.condominios.cidade}/${reopenTarget.condominios.uf}`
+        : condoLabel.get(reopenTarget.condominio_id) ?? reopenTarget.condominio_id;
+
+    return `Reabrir: ${condo}`;
+  }, [reopenTarget, condoLabel]);
+
+  const reopenDetails = useMemo(() => {
+    if (!reopenTarget) return null;
+
+    const st = normStatus(reopenTarget.status);
+    const audLabel =
+      (reopenTarget.auditor_id ? auditorEmailById.get(reopenTarget.auditor_id) : null) ??
+      reopenTarget.profiles?.email ??
+      (reopenTarget.auditor_id ?? "—");
+
+    return {
+      mes: pickMonth(reopenTarget) || "-",
+      status: statusLabel(reopenTarget.status),
+      st,
+      auditor: audLabel,
+      id: reopenTarget.id,
+    };
+  }, [reopenTarget, auditorEmailById]);
+
   return (
     <div className="mx-auto max-w-5xl p-4 sm:p-6">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -307,7 +404,7 @@ export default function AuditoriasPage() {
         <button
           className="shrink-0 rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
           onClick={carregar}
-          disabled={loading || saving}
+          disabled={loading || saving || reopenSaving}
         >
           {loading ? "Carregando..." : "Recarregar"}
         </button>
@@ -341,7 +438,7 @@ export default function AuditoriasPage() {
               placeholder="Buscar condomínio, auditor, ID..."
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              disabled={loading || saving}
+              disabled={loading || saving || reopenSaving}
             />
 
             <div className="text-xs text-gray-600">
@@ -366,7 +463,7 @@ export default function AuditoriasPage() {
               className="w-full rounded-xl border px-3 py-2"
               value={form.condominio_id}
               onChange={(e) => setForm((p) => ({ ...p, condominio_id: e.target.value }))}
-              disabled={saving || loading}
+              disabled={saving || loading || reopenSaving}
             >
               <option value="">Selecione…</option>
               {condos.map((c) => (
@@ -383,7 +480,7 @@ export default function AuditoriasPage() {
               className="w-full rounded-xl border px-3 py-2"
               value={form.ano_mes}
               onChange={(e) => setForm((p) => ({ ...p, ano_mes: e.target.value }))}
-              disabled={saving || loading}
+              disabled={saving || loading || reopenSaving}
               placeholder="2026-01-01"
             />
           </div>
@@ -394,7 +491,7 @@ export default function AuditoriasPage() {
               className="w-full rounded-xl border px-3 py-2"
               value={form.auditor_id}
               onChange={(e) => setForm((p) => ({ ...p, auditor_id: e.target.value }))}
-              disabled={saving || loading}
+              disabled={saving || loading || reopenSaving}
             >
               <option value="">—</option>
               {auditores.map((u) => (
@@ -410,7 +507,7 @@ export default function AuditoriasPage() {
           <button
             className="w-full rounded-xl bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 md:w-auto"
             onClick={criarAuditoria}
-            disabled={saving || loading}
+            disabled={saving || loading || reopenSaving}
           >
             {saving ? "Criando..." : "Criar"}
           </button>
@@ -464,16 +561,24 @@ export default function AuditoriasPage() {
                   Abrir
                 </a>
 
-                <button
-                  className={`flex-1 rounded-xl px-3 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
-                    podeReabrir ? "bg-orange-600 hover:bg-orange-700" : "bg-orange-300"
-                  }`}
-                  onClick={() => reabrirAuditoria(a.id)}
-                  disabled={!podeReabrir || loading || saving}
-                  title={podeReabrir ? "Reabrir auditoria" : "Só reabre quando estiver em conferência ou final"}
-                >
-                  Reabrir
-                </button>
+                {podeReabrir ? (
+                  <button
+                    className="flex-1 rounded-xl bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
+                    onClick={() => openReopenModal(a)}
+                    disabled={loading || saving || reopenSaving}
+                    title="Reabrir auditoria"
+                  >
+                    Reabrir
+                  </button>
+                ) : (
+                  <button
+                    className="flex-1 cursor-not-allowed rounded-xl bg-orange-200 px-3 py-2 text-sm font-semibold text-orange-900 opacity-70"
+                    disabled
+                    title="Só reabre quando estiver em conferência ou final"
+                  >
+                    Reabrir
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -536,16 +641,24 @@ export default function AuditoriasPage() {
                     Abrir
                   </a>
 
-                  <button
-                    className={`rounded-xl px-3 py-2 text-xs font-semibold text-white disabled:opacity-50 ${
-                      podeReabrir ? "bg-orange-600 hover:bg-orange-700" : "bg-orange-300"
-                    }`}
-                    onClick={() => reabrirAuditoria(a.id)}
-                    disabled={!podeReabrir || loading || saving}
-                    title={podeReabrir ? "Reabrir auditoria" : "Só reabre quando estiver em conferência ou final"}
-                  >
-                    Reabrir
-                  </button>
+                  {podeReabrir ? (
+                    <button
+                      className="rounded-xl bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
+                      onClick={() => openReopenModal(a)}
+                      disabled={loading || saving || reopenSaving}
+                      title="Reabrir auditoria"
+                    >
+                      Reabrir
+                    </button>
+                  ) : (
+                    <button
+                      className="cursor-not-allowed rounded-xl bg-orange-200 px-3 py-2 text-xs font-semibold text-orange-900 opacity-70"
+                      disabled
+                      title="Só reabre quando estiver em conferência ou final"
+                    >
+                      Reabrir
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -556,6 +669,67 @@ export default function AuditoriasPage() {
           )}
         </div>
       </div>
+
+      {/* MODAL REABRIR */}
+      <Modal open={reopenOpen} title={reopenTitle} onClose={closeReopenModal}>
+        {reopenDetails ? (
+          <div className="space-y-3">
+            <div className="rounded-xl border bg-gray-50 p-3 text-xs text-gray-700">
+              <div>
+                <b>Mês:</b> {reopenDetails.mes}
+              </div>
+              <div>
+                <b>Status atual:</b> {reopenDetails.status}
+              </div>
+              <div className="truncate">
+                <b>Auditor:</b> {reopenDetails.auditor}
+              </div>
+              <div className="truncate font-mono text-[11px] text-gray-500">
+                <b>ID:</b> {reopenDetails.id}
+              </div>
+            </div>
+
+            <div className="text-sm text-gray-700">
+              Ao reabrir, a auditoria volta para edição em campo. Use isso só quando for necessário.
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-gray-700">Motivo da reabertura (obrigatório)</label>
+              <textarea
+                className="w-full rounded-xl border px-3 py-2 text-sm"
+                rows={3}
+                value={reopenMotivo}
+                onChange={(e) => setReopenMotivo(e.target.value)}
+                disabled={reopenSaving}
+                placeholder="Ex: Foto de energia ilegível, precisa refazer em campo."
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="flex-1 rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
+                onClick={closeReopenModal}
+                disabled={reopenSaving}
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                className="flex-1 rounded-xl bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
+                onClick={confirmarReabrir}
+                disabled={reopenSaving || !reopenMotivo.trim()}
+                title={!reopenMotivo.trim() ? "Informe o motivo" : "Confirmar reabertura"}
+              >
+                {reopenSaving ? "Reabrindo..." : "Confirmar reabertura"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="text-sm text-gray-600">Selecione uma auditoria para reabrir.</div>
+        )}
+      </Modal>
 
       {/* me fica usado de leve (evita warning se você resolver ligar algo depois) */}
       {me ? null : null}
