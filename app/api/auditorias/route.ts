@@ -18,18 +18,16 @@ function normalizeStatus(input: any): Status {
   if (s === "em andamento") return "em_andamento";
   if (s === "finalizado") return "final";
   if (s === "aberto") return "aberta";
-  if (["aberta", "em_andamento", "em_conferencia", "final"].includes(s)) {
-    return s as Status;
-  }
+  if (["aberta", "em_andamento", "em_conferencia", "final"].includes(s)) return s as Status;
   return "aberta";
 }
 
 type Schema = {
   table: string;
-  condoCol: string;
-  monthCol: string;
-  auditorCol: string;
-  statusCol: string;
+  condoCol: string;   // condominio_id
+  monthCol: string;   // mes_ref ou ano_mes
+  auditorCol: string; // auditor_id
+  statusCol: string;  // status
 };
 
 async function detectSchema(admin: ReturnType<typeof supabaseAdmin>): Promise<Schema> {
@@ -43,55 +41,83 @@ async function detectSchema(admin: ReturnType<typeof supabaseAdmin>): Promise<Sc
     const { error } = await admin.from(c.table).select(c.condoCol).limit(1);
     if (!error) return c;
   }
-
   throw new Error("Nenhuma tabela de auditorias válida encontrada");
+}
+
+function pickMonthISO(row: any, sch: Schema) {
+  const raw = row?.[sch.monthCol];
+  return raw ? String(raw) : null;
 }
 
 export async function GET() {
   const ctx = await getUserAndRole();
-  if (!ctx?.user) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  }
+  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
   const role = ctx.role as Role | null;
   const isAuditor = role === "auditor";
   const isStaff = roleGte(role, "interno");
 
-  if (!isAuditor && !isStaff) {
-    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
-  }
+  if (!isAuditor && !isStaff) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
 
   const admin = supabaseAdmin();
   const sch = await detectSchema(admin);
 
   let query = admin.from(sch.table).select("*").order(sch.monthCol, { ascending: false });
 
+  // Auditor: vê auditorias atribuídas a ele OU auditorias de condomínios atribuídos a ele (auditor_condominios)
   if (isAuditor && !isStaff) {
-    const { data: rows, error } = await admin
+    const { data: ac, error: acErr } = await admin
       .from("auditor_condominios")
       .select("condominio_id")
       .eq("auditor_id", ctx.user.id);
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
-    }
+    if (acErr) return NextResponse.json({ error: acErr.message }, { status: 400 });
 
-    const condoIds = Array.from(new Set((rows ?? []).map(r => r.condominio_id)));
+    const condoIds = Array.from(new Set((ac ?? []).map((r: any) => r.condominio_id).filter(Boolean)));
 
     if (condoIds.length > 0) {
-      const inList = condoIds.map(id => `"${id}"`).join(",");
-      query = query.or(
-        `${sch.auditorCol}.eq."${ctx.user.id}",${sch.condoCol}.in.(${inList})`
-      );
+      const inList = condoIds.map((id) => `"${id}"`).join(",");
+      query = query.or(`${sch.auditorCol}.eq."${ctx.user.id}",${sch.condoCol}.in.(${inList})`);
     } else {
       query = query.eq(sch.auditorCol, ctx.user.id);
     }
   }
 
-  const { data, error } = await query;
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 });
-  }
+  const { data: rows, error } = await query;
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  return NextResponse.json({ data: data ?? [] });
-}
+  const list = rows ?? [];
+
+  // Enriquecimento: buscar nome/cidade/uf do condomínio e email do auditor
+  const condoIds = Array.from(new Set(list.map((r: any) => r[sch.condoCol]).filter(Boolean)));
+  const auditorIds = Array.from(new Set(list.map((r: any) => r[sch.auditorCol]).filter(Boolean)));
+
+  const [{ data: condos, error: condoErr }, { data: profs, error: profErr }] = await Promise.all([
+    condoIds.length
+      ? admin.from("condominios").select("id,nome,cidade,uf").in("id", condoIds)
+      : Promise.resolve({ data: [] as any[], error: null as any }),
+    auditorIds.length
+      ? admin.from("profiles").select("id,email,role").in("id", auditorIds)
+      : Promise.resolve({ data: [] as any[], error: null as any }),
+  ]);
+
+  if (condoErr) return NextResponse.json({ error: condoErr.message }, { status: 400 });
+  if (profErr) return NextResponse.json({ error: profErr.message }, { status: 400 });
+
+  const condoMap = new Map<string, any>((condos ?? []).map((c: any) => [c.id, c]));
+  const profMap = new Map<string, any>((profs ?? []).map((p: any) => [p.id, p]));
+
+  const normalized = list.map((r: any) => {
+    const condominio_id = r[sch.condoCol];
+    const auditor_id = r[sch.auditorCol];
+
+    return {
+      ...r,
+
+      // garante campos que a UI usa
+      condominio_id,
+      auditor_id: auditor_id ?? null,
+      mes_ref: pickMonthISO(r, sch),
+      status: normalizeStatus(r[sch.statusCol]),
+
+      // joi
