@@ -64,6 +64,12 @@ function pickCondoFromAssignment(a: AssignmentRow) {
   return c;
 }
 
+function monthISO(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}-01`;
+}
+
 export default function AtribuicoesPage() {
   const [auditores, setAuditores] = useState<UserRow[]>([]);
   const [condos, setCondos] = useState<Condo[]>([]);
@@ -85,6 +91,14 @@ export default function AtribuicoesPage() {
   const condoOptions = useMemo(() => {
     return [...condos].sort((a, b) => condoLabel(a).localeCompare(condoLabel(b)));
   }, [condos]);
+
+  const selectedAuditor = useMemo(() => {
+    return auditores.find((u) => u.id === form.auditor_id) ?? null;
+  }, [auditores, form.auditor_id]);
+
+  const selectedCondo = useMemo(() => {
+    return condos.find((c) => c.id === form.condominio_id) ?? null;
+  }, [condos, form.condominio_id]);
 
   async function carregar() {
     setLoading(true);
@@ -154,6 +168,16 @@ export default function AtribuicoesPage() {
     }
   }
 
+  function irParaCriarAuditoria() {
+    // Opção A: atribuição NÃO cria auditoria.
+    // Esse botão é só atalho pra ir pra tela de Auditorias e criar manualmente.
+    const qs = new URLSearchParams();
+    if (form.condominio_id) qs.set("condominio_id", form.condominio_id);
+    if (form.auditor_id) qs.set("auditor_id", form.auditor_id);
+    qs.set("mes_ref", monthISO());
+    window.location.href = `/auditorias?${qs.toString()}`;
+  }
+
   useEffect(() => {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -161,9 +185,50 @@ export default function AtribuicoesPage() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 16 }}>
+      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 12 }}>
         Atribuições (auditor → condomínios)
       </h1>
+
+      {/* Aviso Opção A */}
+      <div
+        style={{
+          padding: 14,
+          borderRadius: 16,
+          border: "1px solid #e8e8e8",
+          background: "#fbfbfb",
+          color: "#333",
+          marginBottom: 14,
+          lineHeight: 1.35,
+        }}
+      >
+        <div style={{ fontWeight: 800, marginBottom: 6 }}>Importante</div>
+        <div>
+          <b>Atribuir condomínio NÃO cria auditoria.</b> O auditor só verá itens em <b>Auditorias</b> quando existir uma
+          auditoria do mês para aquele condomínio. <br />
+          Ex.: para o “{selectedCondo ? condoLabel(selectedCondo) : "condomínio selecionado"}” aparecer para{" "}
+          <b>{selectedAuditor?.email ?? "o auditor"}</b>, crie uma auditoria do mês em <b>/auditorias</b>.
+        </div>
+
+        <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            onClick={irParaCriarAuditoria}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 14,
+              border: "1px solid #d8d8d8",
+              background: "white",
+              cursor: "pointer",
+              fontWeight: 700,
+            }}
+          >
+            Ir para Auditorias (criar do mês)
+          </button>
+
+          <div style={{ color: "#666", fontSize: 12, alignSelf: "center" }}>
+            Mês sugerido: <b>{monthISO()}</b>
+          </div>
+        </div>
+      </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ color: "#666" }}>{links.length} vínculos</div>
@@ -283,9 +348,7 @@ export default function AtribuicoesPage() {
                   }}
                 >
                   <div style={{ fontWeight: 800 }}>{email}</div>
-                  <div style={{ color: "#666", marginTop: 4 }}>
-                    {c ? condoLabel(c) : "-"}
-                  </div>
+                  <div style={{ color: "#666", marginTop: 4 }}>{c ? condoLabel(c) : "-"}</div>
                 </div>
               );
             })}
