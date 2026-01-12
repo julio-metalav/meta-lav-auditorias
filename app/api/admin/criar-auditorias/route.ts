@@ -15,24 +15,23 @@ export async function POST() {
   try {
     const { user, role } = await getUserAndRole();
 
-    if (!user) {
-      return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-    }
-
+    if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
     if (!roleGte(role as Role, "interno")) {
       return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
     }
 
-    // ✅ supabaseAdmin é FUNÇÃO -> precisa chamar
     const admin = supabaseAdmin();
 
-    // Executa a função canônica (com log)
-    const { data: result, error: rpcErr } = await admin.rpc("criar_auditorias_mensais");
+    // ✅ Força o overload (date) para não bater no "schema cache" ambiguo
+    // null = usa mês atual (sua função já faz isso)
+    const { data: result, error: rpcErr } = await admin.rpc("criar_auditorias_mensais", {
+      p_mes_ref: null,
+    });
+
     if (rpcErr) {
       return NextResponse.json({ error: rpcErr.message }, { status: 500 });
     }
 
-    // Retorna logs recentes
     const { data: logs, error: logErr } = await admin
       .from("auditorias_jobs_log")
       .select(
