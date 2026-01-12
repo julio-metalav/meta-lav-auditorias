@@ -1,17 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/app/components/AppShell";
 
 type Role = "auditor" | "interno" | "gestor";
-
-type Me = {
-  user: { id: string; email: string };
-  role: Role | null;
-};
-
-type AuditorUser = { id: string; email?: string | null; role?: Role | null };
 
 type Aud = {
   id: string;
@@ -25,37 +17,103 @@ type Aud = {
   profiles?: { email?: string | null; role?: Role | null } | null;
 };
 
-function roleGte(role: Role | null, min: Role) {
-  const rank: Record<Role, number> = { auditor: 1, interno: 2, gestor: 3 };
-  if (!role) return false;
-  return rank[role] >= rank[min];
+type AuditorUser = { id: string; email?: string | null; role?: Role | null };
+
+type Me = { user: { id: string; email: string }; role: Role | null };
+
+function monthISO(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}-01`;
 }
 
 function pickMonth(a: Aud) {
   return (a.ano_mes ?? a.mes_ref ?? "") as string;
 }
 
-export default function AuditoriasPage() {
-  const [me, setMe] = useState<Me | null>(null);
+function normStatus(s: any) {
+  const x = String(s ?? "").trim().toLowerCase();
+  if (x === "em conferencia") return "em_conferencia";
+  return x;
+}
 
+function statusLabel(s: any) {
+  const x = normStatus(s);
+  if (x === "aberta") return "aberta";
+  if (x === "em_andamento") return "em_andamento";
+  if (x === "em_conferencia") return "em_conferencia";
+  if (x === "final") return "final";
+  return String(s ?? "-");
+}
+
+export default function AuditoriasPage() {
   const [auditorias, setAuditorias] = useState<Aud[]>([]);
   const [auditores, setAuditores] = useState<AuditorUser[]>([]);
+  const [me, setMe] = useState<Me | null>(null);
 
-  const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
 
   const [q, setQ] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("todas");
 
-  const [form, setForm] = useState({
-    condominio_id: "",
-    ano_mes: "",
-    status: "aberta",
-    auditor_id: "",
-  });
+  // ✅ statusFilter vira inteligente pro auditor
+  // "a_fazer" = aberta + em_andamento
+  // "concluidas" = em_conferencia + final
+  // "todas" = tudo
+  const [statusFilter, setStatusFilter] = useState<"todas" | "a_fazer" | "concluidas" | "aberta" | "em_andamento" | "em_conferencia" | "final">(
+    "todas"
+  );
 
-  // mapas auxiliares
+  const isAuditor = (me?.role ?? null) === "auditor";
+
+  useEffect(() => {
+    // ✅ padrão operacional: auditor entra já vendo apenas o que pode agir
+    if (isAuditor) setStatusFilter("a_fazer");
+    else setStatusFilter("todas");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuditor]);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function load() {
+      setErr(null);
+      setOk(null);
+
+      try {
+        const [meRes, aRes, uRes] = await Promise.all([
+          fetch("/api/me", { cache: "no-store" }),
+          fetch("/api/auditorias", { cache: "no-store" }),
+          fetch("/api/users", { cache: "no-store" }),
+        ]);
+
+        const meJson = await meRes.json().catch(() => ({}));
+        if (!meRes.ok) throw new Error(meJson?.error ?? "Erro ao identificar usuário");
+
+        const aJson = await aRes.json().catch(() => ({}));
+        if (!aRes.ok) throw new Error(aJson?.error ?? "Erro ao carregar auditorias");
+
+        const uJson = await uRes.json().catch(() => ([] as any));
+        // /api/users às vezes pode falhar por permissão — não vamos quebrar a tela por isso
+        const users = uRes.ok ? (Array.isArray(uJson) ? uJson : uJson?.data ?? []) : [];
+
+        if (!alive) return;
+
+        setMe(meJson as Me);
+        setAuditorias(Array.isArray(aJson) ? (aJson as Aud[]) : []);
+        setAuditores((users as AuditorUser[]).filter((u) => u.role === "auditor"));
+      } catch (e: any) {
+        if (!alive) return;
+        setErr(e?.message ?? "Falha ao carregar");
+      }
+    }
+
+    load();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const auditorEmailById = useMemo(() => {
     const m = new Map<string, string>();
     auditores.forEach((u) => m.set(u.id, u.email ?? u.id));
@@ -65,315 +123,183 @@ export default function AuditoriasPage() {
   const condoLabel = useMemo(() => {
     const m = new Map<string, string>();
     auditorias.forEach((a) => {
-      const label = a.condominios ? `${a.condominios.nome} - ${a.condominios.cidade}/${a.condominios.uf}` : a.condominio_id;
-      m.set(a.condominio_id, label);
+      const c = a.condominios;
+      if (c?.id) m.set(c.id, `${c.nome} - ${c.cidade}/${c.uf}`);
+      if (a.condominio_id && c) m.set(a.condominio_id, `${c.nome} - ${c.cidade}/${c.uf}`);
     });
     return m;
   }, [auditorias]);
 
-  // role helpers
-  const role = (me?.role ?? null) as Role | null;
-  const isAuditor = role === "auditor" || role === null; // fallback: se ainda não carregou role, tratar como auditor
-  const isInterno = roleGte(role, "interno");
-  const isGestor = roleGte(role, "gestor");
+  const list = useMemo(() => {
+    const term = q.trim().toLowerCase();
 
-  function openHref(a: Aud) {
-    // auditor: tela de campo
-    if (isAuditor && !isInterno) return `/auditor/auditoria/${a.id}`;
-    // interno/gestor: tela operacional
-    return `/interno/auditoria/${a.id}`;
-  }
+    const filtered = auditorias.filter((a) => {
+      const s = normStatus(a.status);
 
-  function openTitle() {
-    if (isAuditor && !isInterno) return "Abrir (campo)";
-    return "Abrir (interno)";
-  }
-
-  useEffect(() => {
-    let dead = false;
-
-    async function load() {
-      setErr(null);
-      setOk(null);
-      setLoading(true);
-
-      try {
-        const [meRes, aRes, uRes] = await Promise.all([
-          fetch("/api/me", { cache: "no-store" }),
-          fetch("/api/auditorias", { cache: "no-store" }),
-          fetch("/api/usuarios", { cache: "no-store" }),
-        ]);
-
-        const meJson = await meRes.json().catch(() => ({}));
-        const aJson = await aRes.json().catch(() => ({}));
-        const uJson = await uRes.json().catch(() => ({}));
-
-        if (!meRes.ok) throw new Error(meJson?.error ?? "Erro ao carregar usuário");
-        if (!aRes.ok) throw new Error(aJson?.error ?? "Erro ao carregar auditorias");
-        // usuarios pode falhar para auditor (sem permissão). tudo bem.
-
-        if (!dead) {
-          setMe(meJson as Me);
-          setAuditorias((aJson?.data ?? []) as Aud[]);
-
-          // só popula auditores se vier
-          const arr = (uJson?.data ?? []) as AuditorUser[];
-          if (Array.isArray(arr) && arr.length) {
-            setAuditores(arr.filter((u) => u.role === "auditor"));
-          }
+      // ✅ regra operacional do auditor:
+      // default = A fazer (aberta + em_andamento)
+      // concluidas = em_conferencia + final
+      if (isAuditor) {
+        if (statusFilter === "a_fazer") {
+          if (!(s === "aberta" || s === "em_andamento")) return false;
+        } else if (statusFilter === "concluidas") {
+          if (!(s === "em_conferencia" || s === "final")) return false;
+        } else if (statusFilter !== "todas") {
+          if (s !== statusFilter) return false;
         }
-      } catch (e: any) {
-        if (!dead) setErr(e?.message ?? "Erro inesperado");
-      } finally {
-        if (!dead) setLoading(false);
+      } else {
+        // interno/gestor (mantém comportamento original)
+        if (statusFilter !== "todas" && s !== statusFilter) return false;
       }
-    }
 
-    load();
-    return () => {
-      dead = true;
-    };
-  }, []);
+      if (!term) return true;
 
-  // filtro
-  const filtered = useMemo(() => {
-    const qq = q.trim().toLowerCase();
-
-    return auditorias.filter((a) => {
-      if (statusFilter !== "todas" && String(a.status ?? "") !== statusFilter) return false;
-
-      if (!qq) return true;
+      const condo = a.condominios
+        ? `${a.condominios.nome} - ${a.condominios.cidade}/${a.condominios.uf}`
+        : condoLabel.get(a.condominio_id) ?? "";
 
       const audLabel =
         (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
         (a.profiles?.email ?? null) ??
         (a.auditor_id ?? "—");
 
-      const condo = (a.condominios ? `${a.condominios.nome} ${a.condominios.cidade} ${a.condominios.uf}` : "") as string;
+      const hay = [
+        a.id,
+        a.condominio_id,
+        condo,
+        pickMonth(a),
+        statusLabel(a.status),
+        audLabel,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
 
-      const bag = `${a.id} ${a.condominio_id} ${condo} ${audLabel} ${pickMonth(a)} ${a.status ?? ""}`.toLowerCase();
-      return bag.includes(qq);
+      return hay.includes(term);
     });
-  }, [auditorias, q, statusFilter, auditorEmailById]);
 
-  // criação só para interno/gestor (fica no arquivo como estava, mas travado por role)
-  async function criarAuditoria() {
-    setErr(null);
-    setOk(null);
+    // ordena mais recentes primeiro pelo mês
+    filtered.sort((a, b) => {
+      const am = pickMonth(a);
+      const bm = pickMonth(b);
+      if (am === bm) return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+      return bm.localeCompare(am);
+    });
 
-    if (!isInterno) return setErr("Sem permissão (apenas Interno/Gestor).");
+    return filtered;
+  }, [auditorias, q, statusFilter, isAuditor, condoLabel, auditorEmailById]);
 
-    if (!form.condominio_id) return setErr("Selecione o condomínio.");
-    if (!form.ano_mes) return setErr("Selecione o mês (ano_mes).");
-    if (!form.auditor_id) return setErr("Selecione o auditor (obrigatório).");
-
-    try {
-      const res = await fetch("/api/auditorias", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          condominio_id: form.condominio_id,
-          ano_mes: form.ano_mes,
-          status: form.status,
-          auditor_id: form.auditor_id || null,
-        }),
-      });
-
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json?.error ?? "Erro ao criar auditoria");
-
-      setOk("Auditoria criada ✅");
-      setAuditorias((prev) => [json?.auditoria as Aud, ...(prev ?? [])]);
-
-      setForm((f) => ({ ...f, condominio_id: "", auditor_id: "" }));
-    } catch (e: any) {
-      setErr(e?.message ?? "Erro inesperado");
+  const statusOptions = useMemo(() => {
+    if (isAuditor) {
+      return [
+        { value: "a_fazer", label: "A fazer" },
+        { value: "concluidas", label: "Concluídas" },
+        { value: "todas", label: "Todas" },
+      ] as const;
     }
-  }
-
-  async function reabrirAuditoria(id: string) {
-    setErr(null);
-    setOk(null);
-
-    if (!isInterno) return setErr("Sem permissão (apenas Interno/Gestor).");
-
-    try {
-      const res = await fetch(`/api/auditorias/${id}/reabrir`, { method: "POST" });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json?.error ?? "Erro ao reabrir auditoria");
-
-      setOk("Auditoria reaberta ✅");
-      setAuditorias((prev) =>
-        (prev ?? []).map((a) => (a.id === id ? { ...a, status: json?.auditoria?.status ?? a.status } : a))
-      );
-    } catch (e: any) {
-      setErr(e?.message ?? "Erro inesperado");
-    }
-  }
+    return [
+      { value: "todas", label: "Todas" },
+      { value: "aberta", label: "aberta" },
+      { value: "em_andamento", label: "em_andamento" },
+      { value: "em_conferencia", label: "em_conferencia" },
+      { value: "final", label: "final" },
+    ] as const;
+  }, [isAuditor]);
 
   return (
     <AppShell title="Auditorias">
-      <div className="mx-auto max-w-6xl">
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mx-auto max-w-5xl p-6">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Auditorias</h1>
             <div className="text-xs text-gray-500">
-              {isInterno ? "Lista (interno/gestor)" : "Minhas auditorias (auditor)"}
+              {isAuditor ? "Minhas auditorias (auditor)" : "Lista (interno/gestor)"}
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
-              className="w-[320px] rounded-xl border px-3 py-2 text-sm"
+              className="w-full rounded-xl border px-4 py-2 text-sm sm:w-[360px]"
               placeholder="Buscar condomínio, auditor, ID..."
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
 
             <select
-              className="rounded-xl border px-3 py-2 text-sm"
+              className="rounded-xl border px-4 py-2 text-sm"
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => setStatusFilter(e.target.value as any)}
+              title="Filtro de status"
             >
-              <option value="todas">Todas</option>
-              <option value="aberta">aberta</option>
-              <option value="em_andamento">em_andamento</option>
-              <option value="em_conferencia">em_conferencia</option>
-              <option value="final">final</option>
+              {statusOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
             </select>
           </div>
         </div>
 
-        {err && <div className="mb-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{err}</div>}
-        {ok && <div className="mb-3 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>}
+        {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
+        {ok && <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>}
 
-        {loading ? (
-          <div className="rounded-2xl border bg-white p-6 text-sm text-gray-600">Carregando...</div>
-        ) : filtered.length === 0 ? (
-          <div className="rounded-2xl border bg-white p-4 text-sm text-gray-600">Nenhuma auditoria no filtro.</div>
-        ) : (
-          <div className="rounded-2xl border bg-white">
-            <div className="grid grid-cols-12 gap-2 border-b bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
-              <div className="col-span-4">Condomínio</div>
-              <div className="col-span-2">Mês</div>
-              <div className="col-span-2">Status</div>
-              <div className="col-span-2">Auditor</div>
-              <div className="col-span-2 text-right">Ações</div>
-            </div>
+        <div className="overflow-hidden rounded-2xl border bg-white">
+          <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
+            <div className="col-span-5">Condomínio</div>
+            <div className="col-span-2">Mês</div>
+            <div className="col-span-2">Status</div>
+            <div className="col-span-2">Auditor</div>
+            <div className="col-span-1 text-right">Ações</div>
+          </div>
 
-            {filtered.map((a) => {
-              const label = condoLabel.get(a.condominio_id) ?? a.condominio_id;
-              const mes = pickMonth(a) || "—";
+          {list.length === 0 && (
+            <div className="px-4 py-6 text-sm text-gray-600">Nenhuma auditoria no filtro.</div>
+          )}
+
+          <div className="divide-y">
+            {list.map((a) => {
+              const condo =
+                a.condominios?.nome
+                  ? `${a.condominios.nome} - ${a.condominios.cidade}/${a.condominios.uf}`
+                  : condoLabel.get(a.condominio_id) ?? a.condominio_id;
+
               const audLabel =
                 (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
                 (a.profiles?.email ?? null) ??
                 (a.auditor_id ?? "—");
 
               return (
-                <div key={a.id} className="grid grid-cols-12 gap-2 border-b px-4 py-3 text-sm">
-                  <div className="col-span-4">
-                    <div className="font-medium">{label}</div>
+                <div key={a.id} className="grid grid-cols-12 items-center px-4 py-4 text-sm">
+                  <div className="col-span-5">
+                    <div className="font-semibold">{condo}</div>
                     <div className="text-xs text-gray-500">ID: {a.id}</div>
                   </div>
 
-                  <div className="col-span-2">{mes}</div>
-                  <div className="col-span-2">{String(a.status ?? "—")}</div>
-                  <div className="col-span-2">{audLabel}</div>
+                  <div className="col-span-2 font-mono text-xs text-gray-700">{pickMonth(a)}</div>
+                  <div className="col-span-2 font-mono text-xs text-gray-700">{statusLabel(a.status)}</div>
+                  <div className="col-span-2 text-gray-700">{audLabel}</div>
 
-                  <div className="col-span-2 flex justify-end gap-2">
-                    <Link
-                      className="rounded-xl border px-3 py-1.5 text-sm hover:bg-gray-50"
-                      href={openHref(a)}
-                      title={openTitle()}
+                  <div className="col-span-1 text-right">
+                    <a
+                      className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+                      href={isAuditor ? `/auditor/auditoria/${a.id}` : `/interno/auditoria/${a.id}`}
+                      title="Abrir"
                     >
                       Abrir
-                    </Link>
-
-                    {isInterno && (
-                      <button
-                        className="rounded-xl border px-3 py-1.5 text-sm hover:bg-gray-50"
-                        onClick={() => reabrirAuditoria(a.id)}
-                        title="Reabrir auditoria"
-                      >
-                        Reabrir
-                      </button>
-                    )}
+                    </a>
                   </div>
                 </div>
               );
             })}
           </div>
-        )}
+        </div>
 
-        {/* Criar auditoria (somente interno/gestor) */}
-        {isInterno && (
-          <div className="mt-6 rounded-2xl border bg-white p-4">
-            <div className="mb-3 text-sm font-semibold text-gray-800">Criando auditoria</div>
-
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-              <div>
-                <label className="mb-1 block text-xs text-gray-600">Condomínio</label>
-                <input
-                  className="w-full rounded-xl border px-3 py-2 text-sm"
-                  placeholder="condominio_id (uuid)"
-                  value={form.condominio_id}
-                  onChange={(e) => setForm((p) => ({ ...p, condominio_id: e.target.value }))}
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-gray-600">Mês (ano_mes)</label>
-                <input
-                  className="w-full rounded-xl border px-3 py-2 text-sm"
-                  placeholder="YYYY-MM-01"
-                  value={form.ano_mes}
-                  onChange={(e) => setForm((p) => ({ ...p, ano_mes: e.target.value }))}
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-gray-600">Status</label>
-                <select
-                  className="w-full rounded-xl border px-3 py-2 text-sm"
-                  value={form.status}
-                  onChange={(e) => setForm((p) => ({ ...p, status: e.target.value }))}
-                >
-                  <option value="aberta">aberta</option>
-                  <option value="em_andamento">em_andamento</option>
-                  <option value="em_conferencia">em_conferencia</option>
-                  <option value="final">final</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-gray-600">Auditor (obrigatório)</label>
-                <select
-                  className="w-full rounded-xl border px-3 py-2 text-sm"
-                  value={form.auditor_id}
-                  onChange={(e) => setForm((p) => ({ ...p, auditor_id: e.target.value }))}
-                >
-                  <option value="">Selecione…</option>
-                  {auditores.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.email ?? u.id}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="mt-3 flex justify-end">
-              <button className="rounded-xl bg-black px-4 py-2 text-sm text-white" onClick={criarAuditoria}>
-                Criar
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Nota */}
-        {!isInterno && (
-          <div className="mt-6 rounded-2xl border bg-white p-4 text-sm text-gray-700">
+        {isAuditor && (
+          <div className="mt-4 rounded-2xl border bg-white p-4 text-sm text-gray-600">
             <b>Obs:</b> como auditor, você só abre a auditoria na tela de campo (leituras/fotos) — ciclos são do Interno.
+            <div className="mt-1 text-xs text-gray-500">
+              Regra operacional: ao concluir em campo, a auditoria sai de “A fazer” e vai para “Concluídas”.
+            </div>
           </div>
         )}
       </div>
