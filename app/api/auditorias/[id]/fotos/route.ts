@@ -5,21 +5,29 @@ import { supabaseServer } from "@/lib/supabaseServer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// BUCKET do Supabase Storage (onde as fotos ficam)
+// BUCKET do Supabase Storage (onde os arquivos ficam)
 const BUCKET = "auditorias";
 
 type Role = "auditor" | "interno" | "gestor";
 type Status = "aberta" | "em_andamento" | "em_conferencia" | "final";
 
-// Mapeia o tipo de foto ("kind") para a coluna na tabela auditorias
+// Mapeia o tipo ("kind") para a coluna na tabela auditorias
 const kindToColumn: Record<string, string> = {
+  // fotos (campo)
   agua: "foto_agua_url",
   energia: "foto_energia_url",
   gas: "foto_gas_url",
   quimicos: "foto_quimicos_url",
   bombonas: "foto_bombonas_url",
   conector_bala: "foto_conector_bala_url",
+
+  // comprovante (fechamento) — UM SÓ
+  comprovante_fechamento: "comprovante_fechamento_url",
 };
+
+function isComprovante(kind: string) {
+  return kind === "comprovante_fechamento";
+}
 
 async function getRole(supabase: ReturnType<typeof supabaseServer>): Promise<Role | null> {
   const { data: auth, error: authErr } = await supabase.auth.getUser();
@@ -40,17 +48,39 @@ function normalizeStatus(input: any): Status {
 }
 
 function extFromFileName(name: string) {
-  const parts = name.split(".");
-  const ext = parts.length > 1 ? parts.pop()!.toLowerCase() : "jpg";
-  return ext.replace(/[^a-z0-9]/g, "") || "jpg";
+  const parts = String(name ?? "").split(".");
+  const ext = parts.length > 1 ? parts.pop()!.toLowerCase() : "bin";
+  return ext.replace(/[^a-z0-9]/g, "") || "bin";
 }
 
 function safeFileBase(name: string) {
-  return name
+  return String(name ?? "arquivo")
     .toLowerCase()
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9\-_.]/g, "")
     .slice(0, 60);
+}
+
+// Alguns celulares mandam file.type vazio; então validamos também por extensão.
+function looksLikePdfByExt(fileName: string) {
+  return extFromFileName(fileName) === "pdf";
+}
+
+function isAllowedContentType(kind: string, mime: string, fileName: string) {
+  // fotos: somente imagem
+  if (!isComprovante(kind)) return (mime || "").startsWith("image/");
+
+  // comprovante: imagem OU PDF (mime OU extensão)
+  const m = mime || "";
+  if (m.startsWith("image/")) return true;
+  if (m === "application/pdf") return true;
+  if (!m && looksLikePdfByExt(fileName)) return true;
+
+  return false;
+}
+
+function folderFor(kind: string) {
+  return isComprovante(kind) ? "comprovantes" : "fotos";
 }
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
@@ -82,7 +112,24 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
 
-    // 4) Carrega auditoria (precisa status + auditor_id pra regra de permissão)
+    // 4) FormData: kind + file
+    const form = await req.formData();
+    const kind = String(form.get("kind") ?? "");
+    const file = form.get("file") as File | null;
+
+    if (!kind || !kindToColumn[kind]) {
+      return NextResponse.json({ error: "Campo 'kind' inválido." }, { status: 400 });
+    }
+    if (!file) return NextResponse.json({ error: "Arquivo não enviado." }, { status: 400 });
+
+    if (!isAllowedContentType(kind, file.type, file.name)) {
+      return NextResponse.json(
+        { error: isComprovante(kind) ? "Envie imagem ou PDF." : "Envie apenas imagem." },
+        { status: 400 }
+      );
+    }
+
+    // 5) Carrega auditoria (precisa status + auditor_id pra regra de permissão)
     const { data: aud, error: audErr } = await admin
       .from("auditorias")
       .select("id,auditor_id,status")
@@ -102,22 +149,20 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
     }
 
-    // Auditor NÃO pode alterar após em_conferencia/final
-    if (role === "auditor" && !isStaff && (statusAtual === "em_conferencia" || statusAtual === "final")) {
-      return NextResponse.json({ error: "Auditor não pode alterar fotos após em_conferencia/final." }, { status: 403 });
-    }
-
-    // 5) FormData: kind + file
-    const form = await req.formData();
-    const kind = String(form.get("kind") ?? "");
-    const file = form.get("file") as File | null;
-
-    if (!kind || !kindToColumn[kind]) {
-      return NextResponse.json({ error: "Campo 'kind' inválido." }, { status: 400 });
-    }
-    if (!file) return NextResponse.json({ error: "Arquivo não enviado." }, { status: 400 });
-    if (!file.type.startsWith("image/")) {
-      return NextResponse.json({ error: "Envie apenas imagem." }, { status: 400 });
+    // Regras por tipo:
+    // - comprovante_fechamento: somente interno/gestor
+    // - fotos: auditor não altera após em_conferencia/final
+    if (isComprovante(kind)) {
+      if (!isStaff) {
+        return NextResponse.json(
+          { error: "Apenas interno/gestor podem enviar comprovante de fechamento." },
+          { status: 403 }
+        );
+      }
+    } else {
+      if (role === "auditor" && !isStaff && (statusAtual === "em_conferencia" || statusAtual === "final")) {
+        return NextResponse.json({ error: "Auditor não pode alterar fotos após em_conferencia/final." }, { status: 403 });
+      }
     }
 
     // 6) Upload no Storage
@@ -125,10 +170,10 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const ext = extFromFileName(file.name);
     const base = safeFileBase(file.name);
     const filename = `${kind}-${Date.now()}-${base}.${ext}`;
-    const path = `${auditoriaId}/${filename}`;
+    const path = `${auditoriaId}/${folderFor(kind)}/${filename}`;
 
     const up = await admin.storage.from(BUCKET).upload(path, bytes, {
-      contentType: file.type,
+      contentType: file.type || (looksLikePdfByExt(file.name) ? "application/pdf" : "application/octet-stream"),
       upsert: true,
     });
 
@@ -141,8 +186,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     // 7) Salva URL na coluna certa em auditorias
     const col = kindToColumn[kind];
 
-    // Retornamos SEMPRE no formato esperado pelo front: { auditoria: {...} }
-    // (mesmo que seja só a coluna atualizada).
     const { data: updatedRow, error: updErr } = await admin
       .from("auditorias")
       .update({ [col]: publicUrl })
@@ -156,8 +199,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       ok: true,
       kind,
       url: publicUrl,
-      auditoria: updatedRow, // ✅ o front do auditor espera isso
-      updated: updatedRow, // ✅ compat (se alguém já usa)
+      auditoria: updatedRow, // padrão do front
+      updated: updatedRow, // compat
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
