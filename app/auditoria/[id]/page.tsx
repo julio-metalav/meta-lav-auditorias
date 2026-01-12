@@ -29,12 +29,12 @@ export default function AuditoriaRedirectPage({ params }: { params: { id: string
     let dead = false;
 
     async function go() {
-      if (!isUuid(id)) {
-        setMsg("ID inválido.");
-        return;
-      }
-
       try {
+        if (!isUuid(id)) {
+          setMsg("ID inválido.");
+          return;
+        }
+
         setMsg("Verificando perfil…");
 
         const meRes = await fetch("/api/me", { cache: "no-store" });
@@ -44,3 +44,49 @@ export default function AuditoriaRedirectPage({ params }: { params: { id: string
           setMsg("Sessão inválida. Redirecionando para login…");
           router.replace("/login");
           return;
+        }
+
+        const role = (meJson?.role ?? null) as Role;
+
+        // REGRA DEFINITIVA:
+        // auditor -> tela de campo
+        // interno/gestor -> tela operacional
+        if (roleRank(role) >= roleRank("interno")) {
+          router.replace(`/interno/auditoria/${id}`);
+        } else {
+          router.replace(`/auditor/auditoria/${id}`);
+        }
+      } catch (_e) {
+        if (!dead) setMsg("Erro inesperado ao redirecionar.");
+      }
+    }
+
+    go();
+
+    return () => {
+      dead = true;
+    };
+  }, [id, router]);
+
+  return (
+    <AppShell title="Auditoria">
+      <div className="card" style={{ marginTop: 12 }}>
+        <div style={{ fontWeight: 800 }}>Redirecionando…</div>
+
+        <div className="small" style={{ marginTop: 6 }}>
+          {msg}
+        </div>
+
+        <div className="row" style={{ marginTop: 12 }}>
+          <button className="btn" onClick={() => router.push("/auditorias")}>
+            Voltar
+          </button>
+
+          <button className="btn" onClick={() => router.refresh()}>
+            Recarregar
+          </button>
+        </div>
+      </div>
+    </AppShell>
+  );
+}
