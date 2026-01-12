@@ -227,6 +227,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     return me.role ? `${base} - perfil: ${me.role}` : base;
   }, [me]);
 
+  const isAuditor = useMemo(() => me?.role === "auditor", [me?.role]);
+
   // ✅ regra: interno/gestor NÃO bloqueia por mismatch
   const mismatch = useMemo(() => {
     if (!me?.id) return false;
@@ -579,6 +581,19 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           <div className="mt-2 text-xs text-gray-500">
             Mês: <b>{aud ? pickMonth(aud) : "-"}</b> • ID: <span className="font-mono text-gray-400">{id}</span>
           </div>
+
+          {/* ✅ UX: volta clara quando já concluiu */}
+          {concluida && isAuditor && (
+            <div className="mt-3">
+              <a
+                className="inline-flex items-center rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-gray-50"
+                href="/auditorias"
+                title="Voltar para a lista das suas auditorias"
+              >
+                ← Voltar para minhas auditorias
+              </a>
+            </div>
+          )}
         </div>
 
         <button
