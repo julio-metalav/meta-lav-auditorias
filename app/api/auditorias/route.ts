@@ -60,6 +60,39 @@ async function detectSchema(admin: ReturnType<typeof supabaseAdmin>): Promise<Sc
   );
 }
 
+function normalizeRow(r: any, sch: Schema, condoMap: Map<string, any>, profMap: Map<string, any>) {
+  const condominio_id = r[sch.condoCol];
+  const auditor_id = r[sch.auditorCol];
+  const mes_ref = r[sch.monthCol];
+  const status = r[sch.statusCol];
+
+  // ✅ mantém tudo que veio do banco (inclui leituras/fotos/etc)
+  const out: any = { ...r };
+
+  // ✅ normaliza chaves que o frontend espera
+  out.condominio_id = condominio_id;
+  out.auditor_id = auditor_id;
+
+  // ✅ compat mês: frontend pode continuar lendo ano_mes
+  out.mes_ref = mes_ref;
+  out.ano_mes = mes_ref;
+
+  // ✅ status preservado
+  out.status = status;
+
+  // ✅ joins
+  out.condominios = condoMap.get(condominio_id) ?? null;
+  out.profiles = profMap.get(auditor_id) ?? null;
+
+  // ✅ compat LEITURAS: banco usa agua_leitura/energia_leitura/gas_leitura
+  // mas o frontend (auditor/auditoria/[id]) usa leitura_agua/leitura_energia/leitura_gas
+  if (out.leitura_agua === undefined && out.agua_leitura !== undefined) out.leitura_agua = out.agua_leitura;
+  if (out.leitura_energia === undefined && out.energia_leitura !== undefined) out.leitura_energia = out.energia_leitura;
+  if (out.leitura_gas === undefined && out.gas_leitura !== undefined) out.leitura_gas = out.gas_leitura;
+
+  return out;
+}
+
 export async function GET() {
   const ctx = await getUserAndRole();
   if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
@@ -80,7 +113,6 @@ export async function GET() {
   try {
     const sch = await detectSchema(admin);
 
-    // ⚠️ Aqui pode vir MUITA coisa (leituras, fotos, observações etc) — é exatamente o que queremos.
     let q = admin.from(sch.table).select("*").order(sch.monthCol, { ascending: false });
 
     if (canAuditor && !canStaff) {
@@ -107,41 +139,10 @@ export async function GET() {
     const condoMap = new Map<string, any>((condos ?? []).map((c: any) => [c.id, c]));
     const profMap = new Map<string, any>((profs ?? []).map((p: any) => [p.id, p]));
 
-    const normalized = list.map((r: any) => {
-      const condominio_id = r[sch.condoCol];
-      const auditor_id = r[sch.auditorCol];
-      const mes_ref = r[sch.monthCol];
-      const status = r[sch.statusCol];
+    const normalized = list.map((r: any) => normalizeRow(r, sch, condoMap, profMap));
 
-      // ✅ mantém tudo que veio do banco (inclui leituras/fotos/etc)
-      const out: any = { ...r };
-
-      // ✅ normaliza chaves que o frontend espera
-      out.condominio_id = condominio_id;
-      out.auditor_id = auditor_id;
-
-      // ✅ compat mês: frontend pode continuar lendo ano_mes
-      out.mes_ref = mes_ref;
-      out.ano_mes = mes_ref;
-
-      // ✅ status preservado
-      out.status = status;
-
-      // ✅ joins
-      out.condominios = condoMap.get(condominio_id) ?? null;
-      out.profiles = profMap.get(auditor_id) ?? null;
-
-      // ✅ compat LEITURAS: seu banco hoje usa agua_leitura/energia_leitura/gas_leitura
-      // mas o frontend (auditor/auditoria/[id]) usa leitura_agua/leitura_energia/leitura_gas
-      // Então espelhamos, sem quebrar nada.
-      if (out.leitura_agua === undefined && out.agua_leitura !== undefined) out.leitura_agua = out.agua_leitura;
-      if (out.leitura_energia === undefined && out.energia_leitura !== undefined) out.leitura_energia = out.energia_leitura;
-      if (out.leitura_gas === undefined && out.gas_leitura !== undefined) out.leitura_gas = out.gas_leitura;
-
-      return out;
-    });
-
-    return NextResponse.json(normalized);
+    // ✅ IMPORTANTE: o frontend espera { data: [...] }
+    return NextResponse.json({ data: normalized });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
@@ -202,18 +203,19 @@ export async function POST(req: Request) {
     const { data, error } = await admin.from(sch.table).insert(insertRow).select("*").single();
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-    const savedMes = data[sch.monthCol];
+    // joins mínimos p/ normalização
+    const [{ data: condos }, { data: profs }] = await Promise.all([
+      admin.from("condominios").select("id,nome,cidade,uf").eq("id", data[sch.condoCol]).maybeSingle(),
+      admin.from("profiles").select("id,email,role").eq("id", data[sch.auditorCol]).maybeSingle(),
+    ]);
 
-    return NextResponse.json({
-      ...data,
+    const condoMap = new Map<string, any>(condos ? [[condos.id, condos]] : []);
+    const profMap = new Map<string, any>(profs ? [[profs.id, profs]] : []);
 
-      // ✅ normaliza/compat
-      condominio_id: data[sch.condoCol],
-      auditor_id: data[sch.auditorCol],
-      ano_mes: savedMes,
-      mes_ref: savedMes,
-      status: data[sch.statusCol],
-    });
+    const normalizedSaved = normalizeRow(data, sch, condoMap, profMap);
+
+    // ✅ IMPORTANTE: frontend normalmente espera { auditoria: ... }
+    return NextResponse.json({ auditoria: normalizedSaved });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
