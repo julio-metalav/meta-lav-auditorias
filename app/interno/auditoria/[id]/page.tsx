@@ -68,7 +68,6 @@ function monthISO(d = new Date()) {
 }
 
 function prevMonthISO(isoYYYYMM01: string) {
-  // iso = YYYY-MM-01
   const [y, m] = isoYYYYMM01.split("-").map((x) => Number(x));
   if (!y || !m) return isoYYYYMM01;
   const dt = new Date(y, m - 1, 1);
@@ -103,11 +102,11 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
 
-  // ciclos (apuração)
+  // ciclos
   const [ciclos, setCiclos] = useState<CicloItem[]>([]);
   const [savingCiclos, setSavingCiclos] = useState(false);
 
-  // leitura anterior encontrada automaticamente (se existir)
+  // leitura anterior automática (se existir)
   const [autoBase, setAutoBase] = useState<{ agua?: number | null; energia?: number | null; gas?: number | null } | null>(null);
 
   // modal base manual
@@ -156,21 +155,21 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       if (!found) throw new Error("Auditoria não encontrada.");
       setAud(found);
 
-      // ciclos
+      // ✅ ciclos: agora sempre vem a lista completa em json.itens (ou json.data)
       const cRes = await fetch(`/api/auditorias/${auditoriaId}/ciclos`, { cache: "no-store" });
       const cJson = await safeJson(cRes);
-      if (cRes.ok) {
-        const list = Array.isArray(cJson) ? (cJson as any[]) : (cJson?.data ?? []);
-        const normalized: CicloItem[] = (list ?? []).map((x: any) => ({
-          maquina_tag: String(x.maquina_tag ?? x.tag ?? ""),
-          tipo: x.tipo ?? null,
-          ciclos: Number(x.ciclos ?? 0),
-        }));
-        setCiclos(normalized.filter((x) => x.maquina_tag));
-      }
+      if (!cRes.ok) throw new Error(cJson?.error ?? "Erro ao carregar ciclos");
+
+      const list = (cJson?.itens ?? cJson?.data ?? []) as any[];
+      const normalized: CicloItem[] = (list ?? []).map((x: any) => ({
+        maquina_tag: String(x.maquina_tag ?? ""),
+        tipo: x.tipo ?? null,
+        ciclos: Number(x.ciclos ?? 0),
+      }));
+
+      setCiclos(normalized.filter((x) => x.maquina_tag));
 
       // tenta achar leitura anterior automaticamente (interno consegue listar todas)
-      // estratégia simples: chama /api/auditorias (lista) e filtra por condominio + mês anterior
       try {
         const listRes = await fetch("/api/auditorias", { cache: "no-store" });
         const listJson = await safeJson(listRes);
@@ -196,24 +195,15 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         // ignora
       }
 
-      // decide se precisa pedir base manual:
-      // - se NÃO existe autoBase
-      // - e também NÃO existe base manual já salva na auditoria
-      // - e estamos no fluxo interno (staff)
+      // decide se precisa pedir base manual
       const hasManual =
-        found.agua_leitura_base !== null && found.agua_leitura_base !== undefined
-          ? true
-          : found.energia_leitura_base !== null && found.energia_leitura_base !== undefined
-          ? true
-          : found.gas_leitura_base !== null && found.gas_leitura_base !== undefined
-          ? true
-          : false;
+        (found.agua_leitura_base !== null && found.agua_leitura_base !== undefined) ||
+        (found.energia_leitura_base !== null && found.energia_leitura_base !== undefined) ||
+        (found.gas_leitura_base !== null && found.gas_leitura_base !== undefined);
 
-      // só pede se for staff; auditor não entra aqui normalmente, mas garante
       if (isStaff) {
-        const noAuto = !autoBase; // (nota: state autoBase ainda pode estar null aqui; vamos recalcular depois em outro effect)
+        const noAuto = !autoBase;
         if (!hasManual && noAuto) {
-          // pré-preenche com vazio (ou com leituras atuais se existirem? melhor NÃO)
           setBaseAgua("");
           setBaseEnergia("");
           setBaseGas("");
@@ -235,13 +225,9 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     if (!aud) return;
 
     const hasManual =
-      aud.agua_leitura_base !== null && aud.agua_leitura_base !== undefined
-        ? true
-        : aud.energia_leitura_base !== null && aud.energia_leitura_base !== undefined
-        ? true
-        : aud.gas_leitura_base !== null && aud.gas_leitura_base !== undefined
-        ? true
-        : false;
+      (aud.agua_leitura_base !== null && aud.agua_leitura_base !== undefined) ||
+      (aud.energia_leitura_base !== null && aud.energia_leitura_base !== undefined) ||
+      (aud.gas_leitura_base !== null && aud.gas_leitura_base !== undefined);
 
     if (!hasManual && !autoBase) setNeedBase(true);
     if (hasManual || autoBase) setNeedBase(false);
@@ -253,19 +239,13 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   }, [auditoriaId]);
 
   const baseUsada = useMemo(() => {
-    // prioridade: autoBase (mês anterior) > manual base salva na auditoria
-    const a = autoBase;
-    if (a) return { origem: "auto", ...a };
+    if (autoBase) return { origem: "auto", ...autoBase };
 
     if (aud) {
       const anyManual =
-        aud.agua_leitura_base !== null && aud.agua_leitura_base !== undefined
-          ? true
-          : aud.energia_leitura_base !== null && aud.energia_leitura_base !== undefined
-          ? true
-          : aud.gas_leitura_base !== null && aud.gas_leitura_base !== undefined
-          ? true
-          : false;
+        (aud.agua_leitura_base !== null && aud.agua_leitura_base !== undefined) ||
+        (aud.energia_leitura_base !== null && aud.energia_leitura_base !== undefined) ||
+        (aud.gas_leitura_base !== null && aud.gas_leitura_base !== undefined);
 
       if (anyManual) {
         return {
@@ -287,9 +267,9 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     const aE = aud.energia_leitura ?? null;
     const aG = aud.gas_leitura ?? null;
 
-    const cA = aA !== null && b.agua !== null && b.agua !== undefined ? Number(aA) - Number(b.agua ?? 0) : null;
-    const cE = aE !== null && b.energia !== null && b.energia !== undefined ? Number(aE) - Number(b.energia ?? 0) : null;
-    const cG = aG !== null && b.gas !== null && b.gas !== undefined ? Number(aG) - Number(b.gas ?? 0) : null;
+    const cA = aA !== null && b.agua !== null && b.agua !== undefined ? Number(aA) - Number((b as any).agua ?? 0) : null;
+    const cE = aE !== null && b.energia !== null && b.energia !== undefined ? Number(aE) - Number((b as any).energia ?? 0) : null;
+    const cG = aG !== null && (b as any).gas !== null && (b as any).gas !== undefined ? Number(aG) - Number((b as any).gas ?? 0) : null;
 
     return {
       agua: cA !== null && Number.isFinite(cA) ? cA : null,
@@ -320,7 +300,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const json = await safeJson(res);
       if (!res.ok) throw new Error(json?.error ?? "Erro ao salvar base");
 
-      // atualiza auditoria em memória
       setAud((prev) => {
         if (!prev) return prev;
         const b = json?.base ?? {};
@@ -351,8 +330,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
     setSavingCiclos(true);
     try {
-      // Mantém o endpoint que você já usa: /api/auditorias/[id]/ciclos
-      // Envia lista: [{maquina_tag, tipo, ciclos}]
       const res = await fetch(`/api/auditorias/${auditoriaId}/ciclos`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -414,7 +391,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
         {ok && <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>}
 
-        {/* Painel de consumo (usa base auto ou manual) */}
+        {/* Painel de consumo */}
         <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -422,11 +399,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               <div className="mt-1 text-xs text-gray-500">
                 Base:{" "}
                 <b>
-                  {baseUsada
-                    ? baseUsada.origem === "auto"
-                      ? "mês anterior (auto)"
-                      : "informada manualmente"
-                    : "não definida"}
+                  {baseUsada ? ((baseUsada as any).origem === "auto" ? "mês anterior (auto)" : "informada manualmente") : "não definida"}
                 </b>
               </div>
             </div>
@@ -450,7 +423,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 Atual: <b>{fmt(aud?.agua_leitura)}</b>
               </div>
               <div className="text-sm">
-                Base: <b>{fmt(baseUsada?.agua)}</b>
+                Base: <b>{fmt((baseUsada as any)?.agua)}</b>
               </div>
               <div className="mt-1 text-sm">
                 Consumo: <b>{consumo ? fmt(consumo.agua) : "—"}</b>
@@ -463,7 +436,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 Atual: <b>{fmt(aud?.energia_leitura)}</b>
               </div>
               <div className="text-sm">
-                Base: <b>{fmt(baseUsada?.energia)}</b>
+                Base: <b>{fmt((baseUsada as any)?.energia)}</b>
               </div>
               <div className="mt-1 text-sm">
                 Consumo: <b>{consumo ? fmt(consumo.energia) : "—"}</b>
@@ -476,7 +449,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 Atual: <b>{fmt(aud?.gas_leitura)}</b>
               </div>
               <div className="text-sm">
-                Base: <b>{fmt(baseUsada?.gas)}</b>
+                Base: <b>{fmt((baseUsada as any)?.gas)}</b>
               </div>
               <div className="mt-1 text-sm">
                 Consumo: <b>{consumo ? fmt(consumo.gas) : "—"}</b>
@@ -499,7 +472,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
             <div>
               <div className="text-sm font-semibold text-gray-800">Ciclos por máquina</div>
               <div className="mt-1 text-xs text-gray-500">
-                Aqui o Interno lança ciclos. O valor do ciclo vem do cadastro do ponto/máquina.
+                O Interno lança ciclos por máquina individual. A lista vem do cadastro do condomínio (condominio_maquinas).
               </div>
             </div>
 
@@ -522,11 +495,11 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
             <div className="divide-y">
               {ciclos.length === 0 && (
-                <div className="px-3 py-3 text-sm text-gray-600">Nenhum item encontrado (ou endpoint /ciclos ainda vazio).</div>
+                <div className="px-3 py-3 text-sm text-gray-600">Nenhuma máquina ativa cadastrada para este condomínio.</div>
               )}
 
               {ciclos.map((it, idx) => (
-                <div key={`${it.maquina_tag}-${idx}`} className="grid grid-cols-12 px-3 py-2 text-sm items-center">
+                <div key={it.maquina_tag} className="grid grid-cols-12 px-3 py-2 text-sm items-center">
                   <div className="col-span-5 font-mono text-xs text-gray-800">{it.maquina_tag}</div>
                   <div className="col-span-4 text-gray-700">{it.tipo ?? "—"}</div>
                   <div className="col-span-3 flex justify-end">
@@ -552,7 +525,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           </div>
 
           <div className="mt-3 text-xs text-gray-500">
-            Dica: depois disso a gente gera o <b>relatório financeiro</b> (condomínio, valor, conta) e o Interno anexa o comprovante.
+            Próximo: gerar o <b>relatório financeiro</b> (condomínio, valor, conta) e anexar o comprovante.
           </div>
         </div>
       </div>
@@ -565,18 +538,14 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               <div>
                 <div className="text-sm font-semibold">Leitura anterior não encontrada</div>
                 <div className="mt-1 text-xs text-gray-600">
-                  Isso acontece em condomínio novo ou histórico ainda vazio. Informe a leitura anterior/base para o cálculo do consumo deste mês.
+                  Condomínio novo ou histórico vazio. Informe a leitura anterior/base para o cálculo do consumo do mês.
                 </div>
                 <div className="mt-1 text-xs text-gray-500">
                   Condomínio: <b>{titulo}</b> • Mês: <b>{mesRef}</b> • Anterior: <b>{prevMes}</b>
                 </div>
               </div>
 
-              <button
-                className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
-                onClick={() => setNeedBase(false)}
-                disabled={savingBase}
-              >
+              <button className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50" onClick={() => setNeedBase(false)} disabled={savingBase}>
                 Fechar
               </button>
             </div>
@@ -620,11 +589,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2 justify-end">
-              <button
-                className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-                onClick={() => setNeedBase(false)}
-                disabled={savingBase}
-              >
+              <button className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" onClick={() => setNeedBase(false)} disabled={savingBase}>
                 Cancelar
               </button>
 
@@ -637,9 +602,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               </button>
             </div>
 
-            <div className="mt-3 text-xs text-gray-500">
-              Depois que o sistema tiver histórico, isso some: ele passa a usar automaticamente o mês anterior.
-            </div>
+            <div className="mt-3 text-xs text-gray-500">Depois que tiver histórico, isso some: o sistema usa automaticamente o mês anterior.</div>
           </div>
         </div>
       )}
