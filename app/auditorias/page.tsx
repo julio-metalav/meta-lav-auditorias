@@ -1,240 +1,210 @@
+// app/auditorias/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/app/components/AppShell";
 
-type Role = "auditor" | "interno" | "gestor";
+type Role = "auditor" | "interno" | "gestor" | null;
+
+type Me = {
+  user: { id: string; email: string };
+  role: Role;
+};
 
 type Aud = {
   id: string;
   condominio_id: string;
-  auditor_id: string | null;
-  ano_mes?: string | null;
   mes_ref?: string | null;
+  ano_mes?: string | null; // compat
   status: string | null;
   created_at?: string | null;
+
+  // joins (podem vir sem id, então NÃO dependa de condominios.id)
   condominios?: { nome: string; cidade: string; uf: string } | null;
   profiles?: { email?: string | null; role?: Role | null } | null;
 };
 
-type AuditorUser = { id: string; email?: string | null; role?: Role | null };
-
-type Me = { user: { id: string; email: string }; role: Role | null };
-
-function pickMonth(a: Aud) {
-  return (a.ano_mes ?? a.mes_ref ?? "") as string;
-}
-
-function normStatus(s: any) {
-  const x = String(s ?? "").trim().toLowerCase();
-  if (x === "em conferencia") return "em_conferencia";
-  return x;
+function monthLabel(a: Aud) {
+  return (a.mes_ref ?? a.ano_mes ?? "") as string;
 }
 
 function statusLabel(s: any) {
-  const x = normStatus(s);
-  if (x === "aberta") return "aberta";
-  if (x === "em_andamento") return "em_andamento";
-  if (x === "em_conferencia") return "em_conferencia";
-  if (x === "final") return "final";
-  return String(s ?? "-");
+  const v = String(s ?? "").trim().toLowerCase();
+  if (!v) return "—";
+  return v;
 }
 
-// ✅ aceita array puro OU {data:[...]} OU {auditorias:[...]} OU {rows:[...]}
-function extractArray<T = any>(payload: any): T[] {
-  if (Array.isArray(payload)) return payload as T[];
-  if (Array.isArray(payload?.data)) return payload.data as T[];
-  if (Array.isArray(payload?.auditorias)) return payload.auditorias as T[];
-  if (Array.isArray(payload?.rows)) return payload.rows as T[];
-  return [];
+function isUuid(v: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+}
+
+async function safeJson(res: Response) {
+  const ct = res.headers.get("content-type") ?? "";
+  const txt = await res.text().catch(() => "");
+  if (!txt) return {};
+  if (ct.includes("application/json")) {
+    try {
+      return JSON.parse(txt);
+    } catch {
+      return { _raw: txt };
+    }
+  }
+  try {
+    return JSON.parse(txt);
+  } catch {
+    return { _raw: txt };
+  }
 }
 
 export default function AuditoriasPage() {
-  const [auditorias, setAuditorias] = useState<Aud[]>([]);
-  const [auditores, setAuditores] = useState<AuditorUser[]>([]);
-  const [me, setMe] = useState<Me | null>(null);
+  const router = useRouter();
 
+  const [me, setMe] = useState<Me | null>(null);
+  const [auditorias, setAuditorias] = useState<Aud[]>([]);
+  const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const [q, setQ] = useState("");
-  const [statusFilter, setStatusFilter] = useState<
-    "todas" | "a_fazer" | "concluidas" | "aberta" | "em_andamento" | "em_conferencia" | "final"
-  >("todas");
+  const [filtro, setFiltro] = useState<"todas" | "a_fazer" | "concluidas">("todas");
 
-  const isAuditor = (me?.role ?? null) === "auditor";
+  const isStaff = useMemo(() => {
+    const r = me?.role ?? null;
+    return r === "interno" || r === "gestor";
+  }, [me?.role]);
 
-  useEffect(() => {
-    if (isAuditor) setStatusFilter("a_fazer");
-    else setStatusFilter("todas");
-  }, [isAuditor]);
+  async function carregar() {
+    setLoading(true);
+    setErr(null);
 
-  useEffect(() => {
-    let alive = true;
+    try {
+      const meRes = await fetch("/api/me", { cache: "no-store" });
+      const meJson = await safeJson(meRes);
+      if (!meRes.ok) throw new Error(meJson?.error ?? "Erro ao identificar usuário");
+      setMe(meJson as Me);
 
-    async function load() {
-      setErr(null);
+      const aRes = await fetch("/api/auditorias", { cache: "no-store" });
+      const aJson = await safeJson(aRes);
+      if (!aRes.ok) throw new Error(aJson?.error ?? "Erro ao carregar auditorias");
 
-      try {
-        const [meRes, aRes, uRes] = await Promise.all([
-          fetch("/api/me", { cache: "no-store" }),
-          fetch("/api/auditorias", { cache: "no-store" }),
-          fetch("/api/users", { cache: "no-store" }),
-        ]);
-
-        const meJson = await meRes.json().catch(() => ({}));
-        if (!meRes.ok) throw new Error(meJson?.error ?? "Erro ao identificar usuário");
-
-        const aJson = await aRes.json().catch(() => ({}));
-        if (!aRes.ok) throw new Error(aJson?.error ?? "Erro ao carregar auditorias");
-
-        const uJson = await uRes.json().catch(() => ({}));
-        const users = uRes.ok ? extractArray<AuditorUser>(uJson) : [];
-
-        const meObj: Me =
-          meJson?.user && typeof meJson?.role !== "undefined"
-            ? (meJson as Me)
-            : ({ user: meJson, role: (meJson?.role ?? null) as any } as any);
-
-        const auds = extractArray<Aud>(aJson);
-
-        if (!alive) return;
-
-        setMe(meObj);
-        setAuditorias(auds);
-        setAuditores(users.filter((u) => u.role === "auditor"));
-      } catch (e: any) {
-        if (!alive) return;
-        setErr(e?.message ?? "Falha ao carregar");
-      }
+      const list = Array.isArray(aJson) ? (aJson as Aud[]) : (aJson?.auditorias ?? []);
+      setAuditorias(list ?? []);
+    } catch (e: any) {
+      setErr(e?.message ?? "Falha ao carregar");
+    } finally {
+      setLoading(false);
     }
+  }
 
-    load();
-    return () => {
-      alive = false;
-    };
+  useEffect(() => {
+    carregar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const auditorEmailById = useMemo(() => {
-    const m = new Map<string, string>();
-    auditores.forEach((u) => m.set(u.id, u.email ?? u.id));
-    return m;
-  }, [auditores]);
-
-  const condoLabelByCondoId = useMemo(() => {
+  // label do condomínio sem depender de condominios.id
+  const condoLabelByAuditoriaId = useMemo(() => {
     const m = new Map<string, string>();
     auditorias.forEach((a) => {
       const c = a.condominios;
-      if (a.condominio_id && c?.nome) {
-        m.set(a.condominio_id, `${c.nome} - ${c.cidade}/${c.uf}`);
-      }
+      const label = c ? `${c.nome} - ${c.cidade}/${c.uf}` : a.condominio_id;
+      m.set(a.id, label);
     });
     return m;
   }, [auditorias]);
 
-  const statusOptions = useMemo(() => {
-    if (isAuditor) {
-      return [
-        { value: "a_fazer", label: "A fazer" },
-        { value: "concluidas", label: "Concluídas" },
-        { value: "todas", label: "Todas" },
-      ] as const;
-    }
-    return [
-      { value: "todas", label: "Todas" },
-      { value: "aberta", label: "aberta" },
-      { value: "em_andamento", label: "em_andamento" },
-      { value: "em_conferencia", label: "em_conferencia" },
-      { value: "final", label: "final" },
-    ] as const;
-  }, [isAuditor]);
-
-  const list = useMemo(() => {
+  const filtradas = useMemo(() => {
     const term = q.trim().toLowerCase();
 
-    const filtered = auditorias.filter((a) => {
-      const s = normStatus(a.status);
-
-      if (isAuditor) {
-        if (statusFilter === "a_fazer") {
-          if (!(s === "aberta" || s === "em_andamento")) return false;
-        } else if (statusFilter === "concluidas") {
-          if (!(s === "em_conferencia" || s === "final")) return false;
-        } else if (statusFilter !== "todas") {
-          if (s !== statusFilter) return false;
-        }
-      } else {
-        if (statusFilter !== "todas" && s !== statusFilter) return false;
-      }
-
-      if (!term) return true;
-
-      const condo =
-        a.condominios?.nome
-          ? `${a.condominios.nome} - ${a.condominios.cidade}/${a.condominios.uf}`
-          : condoLabelByCondoId.get(a.condominio_id) ?? "";
-
-      const audLabel =
-        (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
-        (a.profiles?.email ?? null) ??
-        (a.auditor_id ?? "—");
-
-      const hay = [a.id, a.condominio_id, condo, pickMonth(a), statusLabel(a.status), audLabel]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-
-      return hay.includes(term);
+    const base = auditorias.filter((a) => {
+      if (filtro === "a_fazer") return String(a.status ?? "").toLowerCase() !== "final";
+      if (filtro === "concluidas") return String(a.status ?? "").toLowerCase() === "final";
+      return true;
     });
 
-    filtered.sort((a, b) => {
-      const am = pickMonth(a);
-      const bm = pickMonth(b);
-      if (am === bm) return (b.created_at ?? "").localeCompare(a.created_at ?? "");
-      return bm.localeCompare(am);
-    });
+    if (!term) return base;
 
-    return filtered;
-  }, [auditorias, q, statusFilter, isAuditor, condoLabelByCondoId, auditorEmailById]);
+    return base.filter((a) => {
+      const condo = condoLabelByAuditoriaId.get(a.id) ?? "";
+      const auditorEmail = a.profiles?.email ?? "";
+      const mes = monthLabel(a) ?? "";
+      return (
+        String(a.id).toLowerCase().includes(term) ||
+        String(a.condominio_id).toLowerCase().includes(term) ||
+        String(condo).toLowerCase().includes(term) ||
+        String(auditorEmail).toLowerCase().includes(term) ||
+        String(mes).toLowerCase().includes(term)
+      );
+    });
+  }, [auditorias, q, filtro, condoLabelByAuditoriaId]);
+
+  function abrir(a: Aud) {
+    // interno/gestor abre “fechamento”
+    if (isStaff) return router.push(`/interno/auditoria/${a.id}`);
+    // auditor abre “campo”
+    return router.push(`/auditor/auditoria/${a.id}`);
+  }
 
   return (
     <AppShell title="Auditorias">
-      <div className="mx-auto max-w-5xl p-6">
-        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
+      <div className="mx-auto max-w-6xl p-6">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
             <h1 className="text-2xl font-semibold">Auditorias</h1>
-            <div className="text-xs text-gray-500">{isAuditor ? "Minhas auditorias (auditor)" : "Lista (interno/gestor)"}</div>
+            <div className="mt-1 text-sm text-gray-600">
+              {isStaff ? "Lista (interno/gestor)" : "Minhas auditorias (auditor)"}
+            </div>
+            <div className="mt-2 text-xs text-gray-500">
+              Debug: carregadas {auditorias.length} auditorias • no filtro {filtradas.length}
+            </div>
           </div>
 
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <input
-              className="w-full rounded-xl border px-4 py-2 text-sm sm:w-[360px]"
-              placeholder="Buscar condomínio, auditor, ID..."
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
+          <div className="flex flex-wrap items-center gap-2">
+            {/* ✅ CTA: criar auditoria (só interno/gestor) */}
+            {isStaff && (
+              <Link
+                href="/auditorias/nova"
+                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+                title="Criar nova auditoria"
+              >
+                + Nova auditoria
+              </Link>
+            )}
 
-            <select
-              className="rounded-xl border px-4 py-2 text-sm"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
-              title="Filtro de status"
+            <button
+              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+              onClick={carregar}
+              disabled={loading}
             >
-              {statusOptions.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+              {loading ? "Carregando..." : "Recarregar"}
+            </button>
           </div>
         </div>
 
         {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
 
-        <div className="mb-3 text-xs text-gray-500">
-          Debug: carregadas <b>{auditorias.length}</b> auditorias • no filtro <b>{list.length}</b>
+        {/* Filtros */}
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <input
+            className="w-full max-w-md rounded-2xl border px-4 py-2 text-sm"
+            placeholder="Buscar condomínio, auditor, ID..."
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+
+          <select
+            className="rounded-2xl border px-4 py-2 text-sm"
+            value={filtro}
+            onChange={(e) => setFiltro(e.target.value as any)}
+          >
+            <option value="todas">Todas</option>
+            <option value="a_fazer">A fazer</option>
+            <option value="concluidas">Concluídas</option>
+          </select>
         </div>
 
-        <div className="overflow-hidden rounded-2xl border bg-white">
+        {/* Tabela */}
+        <div className="overflow-hidden rounded-2xl border bg-white shadow-sm">
           <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
             <div className="col-span-5">Condomínio</div>
             <div className="col-span-2">Mês</div>
@@ -243,39 +213,35 @@ export default function AuditoriasPage() {
             <div className="col-span-1 text-right">Ações</div>
           </div>
 
-          {list.length === 0 && <div className="px-4 py-6 text-sm text-gray-600">Nenhuma auditoria no filtro.</div>}
-
           <div className="divide-y">
-            {list.map((a) => {
-              const condo =
-                a.condominios?.nome
-                  ? `${a.condominios.nome} - ${a.condominios.cidade}/${a.condominios.uf}`
-                  : condoLabelByCondoId.get(a.condominio_id) ?? a.condominio_id;
+            {filtradas.length === 0 && (
+              <div className="px-4 py-6 text-sm text-gray-600">Nenhuma auditoria no filtro.</div>
+            )}
 
-              const audLabel =
-                (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
-                (a.profiles?.email ?? null) ??
-                (a.auditor_id ?? "—");
-
+            {filtradas.map((a) => {
+              const condoLabel = condoLabelByAuditoriaId.get(a.id) ?? a.condominio_id;
+              const auditorEmail = a.profiles?.email ?? "—";
+              const mes = monthLabel(a);
               return (
-                <div key={a.id} className="grid grid-cols-12 items-center px-4 py-4 text-sm">
-                  <div className="col-span-5">
-                    <div className="font-semibold">{condo}</div>
-                    <div className="text-xs text-gray-500">ID: {a.id}</div>
+                <div key={a.id} className="grid grid-cols-12 items-center px-4 py-3 text-sm">
+                  <div className="col-span-5 min-w-0">
+                    <div className="font-semibold truncate">{condoLabel}</div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      ID: <span className="font-mono">{isUuid(a.id) ? a.id : String(a.id)}</span>
+                    </div>
                   </div>
 
-                  <div className="col-span-2 font-mono text-xs text-gray-700">{pickMonth(a)}</div>
-                  <div className="col-span-2 font-mono text-xs text-gray-700">{statusLabel(a.status)}</div>
-                  <div className="col-span-2 text-gray-700">{audLabel}</div>
+                  <div className="col-span-2 text-gray-700">{mes || "—"}</div>
+                  <div className="col-span-2 text-gray-700">{statusLabel(a.status)}</div>
+                  <div className="col-span-2 text-gray-700 truncate">{auditorEmail}</div>
 
-                  <div className="col-span-1 text-right">
-                    <a
-                      className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
-                      href={isAuditor ? `/auditor/auditoria/${a.id}` : `/interno/auditoria/${a.id}`}
-                      title="Abrir"
+                  <div className="col-span-1 flex justify-end">
+                    <button
+                      className="rounded-xl border px-3 py-1.5 text-sm hover:bg-gray-50"
+                      onClick={() => abrir(a)}
                     >
                       Abrir
-                    </a>
+                    </button>
                   </div>
                 </div>
               );
@@ -283,14 +249,13 @@ export default function AuditoriasPage() {
           </div>
         </div>
 
-        {isAuditor && (
-          <div className="mt-4 rounded-2xl border bg-white p-4 text-sm text-gray-600">
-            <b>Obs:</b> como auditor, você só abre a auditoria na tela de campo (leituras/fotos) — ciclos são do Interno.
-            <div className="mt-1 text-xs text-gray-500">
-              Regra operacional: ao concluir em campo, a auditoria sai de “A fazer” e vai para “Concluídas”.
-            </div>
+        {/* Observação */}
+        <div className="mt-4 rounded-2xl border bg-white p-4 text-sm text-gray-700">
+          <div className="font-semibold">Obs:</div>
+          <div className="mt-1 text-gray-600">
+            Auditor faz campo (leituras/fotos) e conclui. Interno lança ciclos, gera relatório financeiro e anexa comprovante.
           </div>
-        )}
+        </div>
       </div>
     </AppShell>
   );
