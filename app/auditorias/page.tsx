@@ -21,12 +21,6 @@ type AuditorUser = { id: string; email?: string | null; role?: Role | null };
 
 type Me = { user: { id: string; email: string }; role: Role | null };
 
-function monthISO(d = new Date()) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}-01`;
-}
-
 function pickMonth(a: Aud) {
   return (a.ano_mes ?? a.mes_ref ?? "") as string;
 }
@@ -56,21 +50,16 @@ export default function AuditoriasPage() {
 
   const [q, setQ] = useState("");
 
-  // ✅ statusFilter vira inteligente pro auditor
-  // "a_fazer" = aberta + em_andamento
-  // "concluidas" = em_conferencia + final
-  // "todas" = tudo
-  const [statusFilter, setStatusFilter] = useState<"todas" | "a_fazer" | "concluidas" | "aberta" | "em_andamento" | "em_conferencia" | "final">(
-    "todas"
-  );
+  // ✅ statusFilter inteligente pro auditor
+  const [statusFilter, setStatusFilter] = useState<
+    "todas" | "a_fazer" | "concluidas" | "aberta" | "em_andamento" | "em_conferencia" | "final"
+  >("todas");
 
   const isAuditor = (me?.role ?? null) === "auditor";
 
   useEffect(() => {
-    // ✅ padrão operacional: auditor entra já vendo apenas o que pode agir
     if (isAuditor) setStatusFilter("a_fazer");
     else setStatusFilter("todas");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuditor]);
 
   useEffect(() => {
@@ -94,7 +83,6 @@ export default function AuditoriasPage() {
         if (!aRes.ok) throw new Error(aJson?.error ?? "Erro ao carregar auditorias");
 
         const uJson = await uRes.json().catch(() => ([] as any));
-        // /api/users às vezes pode falhar por permissão — não vamos quebrar a tela por isso
         const users = uRes.ok ? (Array.isArray(uJson) ? uJson : uJson?.data ?? []) : [];
 
         if (!alive) return;
@@ -120,74 +108,17 @@ export default function AuditoriasPage() {
     return m;
   }, [auditores]);
 
-  const condoLabel = useMemo(() => {
+  // ✅ sem c.id (não existe no tipo)
+  const condoLabelByCondoId = useMemo(() => {
     const m = new Map<string, string>();
     auditorias.forEach((a) => {
       const c = a.condominios;
-      if (c?.id) m.set(c.id, `${c.nome} - ${c.cidade}/${c.uf}`);
-      if (a.condominio_id && c) m.set(a.condominio_id, `${c.nome} - ${c.cidade}/${c.uf}`);
+      if (a.condominio_id && c?.nome) {
+        m.set(a.condominio_id, `${c.nome} - ${c.cidade}/${c.uf}`);
+      }
     });
     return m;
   }, [auditorias]);
-
-  const list = useMemo(() => {
-    const term = q.trim().toLowerCase();
-
-    const filtered = auditorias.filter((a) => {
-      const s = normStatus(a.status);
-
-      // ✅ regra operacional do auditor:
-      // default = A fazer (aberta + em_andamento)
-      // concluidas = em_conferencia + final
-      if (isAuditor) {
-        if (statusFilter === "a_fazer") {
-          if (!(s === "aberta" || s === "em_andamento")) return false;
-        } else if (statusFilter === "concluidas") {
-          if (!(s === "em_conferencia" || s === "final")) return false;
-        } else if (statusFilter !== "todas") {
-          if (s !== statusFilter) return false;
-        }
-      } else {
-        // interno/gestor (mantém comportamento original)
-        if (statusFilter !== "todas" && s !== statusFilter) return false;
-      }
-
-      if (!term) return true;
-
-      const condo = a.condominios
-        ? `${a.condominios.nome} - ${a.condominios.cidade}/${a.condominios.uf}`
-        : condoLabel.get(a.condominio_id) ?? "";
-
-      const audLabel =
-        (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
-        (a.profiles?.email ?? null) ??
-        (a.auditor_id ?? "—");
-
-      const hay = [
-        a.id,
-        a.condominio_id,
-        condo,
-        pickMonth(a),
-        statusLabel(a.status),
-        audLabel,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-
-      return hay.includes(term);
-    });
-
-    // ordena mais recentes primeiro pelo mês
-    filtered.sort((a, b) => {
-      const am = pickMonth(a);
-      const bm = pickMonth(b);
-      if (am === bm) return (b.created_at ?? "").localeCompare(a.created_at ?? "");
-      return bm.localeCompare(am);
-    });
-
-    return filtered;
-  }, [auditorias, q, statusFilter, isAuditor, condoLabel, auditorEmailById]);
 
   const statusOptions = useMemo(() => {
     if (isAuditor) {
@@ -206,15 +137,61 @@ export default function AuditoriasPage() {
     ] as const;
   }, [isAuditor]);
 
+  const list = useMemo(() => {
+    const term = q.trim().toLowerCase();
+
+    const filtered = auditorias.filter((a) => {
+      const s = normStatus(a.status);
+
+      if (isAuditor) {
+        if (statusFilter === "a_fazer") {
+          if (!(s === "aberta" || s === "em_andamento")) return false;
+        } else if (statusFilter === "concluidas") {
+          if (!(s === "em_conferencia" || s === "final")) return false;
+        } else if (statusFilter !== "todas") {
+          if (s !== statusFilter) return false;
+        }
+      } else {
+        if (statusFilter !== "todas" && s !== statusFilter) return false;
+      }
+
+      if (!term) return true;
+
+      const condo =
+        a.condominios?.nome
+          ? `${a.condominios.nome} - ${a.condominios.cidade}/${a.condominios.uf}`
+          : condoLabelByCondoId.get(a.condominio_id) ?? "";
+
+      const audLabel =
+        (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
+        (a.profiles?.email ?? null) ??
+        (a.auditor_id ?? "—");
+
+      const hay = [a.id, a.condominio_id, condo, pickMonth(a), statusLabel(a.status), audLabel]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return hay.includes(term);
+    });
+
+    filtered.sort((a, b) => {
+      const am = pickMonth(a);
+      const bm = pickMonth(b);
+      if (am === bm) return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+      return bm.localeCompare(am);
+    });
+
+    return filtered;
+  }, [auditorias, q, statusFilter, isAuditor, condoLabelByCondoId, auditorEmailById]);
+
   return (
     <AppShell title="Auditorias">
       <div className="mx-auto max-w-5xl p-6">
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Auditorias</h1>
-            <div className="text-xs text-gray-500">
-              {isAuditor ? "Minhas auditorias (auditor)" : "Lista (interno/gestor)"}
-            </div>
+            <div className="text-xs text-gray-500">{isAuditor ? "Minhas auditorias (auditor)" : "Lista (interno/gestor)"}</div>
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -252,16 +229,14 @@ export default function AuditoriasPage() {
             <div className="col-span-1 text-right">Ações</div>
           </div>
 
-          {list.length === 0 && (
-            <div className="px-4 py-6 text-sm text-gray-600">Nenhuma auditoria no filtro.</div>
-          )}
+          {list.length === 0 && <div className="px-4 py-6 text-sm text-gray-600">Nenhuma auditoria no filtro.</div>}
 
           <div className="divide-y">
             {list.map((a) => {
               const condo =
                 a.condominios?.nome
                   ? `${a.condominios.nome} - ${a.condominios.cidade}/${a.condominios.uf}`
-                  : condoLabel.get(a.condominio_id) ?? a.condominio_id;
+                  : condoLabelByCondoId.get(a.condominio_id) ?? a.condominio_id;
 
               const audLabel =
                 (a.auditor_id ? auditorEmailById.get(a.auditor_id) : null) ??
