@@ -4,22 +4,11 @@ import { NextResponse } from "next/server";
 import { getUserAndRole, supabaseAdmin } from "@/lib/auth";
 
 type Role = "auditor" | "interno" | "gestor";
-type Status = "aberta" | "em_andamento" | "em_conferencia" | "final";
 
 function roleGte(role: Role | null, min: Role) {
   const rank: Record<Role, number> = { auditor: 1, interno: 2, gestor: 3 };
   if (!role) return false;
   return rank[role] >= rank[min];
-}
-
-function normalizeStatus(input: any): Status {
-  const s = String(input ?? "aberta").trim().toLowerCase();
-  if (s === "em conferencia" || s === "em_conferência") return "em_conferencia";
-  if (s === "em andamento") return "em_andamento";
-  if (s === "finalizado") return "final";
-  if (s === "aberto") return "aberta";
-  if (["aberta", "em_andamento", "em_conferencia", "final"].includes(s)) return s as Status;
-  return "aberta";
 }
 
 type Schema = {
@@ -44,6 +33,15 @@ async function detectSchema(admin: ReturnType<typeof supabaseAdmin>): Promise<Sc
   throw new Error("Nenhuma tabela de auditorias válida encontrada");
 }
 
+function normalizeStatus(input: any) {
+  const s = String(input ?? "aberta").trim().toLowerCase();
+  if (s === "em conferência" || s === "em conferencia") return "em_conferencia";
+  if (s === "em andamento") return "em_andamento";
+  if (s === "finalizado") return "final";
+  if (s === "aberto") return "aberta";
+  return s || "aberta";
+}
+
 function pickMonthISO(row: any, sch: Schema) {
   const raw = row?.[sch.monthCol];
   return raw ? String(raw) : null;
@@ -53,18 +51,17 @@ export async function GET() {
   const ctx = await getUserAndRole();
   if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
-  const role = ctx.role as Role | null;
+  const role = (ctx.role ?? null) as Role | null;
   const isAuditor = role === "auditor";
   const isStaff = roleGte(role, "interno");
-
   if (!isAuditor && !isStaff) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
 
   const admin = supabaseAdmin();
   const sch = await detectSchema(admin);
 
-  let query = admin.from(sch.table).select("*").order(sch.monthCol, { ascending: false });
+  let q = admin.from(sch.table).select("*").order(sch.monthCol, { ascending: false });
 
-  // Auditor: vê auditorias atribuídas a ele OU auditorias de condomínios atribuídos a ele (auditor_condominios)
+  // Auditor: auditorias atribuídas a ele OU auditorias dos condomínios atribuídos a ele
   if (isAuditor && !isStaff) {
     const { data: ac, error: acErr } = await admin
       .from("auditor_condominios")
@@ -77,18 +74,17 @@ export async function GET() {
 
     if (condoIds.length > 0) {
       const inList = condoIds.map((id) => `"${id}"`).join(",");
-      query = query.or(`${sch.auditorCol}.eq."${ctx.user.id}",${sch.condoCol}.in.(${inList})`);
+      q = q.or(`${sch.auditorCol}.eq."${ctx.user.id}",${sch.condoCol}.in.(${inList})`);
     } else {
-      query = query.eq(sch.auditorCol, ctx.user.id);
+      q = q.eq(sch.auditorCol, ctx.user.id);
     }
   }
 
-  const { data: rows, error } = await query;
+  const { data: rows, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
   const list = rows ?? [];
 
-  // Enriquecimento: buscar nome/cidade/uf do condomínio e email do auditor
   const condoIds = Array.from(new Set(list.map((r: any) => r[sch.condoCol]).filter(Boolean)));
   const auditorIds = Array.from(new Set(list.map((r: any) => r[sch.auditorCol]).filter(Boolean)));
 
@@ -109,15 +105,18 @@ export async function GET() {
 
   const normalized = list.map((r: any) => {
     const condominio_id = r[sch.condoCol];
-    const auditor_id = r[sch.auditorCol];
+    const auditor_id = r[sch.auditorCol] ?? null;
 
     return {
       ...r,
-
-      // garante campos que a UI usa
       condominio_id,
-      auditor_id: auditor_id ?? null,
+      auditor_id,
       mes_ref: pickMonthISO(r, sch),
       status: normalizeStatus(r[sch.statusCol]),
+      condominios: condoMap.get(condominio_id) ?? null,
+      profiles: auditor_id ? profMap.get(auditor_id) ?? null : null,
+    };
+  });
 
-      // joi
+  return NextResponse.json({ data: normalized });
+}
