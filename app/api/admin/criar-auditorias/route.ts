@@ -15,18 +15,24 @@ export async function POST() {
   try {
     const { user, role } = await getUserAndRole();
 
-    if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+    if (!user) {
+      return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+    }
+
     if (!roleGte(role as Role, "interno")) {
       return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
     }
 
     const admin = supabaseAdmin();
 
-    // ✅ Força o overload (date) para não bater no "schema cache" ambiguo
-    // null = usa mês atual (sua função já faz isso)
-    const { data: result, error: rpcErr } = await admin.rpc("criar_auditorias_mensais", {
-      p_mes_ref: null,
-    });
+    /**
+     * 🚨 CHAMADA POSICIONAL (RESOLVE OVERLOAD + CACHE)
+     * null => função usa mês atual internamente
+     */
+    const { data: result, error: rpcErr } = await admin.rpc(
+      "criar_auditorias_mensais",
+      [null]
+    );
 
     if (rpcErr) {
       return NextResponse.json({ error: rpcErr.message }, { status: 500 });
@@ -41,7 +47,10 @@ export async function POST() {
       .limit(20);
 
     if (logErr) {
-      return NextResponse.json({ result, logs: [], log_error: logErr.message }, { status: 200 });
+      return NextResponse.json(
+        { result, logs: [], log_error: logErr.message },
+        { status: 200 }
+      );
     }
 
     return NextResponse.json({ result, logs }, { status: 200 });
@@ -49,6 +58,9 @@ export async function POST() {
     if (String(e?.message ?? "") === "NOT_AUTHENTICATED") {
       return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
     }
-    return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
+    return NextResponse.json(
+      { error: e?.message ?? "Erro inesperado" },
+      { status: 500 }
+    );
   }
 }
