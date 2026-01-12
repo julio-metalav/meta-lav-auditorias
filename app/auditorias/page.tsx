@@ -40,17 +40,23 @@ function statusLabel(s: any) {
   return String(s ?? "-");
 }
 
+// ✅ aceita array puro OU {data:[...]} OU {auditorias:[...]} OU {rows:[...]}
+function extractArray<T = any>(payload: any): T[] {
+  if (Array.isArray(payload)) return payload as T[];
+  if (Array.isArray(payload?.data)) return payload.data as T[];
+  if (Array.isArray(payload?.auditorias)) return payload.auditorias as T[];
+  if (Array.isArray(payload?.rows)) return payload.rows as T[];
+  return [];
+}
+
 export default function AuditoriasPage() {
   const [auditorias, setAuditorias] = useState<Aud[]>([]);
   const [auditores, setAuditores] = useState<AuditorUser[]>([]);
   const [me, setMe] = useState<Me | null>(null);
 
   const [err, setErr] = useState<string | null>(null);
-  const [ok, setOk] = useState<string | null>(null);
 
   const [q, setQ] = useState("");
-
-  // ✅ statusFilter inteligente pro auditor
   const [statusFilter, setStatusFilter] = useState<
     "todas" | "a_fazer" | "concluidas" | "aberta" | "em_andamento" | "em_conferencia" | "final"
   >("todas");
@@ -67,7 +73,6 @@ export default function AuditoriasPage() {
 
     async function load() {
       setErr(null);
-      setOk(null);
 
       try {
         const [meRes, aRes, uRes] = await Promise.all([
@@ -82,14 +87,21 @@ export default function AuditoriasPage() {
         const aJson = await aRes.json().catch(() => ({}));
         if (!aRes.ok) throw new Error(aJson?.error ?? "Erro ao carregar auditorias");
 
-        const uJson = await uRes.json().catch(() => ([] as any));
-        const users = uRes.ok ? (Array.isArray(uJson) ? uJson : uJson?.data ?? []) : [];
+        const uJson = await uRes.json().catch(() => ({}));
+        const users = uRes.ok ? extractArray<AuditorUser>(uJson) : [];
+
+        const meObj: Me =
+          meJson?.user && typeof meJson?.role !== "undefined"
+            ? (meJson as Me)
+            : ({ user: meJson, role: (meJson?.role ?? null) as any } as any);
+
+        const auds = extractArray<Aud>(aJson);
 
         if (!alive) return;
 
-        setMe(meJson as Me);
-        setAuditorias(Array.isArray(aJson) ? (aJson as Aud[]) : []);
-        setAuditores((users as AuditorUser[]).filter((u) => u.role === "auditor"));
+        setMe(meObj);
+        setAuditorias(auds);
+        setAuditores(users.filter((u) => u.role === "auditor"));
       } catch (e: any) {
         if (!alive) return;
         setErr(e?.message ?? "Falha ao carregar");
@@ -108,7 +120,6 @@ export default function AuditoriasPage() {
     return m;
   }, [auditores]);
 
-  // ✅ sem c.id (não existe no tipo)
   const condoLabelByCondoId = useMemo(() => {
     const m = new Map<string, string>();
     auditorias.forEach((a) => {
@@ -218,7 +229,10 @@ export default function AuditoriasPage() {
         </div>
 
         {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
-        {ok && <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>}
+
+        <div className="mb-3 text-xs text-gray-500">
+          Debug: carregadas <b>{auditorias.length}</b> auditorias • no filtro <b>{list.length}</b>
+        </div>
 
         <div className="overflow-hidden rounded-2xl border bg-white">
           <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
