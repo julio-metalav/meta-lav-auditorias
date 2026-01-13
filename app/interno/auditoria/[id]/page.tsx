@@ -24,7 +24,7 @@ type Aud = {
   base_energia?: number | null;
   base_gas?: number | null;
 
-  // ✅ fechamento
+  // fechamento
   comprovante_fechamento_url?: string | null;
   fechamento_obs?: string | null;
 
@@ -41,7 +41,7 @@ type Condo = {
 };
 
 type CicloItem = {
-  id?: string | null; // ✅ usado para detectar se já foi salvo
+  id?: string | null; // usado para detectar se já foi salvo
   maquina_tag: string;
   tipo?: string | null;
   ciclos: number;
@@ -109,18 +109,18 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   const [ciclos, setCiclos] = useState<CicloItem[]>([]);
   const [savingCiclos, setSavingCiclos] = useState(false);
 
-  // ✅ trava edição (com botão alterar/corrigir)
+  // trava edição (com botão alterar/corrigir)
   const [baseEditMode, setBaseEditMode] = useState(false);
   const [ciclosEditMode, setCiclosEditMode] = useState(false);
 
-  // ✅ snapshot para "Cancelar edição" voltar pro backend
+  // snapshot para "Cancelar edição" voltar pro backend
   const [ciclosOrig, setCiclosOrig] = useState<CicloItem[]>([]);
 
-  // ✅ comprovante
+  // comprovante
   const [fechamentoObs, setFechamentoObs] = useState("");
   const [uploadingComprovante, setUploadingComprovante] = useState(false);
 
-  // ✅ finalizar
+  // finalizar
   const [finalizando, setFinalizando] = useState(false);
 
   const isStaff = useMemo(() => {
@@ -159,6 +159,13 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     const u = String(aud?.comprovante_fechamento_url ?? "").trim();
     return !!u;
   }, [aud?.comprovante_fechamento_url]);
+
+  const statusNorm = useMemo(() => {
+    return String(aud?.status ?? "").trim();
+  }, [aud?.status]);
+
+  const isFinal = useMemo(() => statusNorm === "final", [statusNorm]);
+  const canFinalizeByStatus = useMemo(() => statusNorm === "em_conferencia", [statusNorm]);
 
   const consumo = useMemo(() => {
     const a = Number(aud?.agua_leitura ?? 0);
@@ -258,9 +265,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         base_energia: a?.energia_leitura_base ?? root?.energia_leitura_base ?? a?.base_energia ?? root?.base_energia ?? null,
         base_gas: a?.gas_leitura_base ?? root?.gas_leitura_base ?? a?.base_gas ?? root?.base_gas ?? null,
 
-        // ✅ comprovante/obs
-        comprovante_fechamento_url:
-          a?.comprovante_fechamento_url ?? root?.comprovante_fechamento_url ?? null,
+        comprovante_fechamento_url: a?.comprovante_fechamento_url ?? root?.comprovante_fechamento_url ?? null,
         fechamento_obs: a?.fechamento_obs ?? root?.fechamento_obs ?? null,
 
         condominios: root?.condominios ?? a?.condominios ?? null,
@@ -438,6 +443,10 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       setErr("Anexe o comprovante de fechamento antes de finalizar.");
       return;
     }
+    if (!canFinalizeByStatus) {
+      setErr("Para finalizar, o status precisa estar em_conferencia.");
+      return;
+    }
 
     setFinalizando(true);
     setErr(null);
@@ -448,7 +457,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           status: "final",
-          // note opcional (se seu backend gravar em log)
           note: String(fechamentoObs ?? "").trim() ? `Fechamento: ${String(fechamentoObs).trim()}` : null,
         }),
       });
@@ -482,7 +490,17 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     return s || "—";
   }, [aud?.status]);
 
-  const isFinal = useMemo(() => String(aud?.status ?? "") === "final", [aud?.status]);
+  const finalizarDisabledReason = useMemo(() => {
+    if (!isStaff) return "Apenas interno/gestor";
+    if (isFinal) return "Já está finalizada";
+    if (!comprovanteOk) return "Anexe o comprovante";
+    if (!canFinalizeByStatus) return "Status precisa estar em_conferencia";
+    return "";
+  }, [isStaff, isFinal, comprovanteOk, canFinalizeByStatus]);
+
+  const canFinalize = useMemo(() => {
+    return isStaff && !isFinal && comprovanteOk && canFinalizeByStatus && !finalizando;
+  }, [isStaff, isFinal, comprovanteOk, canFinalizeByStatus, finalizando]);
 
   return (
     <AppShell title="Fechamento (Interno)">
@@ -497,11 +515,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50"
-              onClick={carregar}
-              disabled={loading}
-            >
+            <button className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50" onClick={carregar} disabled={loading}>
               {loading ? "Carregando..." : "Recarregar"}
             </button>
             <a className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50" href="/auditorias">
@@ -512,7 +526,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
         {err ? <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div> : null}
 
-        {/* ✅ Comprovante + Finalizar */}
+        {/* Comprovante + Finalizar */}
         <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -523,6 +537,11 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                   <span className="ml-2 inline-flex rounded-full bg-green-50 px-2 py-0.5 text-[11px] text-green-700">anexado</span>
                 ) : (
                   <span className="ml-2 inline-flex rounded-full bg-yellow-50 px-2 py-0.5 text-[11px] text-yellow-700">pendente</span>
+                )}
+                {canFinalizeByStatus ? (
+                  <span className="ml-2 inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700">em_conferencia</span>
+                ) : (
+                  <span className="ml-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">não está em_conferencia</span>
                 )}
               </div>
             </div>
@@ -558,8 +577,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               <button
                 className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
                 onClick={finalizarAuditoria}
-                disabled={!isStaff || finalizando || !comprovanteOk || isFinal}
-                title={!comprovanteOk ? "Anexe o comprovante antes de finalizar" : isFinal ? "Já está finalizada" : ""}
+                disabled={!canFinalize}
+                title={finalizarDisabledReason}
               >
                 {finalizando ? "Finalizando..." : isFinal ? "Finalizada" : "Finalizar auditoria"}
               </button>
@@ -577,7 +596,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               disabled={!isStaff || uploadingComprovante || finalizando}
             />
             <div className="mt-1 text-[11px] text-gray-500">
-              Se você preencher isso e anexar o comprovante, a observação vai junto (sem criar mais tela).
+              Dica: se quiser que a obs vá para o banco, preencha antes de anexar o comprovante (ela é salva junto com o upload).
             </div>
           </div>
         </div>
@@ -672,9 +691,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               <div className="text-sm font-semibold">Ciclos por máquina</div>
               <div className="text-xs text-gray-500">
                 O Interno lança ciclos por máquina individual. A lista vem do cadastro do condomínio (condominio_maquinas).
-                {ciclosJaSalvos ? (
-                  <span className="ml-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">travado</span>
-                ) : null}
+                {ciclosJaSalvos ? <span className="ml-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">travado</span> : null}
               </div>
             </div>
 
@@ -723,17 +740,13 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <div className="col-span-3 text-xs text-gray-600">{it.tipo ?? "—"}</div>
                 <div className="col-span-3 flex justify-end">
                   <input
-                    className={`w-24 rounded-xl border border-gray-200 px-3 py-2 text-right text-sm ${
-                      ciclosTravados ? "bg-gray-50 text-gray-500" : ""
-                    }`}
+                    className={`w-24 rounded-xl border border-gray-200 px-3 py-2 text-right text-sm ${ciclosTravados ? "bg-gray-50 text-gray-500" : ""}`}
                     value={String(it.ciclos ?? 0)}
                     inputMode="numeric"
                     disabled={ciclosTravados}
                     onChange={(e) => {
                       const v = Number(e.target.value ?? 0);
-                      setCiclos((prev) =>
-                        prev.map((x, i) => (i === idx ? { ...x, ciclos: Number.isNaN(v) ? 0 : v } : x))
-                      );
+                      setCiclos((prev) => prev.map((x, i) => (i === idx ? { ...x, ciclos: Number.isNaN(v) ? 0 : v } : x)));
                     }}
                   />
                 </div>
@@ -778,9 +791,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <div className="mt-1 text-xs text-gray-600">
                   Água: <b>{consumo.agua ?? "—"}</b> • Energia: <b>{consumo.energia ?? "—"}</b> • Gás: <b>{consumo.gas ?? "—"}</b>
                 </div>
-                <div className="mt-1 text-[11px] text-gray-500">
-                  (Energia pode afetar lavadora e secadora; água só lavadora; gás só secadora onde existir.)
-                </div>
+                <div className="mt-1 text-[11px] text-gray-500">(Energia pode afetar lavadora e secadora; água só lavadora; gás só secadora onde existir.)</div>
               </div>
             </div>
           </div>
@@ -869,11 +880,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 Cancelar
               </button>
 
-              <button
-                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                onClick={salvarBaseManual}
-                disabled={savingBase}
-              >
+              <button className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" onClick={salvarBaseManual} disabled={savingBase}>
                 {savingBase ? "Salvando..." : baseDefinida ? "Salvar correção" : "Salvar base"}
               </button>
             </div>
