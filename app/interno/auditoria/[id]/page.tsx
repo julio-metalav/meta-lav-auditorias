@@ -347,7 +347,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   // (O backend é quem garante se existe histórico/base.)
 
   return (
-    <AppShell>
+  <AppShell title="Fechamento (Interno)">
       <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <div>
