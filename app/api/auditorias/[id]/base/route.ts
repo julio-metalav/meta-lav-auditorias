@@ -15,12 +15,11 @@ function toNumOrNull(v: any): number | null {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
   if (!s) return null;
-  // aceita "123,45" e "123.45"
   const n = Number(s.replace(",", "."));
   return Number.isFinite(n) ? n : null;
 }
 
-async function handleUpsertBase(req: Request, auditoriaId: string) {
+async function handle(req: Request, auditoriaId: string) {
   const ctx = await getUserAndRole();
   if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
@@ -32,14 +31,14 @@ async function handleUpsertBase(req: Request, auditoriaId: string) {
   try {
     const body = await req.json().catch(() => ({}));
 
-    // ✅ Aceita os 2 formatos (compat)
-    const base_agua = toNumOrNull(body?.base_agua ?? body?.agua_leitura_base);
-    const base_energia = toNumOrNull(body?.base_energia ?? body?.energia_leitura_base);
-    const base_gas = toNumOrNull(body?.base_gas ?? body?.gas_leitura_base);
+    // ✅ UI manda base_*, banco usa *_leitura_base
+    const agua_leitura_base = toNumOrNull(body?.base_agua ?? body?.agua_leitura_base);
+    const energia_leitura_base = toNumOrNull(body?.base_energia ?? body?.energia_leitura_base);
+    const gas_leitura_base = toNumOrNull(body?.base_gas ?? body?.gas_leitura_base);
 
     const { data: aud, error: audErr } = await admin
       .from("auditorias")
-      .select("id,status")
+      .select("id")
       .eq("id", auditoriaId)
       .single();
 
@@ -47,16 +46,16 @@ async function handleUpsertBase(req: Request, auditoriaId: string) {
       return NextResponse.json({ error: audErr?.message ?? "Auditoria não encontrada" }, { status: 404 });
     }
 
-    // ✅ Atualiza os campos que a UI usa hoje: base_agua/base_energia/base_gas
     const { data: updated, error } = await admin
       .from("auditorias")
       .update({
-        base_agua,
-        base_energia,
-        base_gas,
+        agua_leitura_base,
+        energia_leitura_base,
+        gas_leitura_base,
+        leitura_base_origem: "manual",
       })
       .eq("id", auditoriaId)
-      .select("base_agua,base_energia,base_gas")
+      .select("agua_leitura_base,energia_leitura_base,gas_leitura_base,leitura_base_origem")
       .single();
 
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
@@ -67,12 +66,12 @@ async function handleUpsertBase(req: Request, auditoriaId: string) {
   }
 }
 
-// ✅ Frontend atual usa POST
+// UI usa POST
 export async function POST(req: Request, { params }: { params: { id: string } }) {
-  return handleUpsertBase(req, params.id);
+  return handle(req, params.id);
 }
 
-// ✅ Mantém compatibilidade com chamadas antigas
+// Compat com chamadas antigas
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
-  return handleUpsertBase(req, params.id);
+  return handle(req, params.id);
 }
