@@ -31,6 +31,12 @@ type AudRow = {
   foto_quimicos_url?: string | null;
   foto_bombonas_url?: string | null;
   foto_conector_bala_url?: string | null;
+
+  // FECHAMENTO (interno/gestor)
+  comprovante_fechamento_url?: string | null;
+  fechamento_obs?: string | null;
+  fechado_por?: string | null;
+  fechado_em?: string | null;
 };
 
 function roleGte(role: Role | null, min: Role) {
@@ -41,7 +47,7 @@ function roleGte(role: Role | null, min: Role) {
 
 function normalizeStatus(input: any): Status {
   const s = String(input ?? "aberta").trim().toLowerCase();
-  if (s === "em conferencia" || s === "em_conferencia" || s === "em conferência") return "em_conferencia";
+  if (s === "em conferencia" || s === "em_conferencia" || s === "em confer├¬ncia") return "em_conferencia";
   if (s === "em andamento" || s === "em_andamento") return "em_andamento";
   if (s === "final" || s === "finalizado") return "final";
   if (s === "aberta" || s === "aberto") return "aberta";
@@ -88,10 +94,10 @@ function buildChecklistMissing(effective: AudRow) {
 }
 
 const AUD_SELECT =
-  "id,condominio_id,auditor_id,mes_ref,status,agua_leitura,energia_leitura,gas_leitura,agua_leitura_base,energia_leitura_base,gas_leitura_base,leitura_base_origem,observacoes,foto_agua_url,foto_energia_url,foto_gas_url,foto_quimicos_url,foto_bombonas_url,foto_conector_bala_url";
+  "id,condominio_id,auditor_id,mes_ref,status,agua_leitura,energia_leitura,gas_leitura,agua_leitura_base,energia_leitura_base,gas_leitura_base,leitura_base_origem,observacoes,foto_agua_url,foto_energia_url,foto_gas_url,foto_quimicos_url,foto_bombonas_url,foto_conector_bala_url,comprovante_fechamento_url,fechamento_obs,fechado_por,fechado_em";
 
 const AUD_SELECT_MIN =
-  "id,condominio_id,auditor_id,mes_ref,status,agua_leitura,energia_leitura,gas_leitura,observacoes,foto_agua_url,foto_energia_url,foto_gas_url,foto_quimicos_url,foto_bombonas_url,foto_conector_bala_url";
+  "id,condominio_id,auditor_id,mes_ref,status,agua_leitura,energia_leitura,gas_leitura,observacoes,foto_agua_url,foto_energia_url,foto_gas_url,foto_quimicos_url,foto_bombonas_url,foto_conector_bala_url,comprovante_fechamento_url,fechamento_obs,fechado_por,fechado_em";
 
 // ---------- GET ----------
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
@@ -124,7 +130,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (!role) return NextResponse.json({ error: "Sem role" }, { status: 403 });
 
     // 1) Carrega auditoria
-    const { data: audRaw, error: audErr } = await (supabase.from("auditorias") as any).select(AUD_SELECT).eq("id", id).maybeSingle();
+    const { data: audRaw, error: audErr } = await (supabase.from("auditorias") as any)
+      .select(AUD_SELECT)
+      .eq("id", id)
+      .maybeSingle();
     if (audErr) return NextResponse.json({ error: audErr.message }, { status: 400 });
     if (!audRaw) return NextResponse.json({ error: "Auditoria não encontrada" }, { status: 404 });
 
@@ -158,14 +167,20 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const reopeningFinalAsInterno = prevStatus === "final" && !isGestor && nextStatus === "em_conferencia";
     if (prevStatus === "final" && !isGestor) {
       if (!reopeningFinalAsInterno) {
-        return NextResponse.json({ error: "Somente gestor pode editar auditoria final (interno só pode reabrir)" }, { status: 403 });
+        return NextResponse.json(
+          { error: "Somente gestor pode editar auditoria final (interno só pode reabrir)" },
+          { status: 403 }
+        );
       }
 
       // reabertura deve alterar só status/note
       const allowedKeys = new Set(["status", "note"]);
       const extraKeys = Object.keys(body ?? {}).filter((k) => !allowedKeys.has(k));
       if (extraKeys.length > 0) {
-        return NextResponse.json({ error: `Reabertura deve alterar apenas status. Campos extras: ${extraKeys.join(", ")}` }, { status: 400 });
+        return NextResponse.json(
+          { error: `Reabertura deve alterar apenas status. Campos extras: ${extraKeys.join(", ")}` },
+          { status: 400 }
+        );
       }
     }
 
@@ -186,6 +201,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       if (prevStatus !== "em_conferencia") {
         return NextResponse.json({ error: "Só é possível finalizar quando a auditoria estiver em_conferencia" }, { status: 400 });
       }
+
+      // REGRA: só finaliza se existir comprovante
+      if (!aud.comprovante_fechamento_url) {
+        return NextResponse.json(
+          { error: "Não é possível finalizar sem comprovante de fechamento anexado (comprovante_fechamento)." },
+          { status: 400 }
+        );
+      }
     }
 
     // 3) Monta patch
@@ -193,6 +216,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     if (reopeningFinalAsInterno) {
       patch.status = "em_conferencia";
+      // ao reabrir: limpa metadados de fechamento (comprovante pode ficar anexado)
+      patch.fechado_por = null;
+      patch.fechado_em = null;
     } else {
       // gestor pode editar final (mantém regra)
       if (!isGestor && prevStatus === "final") {
@@ -236,12 +262,25 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
           );
         }
       }
+
+      // Se está finalizando agora, grava metadados
+      if (nextStatus === "final" && prevStatus !== "final") {
+        patch.fechado_por = user.id;
+        patch.fechado_em = new Date().toISOString();
+      }
     }
 
-    if (Object.keys(patch).length === 0) return NextResponse.json({ ok: true, auditoria: aud });
+    if (Object.keys(patch).length === 0) {
+      return NextResponse.json({ ok: true, auditoria: aud });
+    }
 
     // 4) Update
-    const { data: updatedRaw, error: updErr } = await (supabase.from("auditorias") as any).update(patch).eq("id", id).select(AUD_SELECT_MIN).maybeSingle();
+    const { data: updatedRaw, error: updErr } = await (supabase.from("auditorias") as any)
+      .update(patch)
+      .eq("id", id)
+      .select(AUD_SELECT_MIN)
+      .maybeSingle();
+
     if (updErr) return NextResponse.json({ error: updErr.message }, { status: 400 });
 
     const updated = (updatedRaw ?? null) as AudRow | null;
