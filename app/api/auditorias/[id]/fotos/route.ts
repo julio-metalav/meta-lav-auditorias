@@ -64,7 +64,6 @@ async function getRole(supabase: ReturnType<typeof supabaseServer>): Promise<Rol
 }
 
 function kindToColumn(kind: string) {
-  // mapeia o tipo ("kind") para a coluna na tabela auditorias
   if (kind === "agua") return "foto_agua_url";
   if (kind === "energia") return "foto_energia_url";
   if (kind === "gas") return "foto_gas_url";
@@ -75,24 +74,29 @@ function kindToColumn(kind: string) {
   return null;
 }
 
+function toShortText(v: any, max = 800) {
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+  return s.slice(0, max);
+}
+
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {
     const auditoriaId = params.id;
 
-    // 1) sessão do usuário (para saber quem está logado)
+    // 1) sessão do usuário
     const supabase = supabaseServer();
     const { data: auth, error: authErr } = await supabase.auth.getUser();
     const user = auth?.user;
     if (authErr || !user) return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
 
-    // 2) role do usuário (auditor/interno/gestor)
+    // 2) role
     const role = await getRole(supabase);
     if (!role) return NextResponse.json({ error: "Sem role." }, { status: 403 });
 
-    // 3) Admin client (service role) para upload e update sem depender de RLS
+    // 3) Admin client (service role)
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
     if (!url || !serviceKey) {
       return NextResponse.json(
         { error: "Supabase env não configurado (NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)." },
@@ -108,6 +112,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const form = await req.formData();
     const kind = String(form.get("kind") ?? "");
     const file = form.get("file") as File | null;
+
+    // opcional (somente para comprovante)
+    const fechamentoObs = toShortText(form.get("fechamento_obs"));
 
     if (!kind) return NextResponse.json({ error: "kind é obrigatório." }, { status: 400 });
     if (!file) return NextResponse.json({ error: "file é obrigatório." }, { status: 400 });
@@ -129,13 +136,10 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const isPdf = looksLikePdfByExt(file.name) || file.type === "application/pdf";
     const isImage = (file.type || "").startsWith("image/");
     if (!isPdf && !isImage) {
-      return NextResponse.json(
-        { error: "Arquivo inválido. Envie imagem ou PDF." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Arquivo inválido. Envie imagem ou PDF." }, { status: 400 });
     }
 
-    // 5) Carrega auditoria (precisa status + auditor_id + condominio_id pra regra de permissão)
+    // 5) Carrega auditoria (status + auditor_id + condominio_id)
     const { data: aud, error: audErr } = await admin
       .from("auditorias")
       .select("id,condominio_id,auditor_id,status")
@@ -150,8 +154,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const isStaff = role === "interno" || role === "gestor";
     const isOwnerAuditor = role === "auditor" && aud.auditor_id === user.id;
 
-    // Opção A: auditoria pode nascer sem auditor_id.
-    // Auditor pode enviar fotos/salvar se estiver vinculado ao condomínio em auditor_condominios.
+    // Auditor pode atuar se vinculado ao condomínio (auditoria pode nascer sem auditor_id)
     let isAssignedAuditor = false;
     if (role === "auditor" && !isStaff && !isOwnerAuditor) {
       const { data: link, error: linkErr } = await admin
@@ -178,9 +181,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
           { status: 403 }
         );
       }
+      // não bloqueia por status aqui; a trava real é no "Finalizar"
     } else {
       if (role === "auditor" && !isStaff && (statusAtual === "em_conferencia" || statusAtual === "final")) {
-        return NextResponse.json({ error: "Auditor não pode alterar fotos após em_conferencia/final." }, { status: 403 });
+        return NextResponse.json(
+          { error: "Auditor não pode alterar fotos após em_conferencia/final." },
+          { status: 403 }
+        );
       }
     }
 
@@ -206,9 +213,16 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const col = kindToColumn(kind);
     if (!col) return NextResponse.json({ error: "kind não mapeado para coluna." }, { status: 400 });
 
+    const patch: any = { [col]: publicUrl };
+
+    // se for comprovante, pode salvar obs (opcional)
+    if (isComprovante(kind) && fechamentoObs) {
+      patch.fechamento_obs = fechamentoObs;
+    }
+
     const { data: updatedRow, error: updErr } = await admin
       .from("auditorias")
-      .update({ [col]: publicUrl })
+      .update(patch)
       .eq("id", auditoriaId)
       .select("*")
       .single();
@@ -219,8 +233,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       ok: true,
       kind,
       url: publicUrl,
-      auditoria: updatedRow, // padrão do front
-      updated: updatedRow, // compat
+      auditoria: updatedRow,
+      updated: updatedRow,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
