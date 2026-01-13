@@ -37,6 +37,7 @@ type Condo = {
 };
 
 type CicloItem = {
+  id?: string | null; // ✅ usado para detectar se já foi salvo
   maquina_tag: string;
   tipo?: string | null;
   ciclos: number;
@@ -105,6 +106,13 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   const [ciclos, setCiclos] = useState<CicloItem[]>([]);
   const [savingCiclos, setSavingCiclos] = useState(false);
 
+  // ✅ trava edição (com botão alterar/corrigir)
+  const [baseEditMode, setBaseEditMode] = useState(false);
+  const [ciclosEditMode, setCiclosEditMode] = useState(false);
+
+  // ✅ snapshot para "Cancelar edição" voltar pro backend
+  const [ciclosOrig, setCiclosOrig] = useState<CicloItem[]>([]);
+
   const isStaff = useMemo(() => {
     const r = me?.role ?? null;
     return r === "interno" || r === "gestor";
@@ -126,6 +134,17 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     return `${yy}-${mm}-01`;
   }, [mesRef]);
+
+  const baseDefinida = useMemo(() => {
+    const ba = aud?.base_agua;
+    const be = aud?.base_energia;
+    return ba !== null && ba !== undefined && be !== null && be !== undefined;
+  }, [aud?.base_agua, aud?.base_energia]);
+
+  const ciclosJaSalvos = useMemo(() => {
+    // se algum item vier com id do auditoria_ciclos, significa que já foi salvo no backend
+    return (ciclosOrig ?? []).some((x) => !!x?.id);
+  }, [ciclosOrig]);
 
   const consumo = useMemo(() => {
     const a = Number(aud?.agua_leitura ?? 0);
@@ -223,12 +242,9 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         gas_leitura: a?.gas_leitura ?? a?.leitura_gas ?? root?.gas_leitura ?? root?.leitura_gas ?? null,
 
         // ✅ CORREÇÃO: banco usa *_leitura_base, UI usa base_*
-        base_agua:
-          a?.agua_leitura_base ?? root?.agua_leitura_base ?? a?.base_agua ?? root?.base_agua ?? null,
-        base_energia:
-          a?.energia_leitura_base ?? root?.energia_leitura_base ?? a?.base_energia ?? root?.base_energia ?? null,
-        base_gas:
-          a?.gas_leitura_base ?? root?.gas_leitura_base ?? a?.base_gas ?? root?.base_gas ?? null,
+        base_agua: a?.agua_leitura_base ?? root?.agua_leitura_base ?? a?.base_agua ?? root?.base_agua ?? null,
+        base_energia: a?.energia_leitura_base ?? root?.energia_leitura_base ?? a?.base_energia ?? root?.base_energia ?? null,
+        base_gas: a?.gas_leitura_base ?? root?.gas_leitura_base ?? a?.base_gas ?? root?.base_gas ?? null,
 
         // condo pode vir no root ou dentro do objeto auditoria
         condominios: root?.condominios ?? a?.condominios ?? null,
@@ -244,6 +260,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const list = (ciclosJson?.data?.itens ?? ciclosJson?.itens ?? ciclosJson?.data ?? []) as any[];
 
       const normalized: CicloItem[] = (list ?? []).map((x: any) => ({
+        id: x.id ?? null, // ✅ vem do backend quando já existe auditoria_ciclos
         maquina_tag: String(x.maquina_tag ?? ""),
         tipo: x.tipo ?? null,
         ciclos: Number(x.ciclos ?? 0),
@@ -251,15 +268,27 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         capacidade_kg: x.capacidade_kg ? Number(x.capacidade_kg) : null,
         valor_ciclo: x.valor_ciclo !== null && x.valor_ciclo !== undefined ? Number(x.valor_ciclo) : null,
       }));
-      setCiclos(normalized);
 
+      setCiclos(normalized);
+      setCiclosOrig(normalized);
+
+      // ✅ modal só se base NÃO definida
       const mustAskBase =
         (audRow.base_agua === null || audRow.base_energia === null) &&
         (meJson?.role === "interno" || meJson?.role === "gestor");
 
       setNeedBase(!!mustAskBase);
 
+      // ao recarregar, sai do modo edição
+      setBaseEditMode(false);
+      setCiclosEditMode(false);
+
       if (mustAskBase) {
+        setBaseAgua(audRow.base_agua !== null && audRow.base_agua !== undefined ? String(audRow.base_agua) : "");
+        setBaseEnergia(audRow.base_energia !== null && audRow.base_energia !== undefined ? String(audRow.base_energia) : "");
+        setBaseGas(audRow.base_gas !== null && audRow.base_gas !== undefined ? String(audRow.base_gas) : "");
+      } else {
+        // se já tem base, deixa os inputs do modal pré-preenchidos quando abrir por "Alterar"
         setBaseAgua(audRow.base_agua !== null && audRow.base_agua !== undefined ? String(audRow.base_agua) : "");
         setBaseEnergia(audRow.base_energia !== null && audRow.base_energia !== undefined ? String(audRow.base_energia) : "");
         setBaseGas(audRow.base_gas !== null && audRow.base_gas !== undefined ? String(audRow.base_gas) : "");
@@ -299,6 +328,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       if (!res.ok) throw new Error(json?.error ?? "Falha ao salvar base");
 
       setNeedBase(false);
+      setBaseEditMode(false);
       await carregar();
     } catch (e: any) {
       setErr(e?.message ?? "Erro inesperado ao salvar base");
@@ -336,6 +366,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "Falha ao salvar ciclos");
 
+      setCiclosEditMode(false);
       await carregar();
     } catch (e: any) {
       setErr(e?.message ?? "Erro inesperado ao salvar ciclos");
@@ -344,10 +375,23 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
+  function abrirModalBaseParaEditar() {
+    if (!isStaff) return;
+    setBaseEditMode(true);
+    setNeedBase(true);
+  }
+
+  function cancelarEdicaoCiclos() {
+    setCiclos(ciclosOrig);
+    setCiclosEditMode(false);
+  }
+
   useEffect(() => {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const ciclosTravados = ciclosJaSalvos && !ciclosEditMode;
 
   return (
     <AppShell title="Fechamento (Interno)">
@@ -381,16 +425,32 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">Consumo do mês (calculado)</div>
-              <div className="text-xs text-gray-500">Base: {consumo.hasBase ? "informada manualmente" : "não definida"}</div>
+              <div className="text-xs text-gray-500">
+                Base: {consumo.hasBase ? "informada manualmente" : "não definida"}{" "}
+                {baseDefinida ? <span className="ml-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">travada</span> : null}
+              </div>
             </div>
 
-            <button
-              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-              onClick={() => setNeedBase(true)}
-              disabled={!isStaff}
-            >
-              Definir leitura base
-            </button>
+            {!baseDefinida ? (
+              <button
+                className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                onClick={() => {
+                  setBaseEditMode(false);
+                  setNeedBase(true);
+                }}
+                disabled={!isStaff}
+              >
+                Definir leitura base
+              </button>
+            ) : (
+              <button
+                className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                onClick={abrirModalBaseParaEditar}
+                disabled={!isStaff}
+              >
+                Alterar/corrigir base
+              </button>
+            )}
           </div>
 
           <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -447,16 +507,42 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               <div className="text-sm font-semibold">Ciclos por máquina</div>
               <div className="text-xs text-gray-500">
                 O Interno lança ciclos por máquina individual. A lista vem do cadastro do condomínio (condominio_maquinas).
+                {ciclosJaSalvos ? (
+                  <span className="ml-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">travado</span>
+                ) : null}
               </div>
             </div>
 
-            <button
-              className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              onClick={salvarCiclos}
-              disabled={savingCiclos}
-            >
-              {savingCiclos ? "Salvando..." : "Salvar ciclos"}
-            </button>
+            <div className="flex items-center gap-2">
+              {ciclosJaSalvos && !ciclosEditMode ? (
+                <button
+                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                  onClick={() => setCiclosEditMode(true)}
+                  disabled={!isStaff}
+                >
+                  Alterar/corrigir
+                </button>
+              ) : null}
+
+              {ciclosJaSalvos && ciclosEditMode ? (
+                <button
+                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                  onClick={cancelarEdicaoCiclos}
+                  disabled={savingCiclos}
+                >
+                  Cancelar
+                </button>
+              ) : null}
+
+              <button
+                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                onClick={salvarCiclos}
+                disabled={savingCiclos || (ciclosJaSalvos && !ciclosEditMode)}
+                title={ciclosJaSalvos && !ciclosEditMode ? "Clique em Alterar/corrigir para editar" : ""}
+              >
+                {savingCiclos ? "Salvando..." : "Salvar ciclos"}
+              </button>
+            </div>
           </div>
 
           <div className="mt-4 overflow-hidden rounded-2xl border border-gray-100">
@@ -472,9 +558,10 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <div className="col-span-3 text-xs text-gray-600">{it.tipo ?? "—"}</div>
                 <div className="col-span-3 flex justify-end">
                   <input
-                    className="w-24 rounded-xl border border-gray-200 px-3 py-2 text-right text-sm"
+                    className={`w-24 rounded-xl border border-gray-200 px-3 py-2 text-right text-sm ${ciclosTravados ? "bg-gray-50 text-gray-500" : ""}`}
                     value={String(it.ciclos ?? 0)}
                     inputMode="numeric"
+                    disabled={ciclosTravados}
                     onChange={(e) => {
                       const v = Number(e.target.value ?? 0);
                       setCiclos((prev) => prev.map((x, i) => (i === idx ? { ...x, ciclos: Number.isNaN(v) ? 0 : v } : x)));
@@ -538,16 +625,25 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           <div className="w-full max-w-lg rounded-2xl bg-white p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold">Leitura anterior não encontrada</div>
+                <div className="text-sm font-semibold">{baseDefinida ? "Alterar/corrigir leitura base" : "Leitura anterior não encontrada"}</div>
                 <div className="mt-1 text-xs text-gray-600">
-                  Condomínio novo ou histórico vazio. Informe a leitura anterior/base para o cálculo do consumo do mês.
+                  {baseDefinida
+                    ? "Base já existe. Altere apenas se você tiver certeza (correção)."
+                    : "Condomínio novo ou histórico vazio. Informe a leitura anterior/base para o cálculo do consumo do mês."}
                 </div>
                 <div className="mt-1 text-xs text-gray-500">
                   Condomínio: <b>{titulo}</b> • Mês: <b>{mesRef}</b> • Anterior: <b>{prevMes}</b>
                 </div>
               </div>
 
-              <button className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50" onClick={() => setNeedBase(false)} disabled={savingBase}>
+              <button
+                className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
+                onClick={() => {
+                  setNeedBase(false);
+                  setBaseEditMode(false);
+                }}
+                disabled={savingBase}
+              >
                 Fechar
               </button>
             </div>
@@ -591,7 +687,14 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
             </div>
 
             <div className="mt-4 flex flex-wrap justify-end gap-2">
-              <button className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" onClick={() => setNeedBase(false)} disabled={savingBase}>
+              <button
+                className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                onClick={() => {
+                  setNeedBase(false);
+                  setBaseEditMode(false);
+                }}
+                disabled={savingBase}
+              >
                 Cancelar
               </button>
 
@@ -600,11 +703,13 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 onClick={salvarBaseManual}
                 disabled={savingBase}
               >
-                {savingBase ? "Salvando..." : "Salvar base"}
+                {savingBase ? "Salvando..." : baseDefinida ? "Salvar correção" : "Salvar base"}
               </button>
             </div>
 
-            <div className="mt-3 text-xs text-gray-500">Depois que tiver histórico, isso some: o sistema usa automaticamente o mês anterior.</div>
+            <div className="mt-3 text-xs text-gray-500">
+              Depois que tiver histórico, isso some: o sistema usa automaticamente o mês anterior. (Aqui é só para condomínio novo / correção.)
+            </div>
           </div>
         </div>
       )}
