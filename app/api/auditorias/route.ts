@@ -13,10 +13,10 @@ function roleGte(role: Role | null, min: Role) {
 
 type Schema = {
   table: string;
-  condoCol: string;   // condominio_id
-  monthCol: string;   // mes_ref ou ano_mes
+  condoCol: string; // condominio_id
+  monthCol: string; // mes_ref ou ano_mes
   auditorCol: string; // auditor_id
-  statusCol: string;  // status
+  statusCol: string; // status
 };
 
 async function detectSchema(admin: ReturnType<typeof supabaseAdmin>): Promise<Schema> {
@@ -39,12 +39,18 @@ function normalizeStatus(input: any) {
   if (s === "em andamento") return "em_andamento";
   if (s === "finalizado") return "final";
   if (s === "aberto") return "aberta";
-  return s || "aberta";
+  if (!s) return "aberta";
+  return s;
 }
 
 function pickMonthISO(row: any, sch: Schema) {
   const raw = row?.[sch.monthCol];
   return raw ? String(raw) : null;
+}
+
+function validMonthISO(s: string) {
+  // formato esperado: YYYY-MM-01
+  return /^\d{4}-\d{2}-01$/.test(s);
 }
 
 export async function GET() {
@@ -119,4 +125,59 @@ export async function GET() {
   });
 
   return NextResponse.json({ data: normalized });
+}
+
+export async function POST(req: Request) {
+  const ctx = await getUserAndRole();
+  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+
+  const role = (ctx.role ?? null) as Role | null;
+  if (!roleGte(role, "interno")) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+
+  const admin = supabaseAdmin();
+  const sch = await detectSchema(admin);
+
+  const body = await req.json().catch(() => ({}));
+
+  const condominio_id = String(body?.condominio_id ?? "").trim();
+  const mes_ref = String(body?.mes_ref ?? body?.ano_mes ?? "").trim();
+  const status = normalizeStatus(body?.status ?? "aberta");
+
+  if (!condominio_id) {
+    return NextResponse.json({ error: "condominio_id é obrigatório" }, { status: 400 });
+  }
+  if (!mes_ref || !validMonthISO(mes_ref)) {
+    return NextResponse.json({ error: "mes_ref inválido. Use YYYY-MM-01" }, { status: 400 });
+  }
+
+  // Opção A: auditor_id NÃO é obrigatório na criação.
+  const insertRow: any = {
+    [sch.condoCol]: condominio_id,
+    [sch.monthCol]: mes_ref,
+    [sch.statusCol]: status,
+  };
+
+  // se a coluna existir e vier no payload, aceita; senão deixa null
+  if (body?.auditor_id) {
+    insertRow[sch.auditorCol] = String(body.auditor_id).trim();
+  }
+
+  // evita duplicidade (condominio + mês) sem depender de UNIQUE:
+  // 1) procura existente
+  const { data: existing, error: exErr } = await admin
+    .from(sch.table)
+    .select("id")
+    .eq(sch.condoCol, condominio_id)
+    .eq(sch.monthCol, mes_ref)
+    .maybeSingle();
+
+  if (exErr) return NextResponse.json({ error: exErr.message }, { status: 400 });
+  if (existing?.id) {
+    return NextResponse.json({ error: "Já existe auditoria para este condomínio e mês" }, { status: 409 });
+  }
+
+  const { data, error } = await admin.from(sch.table).insert(insertRow).select("*").maybeSingle();
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  return NextResponse.json({ data });
 }
