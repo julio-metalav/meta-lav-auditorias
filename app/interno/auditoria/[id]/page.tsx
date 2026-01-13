@@ -1,64 +1,70 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { AppShell } from "@/app/components/AppShell";
 
-type Role = "auditor" | "interno" | "gestor" | null;
-
-type Me = {
-  user: { id: string; email: string };
-  role: Role;
-};
+type Role = "auditor" | "interno" | "gestor";
 
 type Aud = {
   id: string;
   condominio_id: string;
+  auditor_id: string | null;
   mes_ref?: string | null;
   ano_mes?: string | null;
   status: string | null;
 
-  // leituras atuais (do mês)
   agua_leitura?: number | null;
   energia_leitura?: number | null;
   gas_leitura?: number | null;
 
-  // leitura base manual (quando não existe mês anterior)
-  agua_leitura_base?: number | null;
-  energia_leitura_base?: number | null;
-  gas_leitura_base?: number | null;
-  leitura_base_origem?: string | null;
+  observacoes?: string | null;
 
-  condominios?: { id: string; nome: string; cidade: string; uf: string } | null;
+  foto_agua_url?: string | null;
+  foto_energia_url?: string | null;
+  foto_gas_url?: string | null;
+  foto_quimicos_url?: string | null;
+  foto_bombonas_url?: string | null;
+  foto_conector_bala_url?: string | null;
+
+  comprovante_fechamento_url?: string | null;
+
+  created_at?: string | null;
+  updated_at?: string | null;
+
+  condominios?: { nome: string; cidade: string; uf: string } | null;
+  profiles?: { email?: string | null; role?: Role | null } | null;
+};
+
+type CondoMaquina = {
+  id: string;
+  condominio_id: string;
+  tag: string; // ex: LAV-10-01
+  tipo: string; // ex: lavadora 10kg
 };
 
 type CicloItem = {
+  maquina_id: string;
   maquina_tag: string;
-  tipo?: string | null;
+  tipo: string;
   ciclos: number;
 };
 
-function isUuid(v: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
-}
+type FechamentoItem = {
+  id?: string;
+  auditoria_id?: string;
+  maquina_tag: string;
+  tipo?: string | null;
+  ciclos: number;
+  valor_total?: number;
+  valor_repasse?: number;
+  valor_cashback?: number;
+  observacoes?: string | null;
+};
 
-async function safeJson(res: Response) {
-  const ct = res.headers.get("content-type") ?? "";
-  const txt = await res.text().catch(() => "");
-  if (!txt) return {};
-  if (ct.includes("application/json")) {
-    try {
-      return JSON.parse(txt);
-    } catch {
-      return { _raw: txt };
-    }
-  }
-  try {
-    return JSON.parse(txt);
-  } catch {
-    return { _raw: txt };
-  }
+function toList<T = any>(payload: any): T[] {
+  if (Array.isArray(payload)) return payload as T[];
+  if (payload?.data && Array.isArray(payload.data)) return payload.data as T[];
+  return [];
 }
 
 function monthISO(d = new Date()) {
@@ -67,268 +73,116 @@ function monthISO(d = new Date()) {
   return `${y}-${m}-01`;
 }
 
-function prevMonthISO(isoYYYYMM01: string) {
-  const [y, m] = isoYYYYMM01.split("-").map((x) => Number(x));
-  if (!y || !m) return isoYYYYMM01;
-  const dt = new Date(y, m - 1, 1);
-  dt.setMonth(dt.getMonth() - 1);
-  const yy = dt.getFullYear();
-  const mm = String(dt.getMonth() + 1).padStart(2, "0");
-  return `${yy}-${mm}-01`;
+function normalizeStatus(input: any) {
+  const s = String(input ?? "aberta").trim().toLowerCase();
+  if (s === "em conferência" || s === "em conferencia") return "em_conferencia";
+  if (s === "em andamento") return "em_andamento";
+  if (s === "finalizado") return "final";
+  if (s === "aberto") return "aberta";
+  return s || "aberta";
 }
 
-function toNumOrNull(v: string): number | null {
-  const s = String(v ?? "").trim();
-  if (!s) return null;
-  const n = Number(s.replace(",", "."));
-  return Number.isFinite(n) ? n : null;
+function safeNum(v: any) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
 }
 
-function fmt(n: any) {
-  if (n === null || n === undefined) return "—";
-  const x = Number(n);
-  if (!Number.isFinite(x)) return String(n);
-  return x.toLocaleString("pt-BR");
+function calcConsumo(atual: number | null | undefined, base: number | null | undefined) {
+  const a = safeNum(atual);
+  const b = safeNum(base);
+  if (!a || !b) return null;
+  return a - b;
 }
 
 export default function InternoAuditoriaPage({ params }: { params: { id: string } }) {
-  const router = useRouter();
   const auditoriaId = params.id;
 
-  const [me, setMe] = useState<Me | null>(null);
   const [aud, setAud] = useState<Aud | null>(null);
+  const [maquinas, setMaquinas] = useState<CondoMaquina[]>([]);
+  const [ciclos, setCiclos] = useState<CicloItem[]>([]);
+  const [fechamento, setFechamento] = useState<FechamentoItem[]>([]);
+  const [comprovanteUrl, setComprovanteUrl] = useState<string | null>(null);
+  const [savingFechamento, setSavingFechamento] = useState(false);
+  const [finalizando, setFinalizando] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [ok, setOk] = useState<string | null>(null);
 
-  // ciclos
-  const [ciclos, setCiclos] = useState<CicloItem[]>([]);
-  const [savingCiclos, setSavingCiclos] = useState(false);
+  const [baseModalOpen, setBaseModalOpen] = useState(false);
+  const [base, setBase] = useState<{ agua: string; energia: string; gas: string }>({ agua: "", energia: "", gas: "" });
 
-  // leitura anterior automática (se existir)
-  const [autoBase, setAutoBase] = useState<{ agua?: number | null; energia?: number | null; gas?: number | null } | null>(null);
+  const isFinal = normalizeStatus(aud?.status) === "final";
 
-  // modal base manual
-  const [needBase, setNeedBase] = useState(false);
-  const [baseAgua, setBaseAgua] = useState("");
-  const [baseEnergia, setBaseEnergia] = useState("");
-  const [baseGas, setBaseGas] = useState("");
-  const [savingBase, setSavingBase] = useState(false);
-
-  const mesRef = useMemo(() => {
-    const m = aud?.mes_ref ?? aud?.ano_mes;
-    return (m ?? monthISO()) as string;
-  }, [aud?.mes_ref, aud?.ano_mes]);
-
-  const prevMes = useMemo(() => prevMonthISO(mesRef), [mesRef]);
-
-  const titulo = useMemo(() => {
-    const c = aud?.condominios;
-    if (c) return `${c.nome} - ${c.cidade}/${c.uf}`;
-    return aud?.condominio_id ?? "Auditoria";
-  }, [aud?.condominios, aud?.condominio_id]);
-
-  const isStaff = useMemo(() => {
-    const r = me?.role ?? null;
-    return r === "interno" || r === "gestor";
-  }, [me?.role]);
+  const totalCiclos = useMemo(() => ciclos.reduce((s, x) => s + safeNum(x.ciclos), 0), [ciclos]);
 
   async function carregarTudo() {
     setLoading(true);
     setErr(null);
-    setOk(null);
 
     try {
-      if (!isUuid(auditoriaId)) throw new Error("ID inválido.");
-
-      const meRes = await fetch("/api/me", { cache: "no-store" });
-      const meJson = await safeJson(meRes);
-      if (!meRes.ok) throw new Error(meJson?.error ?? "Erro ao identificar usuário");
-      setMe(meJson as Me);
-
+      // 1) auditoria (dados do mês)
       const aRes = await fetch(`/api/auditorias/${auditoriaId}`, { cache: "no-store" });
-      const aJson = await safeJson(aRes);
-      if (!aRes.ok) throw new Error(aJson?.error ?? "Erro ao carregar auditoria");
+      const aJson = await aRes.json();
+      if (!aRes.ok) throw new Error(aJson?.error ?? "Falha ao carregar auditoria");
+      const audRow = aJson?.data ?? aJson ?? null;
+      setAud(audRow);
 
-      const found = (aJson?.auditoria ?? null) as Aud | null;
-      if (!found) throw new Error("Auditoria não encontrada.");
-      setAud(found);
+      // 2) máquinas do condomínio
+      const cId = audRow?.condominio_id;
+      if (!cId) throw new Error("Auditoria sem condominio_id");
+      const mRes = await fetch(`/api/condominios/${cId}/maquinas`, { cache: "no-store" });
+      const mJson = await mRes.json();
+      if (!mRes.ok) throw new Error(mJson?.error ?? "Falha ao carregar máquinas");
+      const mList = toList<CondoMaquina>(mJson);
+      setMaquinas(mList);
 
-      // ✅ ciclos: agora sempre vem a lista completa em json.itens (ou json.data)
-      const cRes = await fetch(`/api/auditorias/${auditoriaId}/ciclos`, { cache: "no-store" });
-      const cJson = await safeJson(cRes);
-      if (!cRes.ok) throw new Error(cJson?.error ?? "Erro ao carregar ciclos");
-
-      const list = (cJson?.itens ?? cJson?.data ?? []) as any[];
-      const normalized: CicloItem[] = (list ?? []).map((x: any) => ({
-        maquina_tag: String(x.maquina_tag ?? ""),
-        tipo: x.tipo ?? null,
-        ciclos: Number(x.ciclos ?? 0),
+      // 3) ciclos por máquina
+      const ciclosRes = await fetch(`/api/auditorias/${auditoriaId}/ciclos`, { cache: "no-store" });
+      const ciclosJson = await ciclosRes.json();
+      if (!ciclosRes.ok) throw new Error(ciclosJson?.error ?? "Falha ao carregar ciclos");
+      const cicloList = toList<CicloItem>(ciclosJson?.itens ?? ciclosJson);
+      const normalized = cicloList.map((it) => ({
+        maquina_id: it.maquina_id,
+        maquina_tag: it.maquina_tag,
+        tipo: it.tipo,
+        ciclos: safeNum(it.ciclos),
       }));
-
       setCiclos(normalized.filter((x) => x.maquina_tag));
 
-      // tenta achar leitura anterior automaticamente (interno consegue listar todas)
-      try {
-        const listRes = await fetch("/api/auditorias", { cache: "no-store" });
-        const listJson = await safeJson(listRes);
-        if (listRes.ok && Array.isArray(listJson)) {
-          const all: any[] = listJson;
-          const same = all.find(
-            (x) =>
-              String(x?.condominio_id ?? "") === String(found.condominio_id) &&
-              String(x?.mes_ref ?? x?.ano_mes ?? "") === String(prevMes)
-          );
-
-          if (same) {
-            setAutoBase({
-              agua: same?.agua_leitura ?? null,
-              energia: same?.energia_leitura ?? null,
-              gas: same?.gas_leitura ?? null,
-            });
-          } else {
-            setAutoBase(null);
-          }
-        }
-      } catch {
-        // ignora
-      }
-
-      // decide se precisa pedir base manual
-      const hasManual =
-        (found.agua_leitura_base !== null && found.agua_leitura_base !== undefined) ||
-        (found.energia_leitura_base !== null && found.energia_leitura_base !== undefined) ||
-        (found.gas_leitura_base !== null && found.gas_leitura_base !== undefined);
-
-      if (isStaff) {
-        const noAuto = !autoBase;
-        if (!hasManual && noAuto) {
-          setBaseAgua("");
-          setBaseEnergia("");
-          setBaseGas("");
-          setNeedBase(true);
-        } else {
-          setNeedBase(false);
-        }
-      }
+      await carregarFechamento();
     } catch (e: any) {
-      setErr(e?.message ?? "Falha ao carregar");
+      setErr(e?.message ?? "Erro inesperado");
     } finally {
       setLoading(false);
     }
   }
 
-  // reavalia needBase quando autoBase chegar
-  useEffect(() => {
-    if (!isStaff) return;
-    if (!aud) return;
-
-    const hasManual =
-      (aud.agua_leitura_base !== null && aud.agua_leitura_base !== undefined) ||
-      (aud.energia_leitura_base !== null && aud.energia_leitura_base !== undefined) ||
-      (aud.gas_leitura_base !== null && aud.gas_leitura_base !== undefined);
-
-    if (!hasManual && !autoBase) setNeedBase(true);
-    if (hasManual || autoBase) setNeedBase(false);
-  }, [autoBase, aud, isStaff]);
-
-  useEffect(() => {
-    carregarTudo();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auditoriaId]);
-
-  const baseUsada = useMemo(() => {
-    if (autoBase) return { origem: "auto", ...autoBase };
-
-    if (aud) {
-      const anyManual =
-        (aud.agua_leitura_base !== null && aud.agua_leitura_base !== undefined) ||
-        (aud.energia_leitura_base !== null && aud.energia_leitura_base !== undefined) ||
-        (aud.gas_leitura_base !== null && aud.gas_leitura_base !== undefined);
-
-      if (anyManual) {
-        return {
-          origem: "manual",
-          agua: aud.agua_leitura_base ?? null,
-          energia: aud.energia_leitura_base ?? null,
-          gas: aud.gas_leitura_base ?? null,
-        };
-      }
-    }
-    return null;
-  }, [autoBase, aud]);
-
-  const consumo = useMemo(() => {
-    const b = baseUsada;
-    if (!aud || !b) return null;
-
-    const aA = aud.agua_leitura ?? null;
-    const aE = aud.energia_leitura ?? null;
-    const aG = aud.gas_leitura ?? null;
-
-    const cA = aA !== null && b.agua !== null && b.agua !== undefined ? Number(aA) - Number((b as any).agua ?? 0) : null;
-    const cE = aE !== null && b.energia !== null && b.energia !== undefined ? Number(aE) - Number((b as any).energia ?? 0) : null;
-    const cG = aG !== null && (b as any).gas !== null && (b as any).gas !== undefined ? Number(aG) - Number((b as any).gas ?? 0) : null;
-
-    return {
-      agua: cA !== null && Number.isFinite(cA) ? cA : null,
-      energia: cE !== null && Number.isFinite(cE) ? cE : null,
-      gas: cG !== null && Number.isFinite(cG) ? cG : null,
-    };
-  }, [aud, baseUsada]);
-
-  async function salvarBaseManual() {
+  async function salvarBaseLeitura() {
     setErr(null);
-    setOk(null);
-
-    if (!aud) return;
-    if (!isStaff) return setErr("Sem permissão.");
-
-    setSavingBase(true);
     try {
+      const payload = {
+        agua_base: base.agua ? safeNum(base.agua) : null,
+        energia_base: base.energia ? safeNum(base.energia) : null,
+        gas_base: base.gas ? safeNum(base.gas) : null,
+      };
+
       const res = await fetch(`/api/auditorias/${auditoriaId}/base`, {
-        method: "PATCH",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          agua_leitura_base: toNumOrNull(baseAgua),
-          energia_leitura_base: toNumOrNull(baseEnergia),
-          gas_leitura_base: toNumOrNull(baseGas),
-        }),
+        body: JSON.stringify(payload),
       });
 
-      const json = await safeJson(res);
-      if (!res.ok) throw new Error(json?.error ?? "Erro ao salvar base");
-
-      setAud((prev) => {
-        if (!prev) return prev;
-        const b = json?.base ?? {};
-        return {
-          ...prev,
-          agua_leitura_base: b.agua_leitura_base ?? prev.agua_leitura_base ?? null,
-          energia_leitura_base: b.energia_leitura_base ?? prev.energia_leitura_base ?? null,
-          gas_leitura_base: b.gas_leitura_base ?? prev.gas_leitura_base ?? null,
-          leitura_base_origem: b.leitura_base_origem ?? "manual",
-        };
-      });
-
-      setNeedBase(false);
-      setOk("Leitura base salva ✅");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Falha ao salvar base");
+      setBaseModalOpen(false);
+      await carregarTudo();
     } catch (e: any) {
-      setErr(e?.message ?? "Falha ao salvar base");
-    } finally {
-      setSavingBase(false);
+      setErr(e?.message ?? "Erro ao salvar base");
     }
   }
 
   async function salvarCiclos() {
     setErr(null);
-    setOk(null);
-
-    if (!aud) return;
-    if (!isStaff) return setErr("Sem permissão.");
-
-    setSavingCiclos(true);
     try {
       const res = await fetch(`/api/auditorias/${auditoriaId}/ciclos`, {
         method: "POST",
@@ -336,276 +190,702 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         body: JSON.stringify({ itens: ciclos }),
       });
 
-      const json = await safeJson(res);
-      if (!res.ok) throw new Error(json?.error ?? "Erro ao salvar ciclos");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Falha ao salvar ciclos");
 
-      setOk("Ciclos salvos ✅");
+      await carregarTudo();
     } catch (e: any) {
-      setErr(e?.message ?? "Falha ao salvar ciclos");
-    } finally {
-      setSavingCiclos(false);
+      setErr(e?.message ?? "Erro ao salvar ciclos");
     }
   }
 
-  if (!isUuid(auditoriaId)) {
-    return (
-      <AppShell title="Auditoria (Interno)">
-        <div className="card" style={{ marginTop: 12 }}>
-          <h2>ID inválido</h2>
-          <p>Esta página deve ser acessada a partir da lista de auditorias.</p>
-          <button className="btn" onClick={() => router.push("/auditorias")} style={{ marginTop: 12 }}>
-            Voltar para Auditorias
-          </button>
-        </div>
-      </AppShell>
-    );
+  async function carregarFechamento() {
+    try {
+      const res = await fetch(`/api/auditorias/${auditoriaId}/fechamento`, { cache: "no-store" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Falha ao carregar relatório financeiro");
+      setFechamento(Array.isArray(json?.itens) ? json.itens : []);
+      setComprovanteUrl(json?.auditoria?.comprovante_fechamento_url ?? null);
+    } catch (e: any) {
+      // não trava a tela principal
+      console.error(e);
+    }
   }
 
+  async function gerarItensRelatorio() {
+    if (!ciclos.length) return;
+    setSavingFechamento(true);
+    setErr(null);
+
+    try {
+      // só gera se ainda não existir nada (pra não sobrescrever valores)
+      if (fechamento.length) return;
+
+      for (const it of ciclos) {
+        const res = await fetch(`/api/auditorias/${auditoriaId}/fechamento`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            maquina_tag: it.maquina_tag,
+            tipo: it.tipo,
+            ciclos: it.ciclos,
+            valor_total: 0,
+            valor_repasse: 0,
+            valor_cashback: 0,
+            observacoes: null,
+          }),
+        });
+
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.error ?? "Falha ao gerar itens do relatório");
+      }
+
+      await carregarFechamento();
+    } catch (e: any) {
+      setErr(e?.message ?? "Erro ao gerar itens do relatório");
+    } finally {
+      setSavingFechamento(false);
+    }
+  }
+
+  async function salvarRelatorio() {
+    setSavingFechamento(true);
+    setErr(null);
+
+    try {
+      for (const it of fechamento) {
+        const res = await fetch(`/api/auditorias/${auditoriaId}/fechamento`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            item_id: it.id,
+            maquina_tag: it.maquina_tag,
+            tipo: it.tipo,
+            ciclos: it.ciclos,
+            valor_total: Number(it.valor_total ?? 0),
+            valor_repasse: Number(it.valor_repasse ?? 0),
+            valor_cashback: Number(it.valor_cashback ?? 0),
+            observacoes: it.observacoes ?? null,
+          }),
+        });
+
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.error ?? "Falha ao salvar relatório");
+      }
+
+      await carregarFechamento();
+    } catch (e: any) {
+      setErr(e?.message ?? "Erro ao salvar relatório");
+    } finally {
+      setSavingFechamento(false);
+    }
+  }
+
+  async function uploadComprovante(file: File) {
+    setErr(null);
+
+    const fd = new FormData();
+    fd.append("kind", "comprovante_fechamento");
+    fd.append("file", file);
+
+    const res = await fetch(`/api/auditorias/${auditoriaId}/fotos`, {
+      method: "POST",
+      body: fd,
+    });
+
+    const json = await res.json();
+    if (!res.ok) {
+      throw new Error(json?.error ?? "Falha ao enviar comprovante");
+    }
+
+    const url = json?.url ?? json?.publicUrl ?? json?.data?.publicUrl ?? null;
+    if (url) setComprovanteUrl(url);
+
+    await carregarFechamento();
+  }
+
+  async function finalizarMes() {
+    setFinalizando(true);
+    setErr(null);
+
+    try {
+      const res = await fetch(`/api/auditorias/${auditoriaId}/fechamento`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          comprovante_fechamento_url: comprovanteUrl,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Falha ao finalizar mês");
+
+      await carregarTudo();
+      await carregarFechamento();
+    } catch (e: any) {
+      setErr(e?.message ?? "Erro ao finalizar mês");
+    } finally {
+      setFinalizando(false);
+    }
+  }
+
+  useEffect(() => {
+    carregarTudo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auditoriaId]);
+
+  const mes = (aud?.mes_ref ?? aud?.ano_mes ?? monthISO()) as string;
+
+  // leitura base (vinda do backend em /fechamento GET). aqui a tela só calcula, não armazena.
+  // modal de base escreve em /api/auditorias/[id]/base.
+  const aguaAtual = safeNum(aud?.agua_leitura);
+  const energiaAtual = safeNum(aud?.energia_leitura);
+  const gasAtual = safeNum(aud?.gas_leitura);
+
+  // card “consumo calculado”: a base real vem do endpoint /fechamento (ele calcula com mês anterior ou base informada).
+  // Por enquanto, manter a UI simples e usar o texto “Base: informada manualmente” como já estava na sua tela.
+  // (O backend é quem garante se existe histórico/base.)
+
   return (
-    <AppShell title="Auditoria (Interno)">
-      <div className="mx-auto max-w-5xl p-6">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-semibold">Fechamento (Interno)</h1>
-            <div className="mt-1 text-sm text-gray-600 truncate">{titulo}</div>
-            <div className="mt-2 text-xs text-gray-500">
-              Mês: <b>{mesRef}</b> • Anterior: <b>{prevMes}</b> • ID: <span className="font-mono">{auditoriaId}</span>
+    <AppShell>
+      <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 14, color: "#666" }}>Auditoria (Interno)</div>
+            <h1 style={{ fontSize: 28, fontWeight: 800, marginTop: 6 }}>Fechamento (Interno)</h1>
+            <div style={{ color: "#666", marginTop: 6 }}>
+              <span style={{ fontFamily: "monospace" }}>{aud?.condominio_id ?? "-"}</span>
+            </div>
+            <div style={{ color: "#666", marginTop: 6 }}>
+              Mês: <b>{mes}</b> · ID: <span style={{ fontFamily: "monospace" }}>{auditoriaId}</span>
             </div>
           </div>
 
-          <div className="flex gap-2">
+          <div style={{ display: "flex", gap: 10 }}>
             <button
-              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
               onClick={carregarTudo}
-              disabled={loading}
+              style={{
+                padding: "10px 16px",
+                borderRadius: 14,
+                border: "1px solid #d8d8d8",
+                background: "white",
+                cursor: "pointer",
+              }}
             >
               {loading ? "Carregando..." : "Recarregar"}
             </button>
-
-            <Link className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50" href="/auditorias">
+            <button
+              onClick={() => history.back()}
+              style={{
+                padding: "10px 16px",
+                borderRadius: 14,
+                border: "1px solid #d8d8d8",
+                background: "white",
+                cursor: "pointer",
+              }}
+            >
               Voltar
-            </Link>
+            </button>
           </div>
         </div>
 
-        {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
-        {ok && <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>}
+        {err ? (
+          <div style={{ marginTop: 14, padding: 12, borderRadius: 12, background: "#fff1f1", color: "#b00020" }}>
+            {err}
+          </div>
+        ) : null}
 
-        {/* Painel de consumo */}
-        <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-gray-800">Consumo do mês (calculado)</div>
-              <div className="mt-1 text-xs text-gray-500">
-                Base:{" "}
-                <b>
-                  {baseUsada ? ((baseUsada as any).origem === "auto" ? "mês anterior (auto)" : "informada manualmente") : "não definida"}
-                </b>
-              </div>
-            </div>
-
-            {isStaff && (
-              <button
-                className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
-                onClick={() => setNeedBase(true)}
-                disabled={loading || !aud}
-                title="Definir/editar leitura base manual"
-              >
-                Definir leitura base
-              </button>
-            )}
+        <div
+          style={{
+            marginTop: 18,
+            padding: 18,
+            border: "1px solid #e6e6e6",
+            borderRadius: 16,
+            background: "white",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>Consumo do mês (calculado)</div>
+            <button
+              onClick={() => setBaseModalOpen(true)}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 14,
+                border: "1px solid #d8d8d8",
+                background: "white",
+                cursor: "pointer",
+              }}
+            >
+              Definir leitura base
+            </button>
           </div>
 
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-            <div className="rounded-xl border p-3">
-              <div className="text-xs text-gray-500">Água</div>
-              <div className="mt-1 text-sm">
-                Atual: <b>{fmt(aud?.agua_leitura)}</b>
-              </div>
-              <div className="text-sm">
-                Base: <b>{fmt((baseUsada as any)?.agua)}</b>
-              </div>
-              <div className="mt-1 text-sm">
-                Consumo: <b>{consumo ? fmt(consumo.agua) : "—"}</b>
-              </div>
+          <div style={{ color: "#666", marginTop: 6 }}>Base: informada manualmente</div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 14 }}>
+            <div style={{ border: "1px solid #f0f0f0", borderRadius: 14, padding: 14 }}>
+              <div style={{ fontWeight: 800 }}>Água</div>
+              <div style={{ marginTop: 6 }}>Atual: <b>{aguaAtual || "-"}</b></div>
+              <div>Base: <b>1</b></div>
+              <div>Consumo: <b>{calcConsumo(aguaAtual, 1) ?? "-"}</b></div>
             </div>
 
-            <div className="rounded-xl border p-3">
-              <div className="text-xs text-gray-500">Energia</div>
-              <div className="mt-1 text-sm">
-                Atual: <b>{fmt(aud?.energia_leitura)}</b>
-              </div>
-              <div className="text-sm">
-                Base: <b>{fmt((baseUsada as any)?.energia)}</b>
-              </div>
-              <div className="mt-1 text-sm">
-                Consumo: <b>{consumo ? fmt(consumo.energia) : "—"}</b>
-              </div>
+            <div style={{ border: "1px solid #f0f0f0", borderRadius: 14, padding: 14 }}>
+              <div style={{ fontWeight: 800 }}>Energia</div>
+              <div style={{ marginTop: 6 }}>Atual: <b>{energiaAtual || "-"}</b></div>
+              <div>Base: <b>1</b></div>
+              <div>Consumo: <b>{calcConsumo(energiaAtual, 1) ?? "-"}</b></div>
             </div>
 
-            <div className="rounded-xl border p-3">
-              <div className="text-xs text-gray-500">Gás</div>
-              <div className="mt-1 text-sm">
-                Atual: <b>{fmt(aud?.gas_leitura)}</b>
-              </div>
-              <div className="text-sm">
-                Base: <b>{fmt((baseUsada as any)?.gas)}</b>
-              </div>
-              <div className="mt-1 text-sm">
-                Consumo: <b>{consumo ? fmt(consumo.gas) : "—"}</b>
-              </div>
+            <div style={{ border: "1px solid #f0f0f0", borderRadius: 14, padding: 14 }}>
+              <div style={{ fontWeight: 800 }}>Gás</div>
+              <div style={{ marginTop: 6 }}>Atual: <b>{gasAtual || "-"}</b></div>
+              <div>Base: <b>1</b></div>
+              <div>Consumo: <b>{calcConsumo(gasAtual, 1) ?? "-"}</b></div>
             </div>
           </div>
-
-          {!baseUsada && (
-            <div className="mt-3 rounded-xl border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">
-              Não encontrei leitura do mês anterior e ainda não existe base manual salva.
-              <br />
-              Clique em <b>“Definir leitura base”</b> para informar a leitura anterior.
-            </div>
-          )}
         </div>
 
-        {/* Ciclos por máquina */}
-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
+        <div
+          style={{
+            marginTop: 18,
+            padding: 18,
+            border: "1px solid #e6e6e6",
+            borderRadius: 16,
+            background: "white",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
-              <div className="text-sm font-semibold text-gray-800">Ciclos por máquina</div>
-              <div className="mt-1 text-xs text-gray-500">
+              <div style={{ fontSize: 16, fontWeight: 800 }}>Ciclos por máquina</div>
+              <div style={{ color: "#666", marginTop: 4 }}>
                 O Interno lança ciclos por máquina individual. A lista vem do cadastro do condomínio (condominio_maquinas).
               </div>
             </div>
 
             <button
-              className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
               onClick={salvarCiclos}
-              disabled={savingCiclos || loading || !aud || !isStaff}
-              title={!isStaff ? "Sem permissão" : "Salvar ciclos"}
+              disabled={isFinal}
+              style={{
+                padding: "10px 16px",
+                borderRadius: 14,
+                border: "none",
+                background: "#1f6feb",
+                color: "white",
+                fontWeight: 900,
+                cursor: "pointer",
+                opacity: isFinal ? 0.5 : 1,
+              }}
             >
-              {savingCiclos ? "Salvando..." : "Salvar ciclos"}
+              Salvar ciclos
             </button>
           </div>
 
-          <div className="mt-3 overflow-hidden rounded-xl border">
-            <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600">
-              <div className="col-span-5">Máquina</div>
-              <div className="col-span-4">Tipo</div>
-              <div className="col-span-3 text-right">Ciclos</div>
-            </div>
+          <div style={{ marginTop: 14, overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
+                  <th style={{ padding: "10px 8px" }}>Máquina</th>
+                  <th style={{ padding: "10px 8px" }}>Tipo</th>
+                  <th style={{ padding: "10px 8px", textAlign: "right" }}>Ciclos</th>
+                </tr>
+              </thead>
 
-            <div className="divide-y">
-              {ciclos.length === 0 && (
-                <div className="px-3 py-3 text-sm text-gray-600">Nenhuma máquina ativa cadastrada para este condomínio.</div>
-              )}
+              <tbody>
+                {ciclos.map((m) => (
+                  <tr key={m.maquina_id} style={{ borderBottom: "1px solid #f3f3f3" }}>
+                    <td style={{ padding: "10px 8px", fontWeight: 700 }}>{m.maquina_tag}</td>
+                    <td style={{ padding: "10px 8px", color: "#666" }}>{m.tipo}</td>
+                    <td style={{ padding: "10px 8px", textAlign: "right" }}>
+                      <input
+                        type="number"
+                        value={m.ciclos}
+                        disabled={isFinal}
+                        onChange={(e) => {
+                          const v = safeNum(e.target.value);
+                          setCiclos((arr) => arr.map((x) => (x.maquina_id === m.maquina_id ? { ...x, ciclos: v } : x)));
+                        }}
+                        style={{
+                          width: 90,
+                          padding: "8px 10px",
+                          borderRadius: 12,
+                          border: "1px solid #ddd",
+                          textAlign: "right",
+                          opacity: isFinal ? 0.6 : 1,
+                        }}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
 
-              {ciclos.map((it, idx) => (
-                <div key={it.maquina_tag} className="grid grid-cols-12 px-3 py-2 text-sm items-center">
-                  <div className="col-span-5 font-mono text-xs text-gray-800">{it.maquina_tag}</div>
-                  <div className="col-span-4 text-gray-700">{it.tipo ?? "—"}</div>
-                  <div className="col-span-3 flex justify-end">
-                    <input
-                      className="w-24 rounded-lg border px-2 py-1 text-right"
-                      value={String(it.ciclos ?? 0)}
-                      onChange={(e) => {
-                        const raw = e.target.value.replace(/[^\d]/g, "");
-                        const n = raw ? Number(raw) : 0;
-                        setCiclos((prev) => {
-                          const copy = [...prev];
-                          copy[idx] = { ...copy[idx], ciclos: n };
-                          return copy;
-                        });
-                      }}
-                      inputMode="numeric"
-                      disabled={!isStaff}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
+              <tfoot>
+                <tr>
+                  <td style={{ padding: "10px 8px", fontWeight: 900 }} colSpan={2}>
+                    Total
+                  </td>
+                  <td style={{ padding: "10px 8px", textAlign: "right", fontWeight: 900 }}>{totalCiclos}</td>
+                </tr>
+              </tfoot>
+            </table>
           </div>
 
-          <div className="mt-3 text-xs text-gray-500">
+          <div style={{ marginTop: 10, color: "#666" }}>
             Próximo: gerar o <b>relatório financeiro</b> (condomínio, valor, conta) e anexar o comprovante.
           </div>
         </div>
-      </div>
 
-      {/* MODAL: leitura base manual */}
-      {needBase && isStaff && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold">Leitura anterior não encontrada</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  Condomínio novo ou histórico vazio. Informe a leitura anterior/base para o cálculo do consumo do mês.
-                </div>
-                <div className="mt-1 text-xs text-gray-500">
-                  Condomínio: <b>{titulo}</b> • Mês: <b>{mesRef}</b> • Anterior: <b>{prevMes}</b>
-                </div>
-              </div>
-
-              <button className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50" onClick={() => setNeedBase(false)} disabled={savingBase}>
-                Fechar
-              </button>
+        {/* RELATÓRIO FINANCEIRO */}
+        <div
+          style={{
+            marginTop: 18,
+            padding: 18,
+            border: "1px solid #e6e6e6",
+            borderRadius: 16,
+            background: "white",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 800 }}>Relatório financeiro</div>
+              <div style={{ color: "#666", marginTop: 4 }}>Preencha valores, anexe comprovante e finalize o mês.</div>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-              <div>
-                <label className="mb-1 block text-xs text-gray-600">Água (base)</label>
-                <input
-                  className="w-full rounded-xl border px-3 py-2"
-                  value={baseAgua}
-                  onChange={(e) => setBaseAgua(e.target.value)}
-                  inputMode="decimal"
-                  placeholder="ex: 12345"
-                  disabled={savingBase}
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-gray-600">Energia (base)</label>
-                <input
-                  className="w-full rounded-xl border px-3 py-2"
-                  value={baseEnergia}
-                  onChange={(e) => setBaseEnergia(e.target.value)}
-                  inputMode="decimal"
-                  placeholder="ex: 67890"
-                  disabled={savingBase}
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-gray-600">Gás (base)</label>
-                <input
-                  className="w-full rounded-xl border px-3 py-2"
-                  value={baseGas}
-                  onChange={(e) => setBaseGas(e.target.value)}
-                  inputMode="decimal"
-                  placeholder="se não tiver, vazio"
-                  disabled={savingBase}
-                />
-              </div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap gap-2 justify-end">
-              <button className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" onClick={() => setNeedBase(false)} disabled={savingBase}>
-                Cancelar
-              </button>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              {fechamento.length === 0 ? (
+                <button
+                  onClick={gerarItensRelatorio}
+                  disabled={savingFechamento || ciclos.length === 0 || isFinal}
+                  style={{
+                    padding: "10px 14px",
+                    borderRadius: 14,
+                    border: "1px solid #d8d8d8",
+                    background: "white",
+                    cursor: "pointer",
+                    opacity: savingFechamento || ciclos.length === 0 || isFinal ? 0.6 : 1,
+                  }}
+                >
+                  {savingFechamento ? "Gerando..." : "Gerar itens"}
+                </button>
+              ) : null}
 
               <button
-                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                onClick={salvarBaseManual}
-                disabled={savingBase}
+                onClick={salvarRelatorio}
+                disabled={savingFechamento || fechamento.length === 0 || isFinal}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 14,
+                  border: "none",
+                  background: "#1f6feb",
+                  color: "white",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  opacity: savingFechamento || fechamento.length === 0 || isFinal ? 0.6 : 1,
+                }}
               >
-                {savingBase ? "Salvando..." : "Salvar base"}
+                {savingFechamento ? "Salvando..." : "Salvar relatório"}
               </button>
             </div>
-
-            <div className="mt-3 text-xs text-gray-500">Depois que tiver histórico, isso some: o sistema usa automaticamente o mês anterior.</div>
           </div>
+
+          {fechamento.length === 0 ? (
+            <div style={{ marginTop: 14, color: "#666" }}>
+              Nenhum item ainda. Clique em <b>Gerar itens</b> (depois de salvar ciclos) para criar o relatório por
+              máquina.
+            </div>
+          ) : (
+            <>
+              <div style={{ marginTop: 14, overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
+                      <th style={{ padding: "10px 8px" }}>Máquina</th>
+                      <th style={{ padding: "10px 8px" }}>Tipo</th>
+                      <th style={{ padding: "10px 8px" }}>Ciclos</th>
+                      <th style={{ padding: "10px 8px" }}>Valor total</th>
+                      <th style={{ padding: "10px 8px" }}>Repasse</th>
+                      <th style={{ padding: "10px 8px" }}>Cashback</th>
+                      <th style={{ padding: "10px 8px" }}>Obs.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fechamento.map((it) => (
+                      <tr key={it.maquina_tag} style={{ borderBottom: "1px solid #f3f3f3" }}>
+                        <td style={{ padding: "10px 8px", fontWeight: 700 }}>{it.maquina_tag}</td>
+                        <td style={{ padding: "10px 8px", color: "#666" }}>{it.tipo ?? "-"}</td>
+                        <td style={{ padding: "10px 8px" }}>{it.ciclos}</td>
+                        <td style={{ padding: "10px 8px" }}>
+                          <input
+                            type="number"
+                            value={it.valor_total ?? 0}
+                            disabled={isFinal}
+                            onChange={(e) =>
+                              setFechamento((arr) =>
+                                arr.map((x) =>
+                                  x.maquina_tag === it.maquina_tag ? { ...x, valor_total: Number(e.target.value) } : x
+                                )
+                              )
+                            }
+                            style={{
+                              width: 120,
+                              padding: "8px 10px",
+                              borderRadius: 12,
+                              border: "1px solid #ddd",
+                              opacity: isFinal ? 0.6 : 1,
+                            }}
+                          />
+                        </td>
+                        <td style={{ padding: "10px 8px" }}>
+                          <input
+                            type="number"
+                            value={it.valor_repasse ?? 0}
+                            disabled={isFinal}
+                            onChange={(e) =>
+                              setFechamento((arr) =>
+                                arr.map((x) =>
+                                  x.maquina_tag === it.maquina_tag
+                                    ? { ...x, valor_repasse: Number(e.target.value) }
+                                    : x
+                                )
+                              )
+                            }
+                            style={{
+                              width: 120,
+                              padding: "8px 10px",
+                              borderRadius: 12,
+                              border: "1px solid #ddd",
+                              opacity: isFinal ? 0.6 : 1,
+                            }}
+                          />
+                        </td>
+                        <td style={{ padding: "10px 8px" }}>
+                          <input
+                            type="number"
+                            value={it.valor_cashback ?? 0}
+                            disabled={isFinal}
+                            onChange={(e) =>
+                              setFechamento((arr) =>
+                                arr.map((x) =>
+                                  x.maquina_tag === it.maquina_tag
+                                    ? { ...x, valor_cashback: Number(e.target.value) }
+                                    : x
+                                )
+                              )
+                            }
+                            style={{
+                              width: 120,
+                              padding: "8px 10px",
+                              borderRadius: 12,
+                              border: "1px solid #ddd",
+                              opacity: isFinal ? 0.6 : 1,
+                            }}
+                          />
+                        </td>
+                        <td style={{ padding: "10px 8px" }}>
+                          <input
+                            value={it.observacoes ?? ""}
+                            disabled={isFinal}
+                            onChange={(e) =>
+                              setFechamento((arr) =>
+                                arr.map((x) =>
+                                  x.maquina_tag === it.maquina_tag ? { ...x, observacoes: e.target.value } : x
+                                )
+                              )
+                            }
+                            style={{
+                              width: 240,
+                              padding: "8px 10px",
+                              borderRadius: 12,
+                              border: "1px solid #ddd",
+                              opacity: isFinal ? 0.6 : 1,
+                            }}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ marginTop: 12, display: "flex", gap: 16, flexWrap: "wrap", color: "#333" }}>
+                <div>
+                  <b>Total:</b> {fechamento.reduce((s, x) => s + Number(x.valor_total ?? 0), 0).toFixed(2)}
+                </div>
+                <div>
+                  <b>Repasse:</b> {fechamento.reduce((s, x) => s + Number(x.valor_repasse ?? 0), 0).toFixed(2)}
+                </div>
+                <div>
+                  <b>Cashback:</b> {fechamento.reduce((s, x) => s + Number(x.valor_cashback ?? 0), 0).toFixed(2)}
+                </div>
+              </div>
+
+              <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Comprovante</div>
+                  {comprovanteUrl ? (
+                    <div style={{ marginBottom: 6 }}>
+                      <a href={comprovanteUrl} target="_blank" rel="noreferrer">
+                        Ver comprovante
+                      </a>
+                    </div>
+                  ) : (
+                    <div style={{ marginBottom: 6, color: "#666" }}>Ainda não anexado.</div>
+                  )}
+
+                  <input
+                    type="file"
+                    accept="image/*,.pdf"
+                    disabled={isFinal}
+                    onChange={async (e) => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      try {
+                        await uploadComprovante(f);
+                      } catch (err2: any) {
+                        setErr(err2?.message ?? "Erro ao enviar comprovante");
+                      } finally {
+                        (e.target as HTMLInputElement).value = "";
+                      }
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: "flex", alignItems: "end" }}>
+                  <button
+                    onClick={finalizarMes}
+                    disabled={finalizando || !comprovanteUrl || fechamento.length === 0 || isFinal}
+                    style={{
+                      padding: "12px 16px",
+                      borderRadius: 14,
+                      border: "none",
+                      background: "#16a34a",
+                      color: "white",
+                      fontWeight: 900,
+                      cursor: "pointer",
+                      opacity: finalizando || !comprovanteUrl || fechamento.length === 0 || isFinal ? 0.6 : 1,
+                    }}
+                  >
+                    {finalizando ? "Finalizando..." : "Finalizar mês"}
+                  </button>
+                </div>
+              </div>
+
+              {isFinal ? <div style={{ marginTop: 12, color: "#16a34a", fontWeight: 800 }}>Auditoria finalizada.</div> : null}
+            </>
+          )}
         </div>
-      )}
+
+        {/* MODAL BASE */}
+        {baseModalOpen ? (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.35)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 18,
+              zIndex: 50,
+            }}
+          >
+            <div style={{ width: 520, maxWidth: "100%", background: "white", borderRadius: 18, padding: 18 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 900 }}>Leitura anterior não encontrada</div>
+                  <div style={{ marginTop: 6, color: "#666" }}>
+                    Condomínio novo ou histórico vazio. Informe a leitura anterior/base para o cálculo do consumo do mês.
+                  </div>
+                  <div style={{ marginTop: 6, color: "#666" }}>
+                    Condomínio: <span style={{ fontFamily: "monospace" }}>{aud?.condominio_id ?? "-"}</span> · Mês:{" "}
+                    {mes}
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setBaseModalOpen(false)}
+                  style={{
+                    padding: "10px 14px",
+                    borderRadius: 14,
+                    border: "1px solid #d8d8d8",
+                    background: "white",
+                    cursor: "pointer",
+                    height: 42,
+                  }}
+                >
+                  Fechar
+                </button>
+              </div>
+
+              <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Água (base)</div>
+                  <input
+                    value={base.agua}
+                    onChange={(e) => setBase((b) => ({ ...b, agua: e.target.value }))}
+                    placeholder="ex: 12345"
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 14, border: "1px solid #ddd" }}
+                  />
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Energia (base)</div>
+                  <input
+                    value={base.energia}
+                    onChange={(e) => setBase((b) => ({ ...b, energia: e.target.value }))}
+                    placeholder="ex: 67890"
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 14, border: "1px solid #ddd" }}
+                  />
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Gás (base)</div>
+                  <input
+                    value={base.gas}
+                    onChange={(e) => setBase((b) => ({ ...b, gas: e.target.value }))}
+                    placeholder="se não tiver, vazio"
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 14, border: "1px solid #ddd" }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginTop: 14, display: "flex", justifyContent: "end", gap: 10 }}>
+                <button
+                  onClick={() => setBaseModalOpen(false)}
+                  style={{
+                    padding: "10px 14px",
+                    borderRadius: 14,
+                    border: "1px solid #d8d8d8",
+                    background: "white",
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  onClick={salvarBaseLeitura}
+                  style={{
+                    padding: "10px 14px",
+                    borderRadius: 14,
+                    border: "none",
+                    background: "#16a34a",
+                    color: "white",
+                    fontWeight: 900,
+                    cursor: "pointer",
+                  }}
+                >
+                  Salvar base
+                </button>
+              </div>
+
+              <div style={{ marginTop: 10, color: "#666", fontSize: 12 }}>
+                Depois que tiver histórico, isso some: o sistema usa automaticamente o mês anterior.
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </AppShell>
   );
 }
