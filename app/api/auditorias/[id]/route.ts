@@ -47,7 +47,7 @@ function roleGte(role: Role | null, min: Role) {
 
 function normalizeStatus(input: any): Status {
   const s = String(input ?? "aberta").trim().toLowerCase();
-  if (s === "em conferencia" || s === "em_conferencia" || s === "em confer├¬ncia") return "em_conferencia";
+  if (s === "em conferencia" || s === "em_conferencia" || s === "em conferência") return "em_conferencia";
   if (s === "em andamento" || s === "em_andamento") return "em_andamento";
   if (s === "final" || s === "finalizado") return "final";
   if (s === "aberta" || s === "aberto") return "aberta";
@@ -134,11 +134,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       .select(AUD_SELECT)
       .eq("id", id)
       .maybeSingle();
+
     if (audErr) return NextResponse.json({ error: audErr.message }, { status: 400 });
     if (!audRaw) return NextResponse.json({ error: "Auditoria não encontrada" }, { status: 404 });
 
     const aud = audRaw as AudRow;
-
     const prevStatus: Status = normalizeStatus(aud.status);
 
     const isOwnerAuditor = !!aud.auditor_id && aud.auditor_id === user.id;
@@ -160,7 +160,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
 
     /**
-     * REABRIR PARA CORREÇÃO (política A)
+     * REABRIR PARA CORREÇÃO
      * interno/gestor pode mudar: final -> em_conferencia
      * mas interno NÃO pode editar campos em final (só reabrir).
      */
@@ -197,13 +197,16 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     // Finalizar: interno/gestor somente em_conferencia -> final
     if (nextStatus === "final" && prevStatus !== "final") {
-      if (!roleGte(role, "interno")) return NextResponse.json({ error: "Somente interno/gestor pode finalizar auditoria" }, { status: 403 });
+      if (!roleGte(role, "interno")) {
+        return NextResponse.json({ error: "Somente interno/gestor pode finalizar auditoria" }, { status: 403 });
+      }
       if (prevStatus !== "em_conferencia") {
         return NextResponse.json({ error: "Só é possível finalizar quando a auditoria estiver em_conferencia" }, { status: 400 });
       }
 
       // REGRA: só finaliza se existir comprovante
-      if (!aud.comprovante_fechamento_url) {
+      const comprovante = String(aud.comprovante_fechamento_url ?? "").trim();
+      if (!comprovante) {
         return NextResponse.json(
           { error: "Não é possível finalizar sem comprovante de fechamento anexado (comprovante_fechamento)." },
           { status: 400 }
@@ -287,7 +290,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     // 5) Log de status (best-effort)
     if (nextStatus && normalizeStatus(aud.status) !== nextStatus) {
-      const note = typeof body?.note === "string" && body.note.trim().length > 0 ? body.note.trim().slice(0, 500) : null;
+      const note =
+        typeof body?.note === "string" && body.note.trim().length > 0 ? body.note.trim().slice(0, 500) : null;
 
       const logPayload = {
         auditoria_id: id,
