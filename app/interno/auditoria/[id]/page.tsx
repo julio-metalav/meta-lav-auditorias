@@ -16,15 +16,17 @@ type Aud = {
   mes_ref: string | null;
   status: string | null;
 
-  // leituras do mês (auditor ou interno)
   agua_leitura?: number | null;
   energia_leitura?: number | null;
   gas_leitura?: number | null;
 
-  // base manual (quando não há histórico)
   base_agua?: number | null;
   base_energia?: number | null;
   base_gas?: number | null;
+
+  // pode vir junto do backend
+  condominios?: { id?: string; nome?: string; cidade?: string; uf?: string } | null;
+  condominio?: { id?: string; nome?: string; cidade?: string; uf?: string } | null;
 };
 
 type Condo = {
@@ -39,21 +41,48 @@ type CicloItem = {
   tipo?: string | null;
   ciclos: number;
 
-  // enriquecido pelo backend (/api/auditorias/[id]/ciclos)
   categoria?: "lavadora" | "secadora" | string | null;
   capacidade_kg?: number | null;
   valor_ciclo?: number | null;
 };
 
-function toList<T = any>(payload: any): T[] {
-  if (Array.isArray(payload)) return payload as T[];
-  if (payload?.data && Array.isArray(payload.data)) return payload.data as T[];
-  if (payload?.data?.data && Array.isArray(payload.data.data)) return payload.data.data as T[];
-  return [];
-}
-
 function money(n: number) {
   return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+async function fetchJSON(url: string, init?: RequestInit) {
+  const res = await fetch(url, init);
+  const ct = res.headers.get("content-type") || "";
+
+  // Se não for JSON, devolve um erro bom (e evita "Unexpected token <")
+  if (!ct.includes("application/json")) {
+    const text = await res.text().catch(() => "");
+    const head = text.slice(0, 220).replace(/\s+/g, " ").trim();
+    throw new Error(`${url} retornou ${res.status} (não-JSON). Trecho: ${head || "(vazio)"}`);
+  }
+
+  const json = await res.json();
+  if (!res.ok) throw new Error(json?.error ?? `${url} falhou (${res.status})`);
+  return json;
+}
+
+function pickCondoFromAud(a: any): Condo | null {
+  const c = a?.condominios ?? a?.condominio ?? null;
+  if (!c) return null;
+
+  const id = String(c.id ?? a.condominio_id ?? "").trim();
+  const nome = String(c.nome ?? "").trim();
+  const cidade = String(c.cidade ?? "").trim();
+  const uf = String(c.uf ?? "").trim();
+
+  if (!nome) return null;
+
+  return {
+    id: id || String(a.condominio_id ?? ""),
+    nome,
+    cidade,
+    uf,
+  };
 }
 
 export default function InternoAuditoriaPage({ params }: { params: { id: string } }) {
@@ -80,6 +109,43 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     const r = me?.role ?? null;
     return r === "interno" || r === "gestor";
   }, [me?.role]);
+
+  const titulo = useMemo(() => {
+    if (!condo) return "—";
+    return `${condo.nome} - ${condo.cidade}/${condo.uf}`;
+  }, [condo]);
+
+  const mesRef = aud?.mes_ref ?? "";
+  const prevMes = useMemo(() => {
+    if (!mesRef || mesRef.length < 10) return "";
+    const [y, m] = mesRef.slice(0, 10).split("-").map((x) => Number(x));
+    if (!y || !m) return "";
+    const d = new Date(y, m - 1, 1);
+    d.setMonth(d.getMonth() - 1);
+    const yy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    return `${yy}-${mm}-01`;
+  }, [mesRef]);
+
+  const consumo = useMemo(() => {
+    const a = Number(aud?.agua_leitura ?? 0);
+    const e = Number(aud?.energia_leitura ?? 0);
+    const g = Number(aud?.gas_leitura ?? 0);
+
+    const ba = aud?.base_agua;
+    const be = aud?.base_energia;
+    const bg = aud?.base_gas;
+
+    const hasBase = ba !== null && ba !== undefined && be !== null && be !== undefined;
+    const hasGasBase = bg !== null && bg !== undefined;
+
+    return {
+      hasBase,
+      agua: hasBase ? a - Number(ba ?? 0) : null,
+      energia: hasBase ? e - Number(be ?? 0) : null,
+      gas: hasGasBase ? g - Number(bg ?? 0) : null,
+    };
+  }, [aud?.agua_leitura, aud?.energia_leitura, aud?.gas_leitura, aud?.base_agua, aud?.base_energia, aud?.base_gas]);
 
   const relatorio = useMemo(() => {
     const toLower = (s: any) => String(s ?? "").toLowerCase();
@@ -133,58 +199,15 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     };
   }, [ciclos]);
 
-  const titulo = useMemo(() => {
-    if (!condo) return "—";
-    return `${condo.nome} - ${condo.cidade}/${condo.uf}`;
-  }, [condo]);
-
-  const mesRef = aud?.mes_ref ?? "";
-  const prevMes = useMemo(() => {
-    // calcula mês anterior no formato YYYY-MM-01
-    if (!mesRef || mesRef.length < 10) return "";
-    const [y, m] = mesRef.slice(0, 10).split("-").map((x) => Number(x));
-    if (!y || !m) return "";
-    const d = new Date(y, m - 1, 1);
-    d.setMonth(d.getMonth() - 1);
-    const yy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    return `${yy}-${mm}-01`;
-  }, [mesRef]);
-
-  const consumo = useMemo(() => {
-    // consumo = leitura atual - base
-    const a = Number(aud?.agua_leitura ?? 0);
-    const e = Number(aud?.energia_leitura ?? 0);
-    const g = Number(aud?.gas_leitura ?? 0);
-
-    const ba = aud?.base_agua;
-    const be = aud?.base_energia;
-    const bg = aud?.base_gas;
-
-    const hasBase = ba !== null && ba !== undefined && be !== null && be !== undefined;
-    const hasGasBase = bg !== null && bg !== undefined;
-
-    return {
-      hasBase,
-      agua: hasBase ? a - Number(ba ?? 0) : null,
-      energia: hasBase ? e - Number(be ?? 0) : null,
-      gas: hasGasBase ? g - Number(bg ?? 0) : null,
-    };
-  }, [aud?.agua_leitura, aud?.energia_leitura, aud?.gas_leitura, aud?.base_agua, aud?.base_energia, aud?.base_gas]);
-
   async function carregar() {
     setLoading(true);
     setErr(null);
 
     try {
-      const meRes = await fetch("/api/me", { cache: "no-store" });
-      const meJson = await meRes.json();
-      if (!meRes.ok) throw new Error(meJson?.error ?? "Falha ao carregar usuário");
+      const meJson = await fetchJSON("/api/me", { cache: "no-store" });
       setMe(meJson as Me);
 
-      const aRes = await fetch(`/api/auditorias/${id}`, { cache: "no-store" });
-      const aJson = await aRes.json();
-      if (!aRes.ok) throw new Error(aJson?.error ?? "Falha ao carregar auditoria");
+      const aJson = await fetchJSON(`/api/auditorias/${id}`, { cache: "no-store" });
       const a = (aJson?.data ?? aJson) as any;
 
       const audRow: Aud = {
@@ -198,28 +221,18 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         base_agua: a.base_agua ?? null,
         base_energia: a.base_energia ?? null,
         base_gas: a.base_gas ?? null,
+        condominios: a.condominios ?? null,
+        condominio: a.condominio ?? null,
       };
 
       setAud(audRow);
 
-      // condo
-      const cRes = await fetch(`/api/condominios/${audRow.condominio_id}`, { cache: "no-store" });
-      const cJson = await cRes.json();
-      if (!cRes.ok) throw new Error(cJson?.error ?? "Falha ao carregar condomínio");
-      const c = (cJson?.data ?? cJson) as any;
-      setCondo({
-        id: String(c.id),
-        nome: String(c.nome ?? ""),
-        cidade: String(c.cidade ?? ""),
-        uf: String(c.uf ?? ""),
-      });
+      // ✅ NÃO chama /api/condominios/[id] (pode não existir)
+      setCondo(pickCondoFromAud(audRow));
 
-      // ciclos
-      const ciclosRes = await fetch(`/api/auditorias/${id}/ciclos`, { cache: "no-store" });
-      const cJson2 = await ciclosRes.json();
-      if (!ciclosRes.ok) throw new Error(cJson2?.error ?? "Falha ao carregar ciclos");
+      const ciclosJson = await fetchJSON(`/api/auditorias/${id}/ciclos`, { cache: "no-store" });
+      const list = (ciclosJson?.data?.itens ?? ciclosJson?.itens ?? ciclosJson?.data ?? []) as any[];
 
-      const list = (cJson2?.data?.itens ?? cJson2?.itens ?? cJson2?.data ?? []) as any[];
       const normalized: CicloItem[] = (list ?? []).map((x: any) => ({
         maquina_tag: String(x.maquina_tag ?? ""),
         tipo: x.tipo ?? null,
@@ -230,8 +243,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       }));
       setCiclos(normalized);
 
-      // se não há base, abre modal
-      const mustAskBase = (audRow.base_agua === null || audRow.base_energia === null) && isStaff;
+      const mustAskBase = (audRow.base_agua === null || audRow.base_energia === null) && (meJson?.role === "interno" || meJson?.role === "gestor");
       setNeedBase(!!mustAskBase);
 
       if (mustAskBase) {
@@ -262,6 +274,12 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           base_gas: baseGas ? Number(baseGas) : null,
         }),
       });
+
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`/api/auditorias/${aud.id}/base retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 200)}`);
+      }
 
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "Falha ao salvar base");
@@ -294,6 +312,12 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         }),
       });
 
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`/api/auditorias/${aud.id}/ciclos retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 200)}`);
+      }
+
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "Falha ao salvar ciclos");
 
@@ -316,7 +340,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-2xl font-extrabold">Fechamento (Interno)</div>
-            <div className="text-xs text-gray-500">{aud?.condominio_id ?? "—"}</div>
+            <div className="text-xs text-gray-500">{titulo}</div>
             <div className="mt-1 text-xs text-gray-500">
               Mês: <b>{mesRef || "—"}</b> • Anterior: <b>{prevMes || "—"}</b> • ID: <b>{id}</b>
             </div>
@@ -446,14 +470,12 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
             ))}
           </div>
 
-          {/* Relatório financeiro (prévia) */}
           <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold">Relatório financeiro (prévia)</div>
                 <div className="text-xs text-gray-500">
-                  Cálculo por máquina usando <b>condominio_maquinas.valor_ciclo</b>. Split: <b>Água = lavadoras</b>;{" "}
-                  <b>Gás = secadoras</b> (se houver gás no condomínio).
+                  Cálculo por máquina usando <b>condominio_maquinas.valor_ciclo</b>. Split: <b>Água = lavadoras</b>; <b>Gás = secadoras</b> (se houver gás).
                 </div>
               </div>
 
@@ -485,42 +507,17 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <div className="mt-1 text-xs text-gray-600">
                   Água: <b>{consumo.agua ?? "—"}</b> • Energia: <b>{consumo.energia ?? "—"}</b> • Gás: <b>{consumo.gas ?? "—"}</b>
                 </div>
-                <div className="mt-1 text-[11px] text-gray-500">
-                  (Energia pode afetar lavadora e secadora; água só lavadora; gás só secadora onde existir.)
-                </div>
+                <div className="mt-1 text-[11px] text-gray-500">(Energia pode afetar lavadora e secadora; água só lavadora; gás só secadora onde existir.)</div>
               </div>
             </div>
+          </div>
 
-            <div className="mt-3 overflow-hidden rounded-2xl border border-gray-100">
-              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600">
-                <div className="col-span-5">Máquina</div>
-                <div className="col-span-2">Categoria</div>
-                <div className="col-span-2 text-right">Ciclos</div>
-                <div className="col-span-3 text-right">Receita (R$)</div>
-              </div>
-              {relatorio.linhas.map((l) => (
-                <div key={l.maquina_tag} className="grid grid-cols-12 px-3 py-2 text-sm">
-                  <div className="col-span-5">
-                    <div className="font-semibold">{l.maquina_tag}</div>
-                    <div className="text-xs text-gray-500">{l.tipo ?? ""}</div>
-                  </div>
-                  <div className="col-span-2 text-xs text-gray-600">{l.categoria ?? "—"}</div>
-                  <div className="col-span-2 text-right font-semibold">{l.ciclos}</div>
-                  <div className="col-span-3 text-right font-extrabold">
-                    {l.receita.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-3 text-xs text-gray-500">
-              Próximo passo: eu crio o bloco de <b>Repasse / Conta / Comprovante</b> + botão <b>Finalizar auditoria</b> (status = final) só após anexar comprovante.
-            </div>
+          <div className="mt-3 text-xs text-gray-500">
+            Próximo passo: bloco de <b>Relatório financeiro</b> (repasse/conta/comprovante) + botão <b>Finalizar auditoria</b> (status = final) só após anexo.
           </div>
         </div>
       </div>
 
-      {/* MODAL: leitura base manual */}
       {needBase && isStaff && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-4">
@@ -578,7 +575,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               </div>
             </div>
 
-            <div className="mt-4 flex flex-wrap gap-2 justify-end">
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
               <button className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" onClick={() => setNeedBase(false)} disabled={savingBase}>
                 Cancelar
               </button>
