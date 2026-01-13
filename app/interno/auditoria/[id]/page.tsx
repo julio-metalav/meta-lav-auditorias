@@ -24,6 +24,10 @@ type Aud = {
   base_energia?: number | null;
   base_gas?: number | null;
 
+  // ✅ fechamento
+  comprovante_fechamento_url?: string | null;
+  fechamento_obs?: string | null;
+
   // pode vir junto do backend
   condominios?: { id?: string; nome?: string; cidade?: string; uf?: string } | null;
   condominio?: { id?: string; nome?: string; cidade?: string; uf?: string } | null;
@@ -55,7 +59,6 @@ async function fetchJSON(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
   const ct = res.headers.get("content-type") || "";
 
-  // Se não for JSON, devolve um erro bom (e evita "Unexpected token <")
   if (!ct.includes("application/json")) {
     const text = await res.text().catch(() => "");
     const head = text.slice(0, 220).replace(/\s+/g, " ").trim();
@@ -113,6 +116,13 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   // ✅ snapshot para "Cancelar edição" voltar pro backend
   const [ciclosOrig, setCiclosOrig] = useState<CicloItem[]>([]);
 
+  // ✅ comprovante
+  const [fechamentoObs, setFechamentoObs] = useState("");
+  const [uploadingComprovante, setUploadingComprovante] = useState(false);
+
+  // ✅ finalizar
+  const [finalizando, setFinalizando] = useState(false);
+
   const isStaff = useMemo(() => {
     const r = me?.role ?? null;
     return r === "interno" || r === "gestor";
@@ -142,9 +152,13 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   }, [aud?.base_agua, aud?.base_energia]);
 
   const ciclosJaSalvos = useMemo(() => {
-    // se algum item vier com id do auditoria_ciclos, significa que já foi salvo no backend
     return (ciclosOrig ?? []).some((x) => !!x?.id);
   }, [ciclosOrig]);
+
+  const comprovanteOk = useMemo(() => {
+    const u = String(aud?.comprovante_fechamento_url ?? "").trim();
+    return !!u;
+  }, [aud?.comprovante_fechamento_url]);
 
   const consumo = useMemo(() => {
     const a = Number(aud?.agua_leitura ?? 0);
@@ -226,13 +240,12 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const meJson = await fetchJSON("/api/me", { cache: "no-store" });
       setMe(meJson as Me);
 
-      // Auditoria: aceita formatos diferentes (data.auditoria | data | raiz)
       const aJson = await fetchJSON(`/api/auditorias/${id}`, { cache: "no-store" });
       const root = (aJson?.data ?? aJson) as any;
       const a = (root?.auditoria ?? root) as any;
 
       const audRow: Aud = {
-        id: String(a?.id ?? root?.id ?? id), // nunca undefined
+        id: String(a?.id ?? root?.id ?? id),
         condominio_id: String(a?.condominio_id ?? root?.condominio_id ?? ""),
         mes_ref: (a?.mes_ref ?? a?.ano_mes ?? root?.mes_ref ?? root?.ano_mes ?? null) as any,
         status: a?.status ?? root?.status ?? null,
@@ -241,26 +254,30 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         energia_leitura: a?.energia_leitura ?? a?.leitura_energia ?? root?.energia_leitura ?? root?.leitura_energia ?? null,
         gas_leitura: a?.gas_leitura ?? a?.leitura_gas ?? root?.gas_leitura ?? root?.leitura_gas ?? null,
 
-        // ✅ CORREÇÃO: banco usa *_leitura_base, UI usa base_*
         base_agua: a?.agua_leitura_base ?? root?.agua_leitura_base ?? a?.base_agua ?? root?.base_agua ?? null,
         base_energia: a?.energia_leitura_base ?? root?.energia_leitura_base ?? a?.base_energia ?? root?.base_energia ?? null,
         base_gas: a?.gas_leitura_base ?? root?.gas_leitura_base ?? a?.base_gas ?? root?.base_gas ?? null,
 
-        // condo pode vir no root ou dentro do objeto auditoria
+        // ✅ comprovante/obs
+        comprovante_fechamento_url:
+          a?.comprovante_fechamento_url ?? root?.comprovante_fechamento_url ?? null,
+        fechamento_obs: a?.fechamento_obs ?? root?.fechamento_obs ?? null,
+
         condominios: root?.condominios ?? a?.condominios ?? null,
         condominio: root?.condominio ?? a?.condominio ?? null,
       };
 
       setAud(audRow);
-
-      // NÃO chama /api/condominios/[id] (pode não existir)
       setCondo(pickCondoFromAud(audRow));
+
+      // pré-preenche obs com o que já está salvo
+      setFechamentoObs(String(audRow.fechamento_obs ?? ""));
 
       const ciclosJson = await fetchJSON(`/api/auditorias/${id}/ciclos`, { cache: "no-store" });
       const list = (ciclosJson?.data?.itens ?? ciclosJson?.itens ?? ciclosJson?.data ?? []) as any[];
 
       const normalized: CicloItem[] = (list ?? []).map((x: any) => ({
-        id: x.id ?? null, // ✅ vem do backend quando já existe auditoria_ciclos
+        id: x.id ?? null,
         maquina_tag: String(x.maquina_tag ?? ""),
         tipo: x.tipo ?? null,
         ciclos: Number(x.ciclos ?? 0),
@@ -272,27 +289,19 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       setCiclos(normalized);
       setCiclosOrig(normalized);
 
-      // ✅ modal só se base NÃO definida
       const mustAskBase =
         (audRow.base_agua === null || audRow.base_energia === null) &&
         (meJson?.role === "interno" || meJson?.role === "gestor");
 
       setNeedBase(!!mustAskBase);
 
-      // ao recarregar, sai do modo edição
       setBaseEditMode(false);
       setCiclosEditMode(false);
 
-      if (mustAskBase) {
-        setBaseAgua(audRow.base_agua !== null && audRow.base_agua !== undefined ? String(audRow.base_agua) : "");
-        setBaseEnergia(audRow.base_energia !== null && audRow.base_energia !== undefined ? String(audRow.base_energia) : "");
-        setBaseGas(audRow.base_gas !== null && audRow.base_gas !== undefined ? String(audRow.base_gas) : "");
-      } else {
-        // se já tem base, deixa os inputs do modal pré-preenchidos quando abrir por "Alterar"
-        setBaseAgua(audRow.base_agua !== null && audRow.base_agua !== undefined ? String(audRow.base_agua) : "");
-        setBaseEnergia(audRow.base_energia !== null && audRow.base_energia !== undefined ? String(audRow.base_energia) : "");
-        setBaseGas(audRow.base_gas !== null && audRow.base_gas !== undefined ? String(audRow.base_gas) : "");
-      }
+      // sempre deixa inputs prontos
+      setBaseAgua(audRow.base_agua !== null && audRow.base_agua !== undefined ? String(audRow.base_agua) : "");
+      setBaseEnergia(audRow.base_energia !== null && audRow.base_energia !== undefined ? String(audRow.base_energia) : "");
+      setBaseGas(audRow.base_gas !== null && audRow.base_gas !== undefined ? String(audRow.base_gas) : "");
     } catch (e: any) {
       setErr(e?.message ?? "Erro inesperado");
     } finally {
@@ -386,12 +395,94 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     setCiclosEditMode(false);
   }
 
+  async function uploadComprovante(file: File) {
+    const audId = String(aud?.id ?? id).trim();
+    if (!audId) return;
+
+    setUploadingComprovante(true);
+    setErr(null);
+
+    try {
+      const form = new FormData();
+      form.append("kind", "comprovante_fechamento");
+      form.append("file", file);
+      if (String(fechamentoObs ?? "").trim()) form.append("fechamento_obs", String(fechamentoObs).trim());
+
+      const res = await fetch(`/api/auditorias/${audId}/fotos`, {
+        method: "POST",
+        body: form,
+      });
+
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`/api/auditorias/${audId}/fotos retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 220)}`);
+      }
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Falha ao enviar comprovante");
+
+      await carregar();
+    } catch (e: any) {
+      setErr(e?.message ?? "Erro inesperado ao enviar comprovante");
+    } finally {
+      setUploadingComprovante(false);
+    }
+  }
+
+  async function finalizarAuditoria() {
+    const audId = String(aud?.id ?? id).trim();
+    if (!audId) return;
+
+    if (!comprovanteOk) {
+      setErr("Anexe o comprovante de fechamento antes de finalizar.");
+      return;
+    }
+
+    setFinalizando(true);
+    setErr(null);
+
+    try {
+      const res = await fetch(`/api/auditorias/${audId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: "final",
+          // note opcional (se seu backend gravar em log)
+          note: String(fechamentoObs ?? "").trim() ? `Fechamento: ${String(fechamentoObs).trim()}` : null,
+        }),
+      });
+
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`/api/auditorias/${audId} retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 220)}`);
+      }
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Falha ao finalizar auditoria");
+
+      await carregar();
+    } catch (e: any) {
+      setErr(e?.message ?? "Erro inesperado ao finalizar");
+    } finally {
+      setFinalizando(false);
+    }
+  }
+
   useEffect(() => {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const ciclosTravados = ciclosJaSalvos && !ciclosEditMode;
+
+  const statusLabel = useMemo(() => {
+    const s = String(aud?.status ?? "").trim();
+    return s || "—";
+  }, [aud?.status]);
+
+  const isFinal = useMemo(() => String(aud?.status ?? "") === "final", [aud?.status]);
 
   return (
     <AppShell title="Fechamento (Interno)">
@@ -401,7 +492,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
             <div className="text-2xl font-extrabold">Fechamento (Interno)</div>
             <div className="text-xs text-gray-500">{titulo}</div>
             <div className="mt-1 text-xs text-gray-500">
-              Mês: <b>{mesRef || "—"}</b> • Anterior: <b>{prevMes || "—"}</b> • ID: <b>{id}</b>
+              Mês: <b>{mesRef || "—"}</b> • Anterior: <b>{prevMes || "—"}</b> • Status: <b>{statusLabel}</b> • ID: <b>{id}</b>
             </div>
           </div>
 
@@ -421,13 +512,86 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
         {err ? <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div> : null}
 
+        {/* ✅ Comprovante + Finalizar */}
+        <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">Comprovante de fechamento</div>
+              <div className="text-xs text-gray-500">
+                Anexe o comprovante (PDF ou imagem). Depois disso, você pode finalizar a auditoria.
+                {comprovanteOk ? (
+                  <span className="ml-2 inline-flex rounded-full bg-green-50 px-2 py-0.5 text-[11px] text-green-700">anexado</span>
+                ) : (
+                  <span className="ml-2 inline-flex rounded-full bg-yellow-50 px-2 py-0.5 text-[11px] text-yellow-700">pendente</span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {aud?.comprovante_fechamento_url ? (
+                <a
+                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50"
+                  href={aud.comprovante_fechamento_url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Abrir comprovante
+                </a>
+              ) : null}
+
+              <label className={`cursor-pointer rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 ${!isStaff ? "opacity-50 cursor-not-allowed" : ""}`}>
+                {uploadingComprovante ? "Enviando..." : comprovanteOk ? "Trocar comprovante" : "Anexar comprovante"}
+                <input
+                  type="file"
+                  className="hidden"
+                  disabled={!isStaff || uploadingComprovante}
+                  accept="image/*,application/pdf"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] ?? null;
+                    e.currentTarget.value = "";
+                    if (!f) return;
+                    uploadComprovante(f);
+                  }}
+                />
+              </label>
+
+              <button
+                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                onClick={finalizarAuditoria}
+                disabled={!isStaff || finalizando || !comprovanteOk || isFinal}
+                title={!comprovanteOk ? "Anexe o comprovante antes de finalizar" : isFinal ? "Já está finalizada" : ""}
+              >
+                {finalizando ? "Finalizando..." : isFinal ? "Finalizada" : "Finalizar auditoria"}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <label className="mb-1 block text-xs text-gray-600">Obs do financeiro (opcional)</label>
+            <textarea
+              className="w-full rounded-2xl border border-gray-200 px-3 py-2 text-sm"
+              rows={3}
+              value={fechamentoObs}
+              onChange={(e) => setFechamentoObs(e.target.value)}
+              placeholder="Ex: pago via PIX em 2 parcelas / ajuste de valor / observações..."
+              disabled={!isStaff || uploadingComprovante || finalizando}
+            />
+            <div className="mt-1 text-[11px] text-gray-500">
+              Se você preencher isso e anexar o comprovante, a observação vai junto (sem criar mais tela).
+            </div>
+          </div>
+        </div>
+
+        {/* Consumo */}
         <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">Consumo do mês (calculado)</div>
               <div className="text-xs text-gray-500">
                 Base: {consumo.hasBase ? "informada manualmente" : "não definida"}{" "}
-                {baseDefinida ? <span className="ml-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">travada</span> : null}
+                {baseDefinida ? (
+                  <span className="ml-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">travada</span>
+                ) : null}
               </div>
             </div>
 
@@ -501,6 +665,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           </div>
         </div>
 
+        {/* Ciclos */}
         <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -558,13 +723,17 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <div className="col-span-3 text-xs text-gray-600">{it.tipo ?? "—"}</div>
                 <div className="col-span-3 flex justify-end">
                   <input
-                    className={`w-24 rounded-xl border border-gray-200 px-3 py-2 text-right text-sm ${ciclosTravados ? "bg-gray-50 text-gray-500" : ""}`}
+                    className={`w-24 rounded-xl border border-gray-200 px-3 py-2 text-right text-sm ${
+                      ciclosTravados ? "bg-gray-50 text-gray-500" : ""
+                    }`}
                     value={String(it.ciclos ?? 0)}
                     inputMode="numeric"
                     disabled={ciclosTravados}
                     onChange={(e) => {
                       const v = Number(e.target.value ?? 0);
-                      setCiclos((prev) => prev.map((x, i) => (i === idx ? { ...x, ciclos: Number.isNaN(v) ? 0 : v } : x)));
+                      setCiclos((prev) =>
+                        prev.map((x, i) => (i === idx ? { ...x, ciclos: Number.isNaN(v) ? 0 : v } : x))
+                      );
                     }}
                   />
                 </div>
@@ -609,13 +778,15 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <div className="mt-1 text-xs text-gray-600">
                   Água: <b>{consumo.agua ?? "—"}</b> • Energia: <b>{consumo.energia ?? "—"}</b> • Gás: <b>{consumo.gas ?? "—"}</b>
                 </div>
-                <div className="mt-1 text-[11px] text-gray-500">(Energia pode afetar lavadora e secadora; água só lavadora; gás só secadora onde existir.)</div>
+                <div className="mt-1 text-[11px] text-gray-500">
+                  (Energia pode afetar lavadora e secadora; água só lavadora; gás só secadora onde existir.)
+                </div>
               </div>
             </div>
           </div>
 
           <div className="mt-3 text-xs text-gray-500">
-            Próximo passo: bloco de <b>Relatório financeiro</b> (repasse/conta/comprovante) + botão <b>Finalizar auditoria</b> (status = final) só após anexo.
+            Fluxo simples: Interno lança ciclos + base (se precisar) → emite relatório → financeiro paga → interno anexa comprovante → finaliza.
           </div>
         </div>
       </div>
