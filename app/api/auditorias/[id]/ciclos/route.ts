@@ -20,73 +20,22 @@ function normalizeStatus(input: any) {
   return s || "aberta";
 }
 
-function pad2(n: number) {
-  return String(n).padStart(2, "0");
-}
-
-function toSafeToken(v: any) {
-  return String(v ?? "")
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, "_")
-    .replace(/[^A-Z0-9_-]/g, "");
-}
-
-function buildTag(categoria: any, capacidadeKg: any, index1: number) {
-  // Ex: LAV_10_01 ou SEC_GAS_18_03
-  const cat = toSafeToken(categoria || "MAQ");
-  const cap = capacidadeKg === null || capacidadeKg === undefined || Number.isNaN(Number(capacidadeKg))
-    ? "0"
-    : String(Math.trunc(Number(capacidadeKg)));
-  return `${cat}_${cap}_${pad2(index1)}`;
-}
-
-function inferTipoFromCategoria(cat: any) {
-  const s = String(cat ?? "").toLowerCase();
-  if (s.includes("lav")) return "lavadora";
-  if (s.includes("sec")) return "secadora";
-  return "maquina";
-}
-
-/**
- * Expande o cadastro agregado (por categoria/capacidade/quantidade)
- * para uma lista 1:1 (uma linha por máquina) com maquina_tag determinístico.
- */
-function expandMaquinas(maquinas: any[]) {
-  const items: { maquina_tag: string; tipo: string; meta: any }[] = [];
-
-  for (const m of maquinas ?? []) {
-    const categoria = m.categoria ?? null;
-    const capacidade_kg = m.capacidade_kg ?? null;
-
-    const qtdRaw = Number(m.quantidade ?? 0);
-    const qtd = Number.isFinite(qtdRaw) && qtdRaw > 0 ? Math.trunc(qtdRaw) : 0;
-    if (qtd <= 0) continue;
-
-    const tipo = inferTipoFromCategoria(categoria);
-
-    for (let i = 1; i <= qtd; i++) {
-      const tag = buildTag(categoria, capacidade_kg, i);
-      items.push({ maquina_tag: tag, tipo, meta: m });
-    }
-  }
-
-  return items;
+function makeTag(categoria: any, capacidade: any, idx: number) {
+  const c = String(categoria ?? "MAQ").toUpperCase().replace(/\s+/g, "_");
+  const k = capacidade ? String(capacidade) : "0";
+  return `${c}_${k}_${String(idx).padStart(2, "0")}`;
 }
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const ctx = await getUserAndRole();
   if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
-  const role = (ctx.role ?? null) as Role | null;
-  const isAuditor = role === "auditor";
-  const isStaff = roleGte(role, "interno");
-  if (!isAuditor && !isStaff) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  const role = ctx.role as Role | null;
+  if (!roleGte(role, "auditor")) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
 
   const admin = supabaseAdmin();
   const auditoriaId = params.id;
 
-  // Auditoria
   const { data: aud, error: audErr } = await admin
     .from("auditorias")
     .select("*")
@@ -96,62 +45,44 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   if (audErr) return NextResponse.json({ error: audErr.message }, { status: 400 });
   if (!aud) return NextResponse.json({ error: "Auditoria não encontrada" }, { status: 404 });
 
-  // Auditor: só pode ver se for dono OU se tiver vínculo do condomínio
-  if (isAuditor && !isStaff) {
-    const isOwner = !!aud.auditor_id && aud.auditor_id === ctx.user.id;
-
-    const { data: ac, error: acErr } = await admin
-      .from("auditor_condominios")
-      .select("condominio_id")
-      .eq("auditor_id", ctx.user.id)
-      .eq("condominio_id", aud.condominio_id)
-      .maybeSingle();
-
-    if (acErr) return NextResponse.json({ error: acErr.message }, { status: 400 });
-
-    const hasLink = !!ac?.condominio_id;
-    if (!isOwner && !hasLink) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
-  }
-
-  // Máquinas do condomínio (fonte de valor_ciclo + quantidade)
-  // ✅ REMOVIDO: tag/tipo (não existem no schema real)
   const { data: maquinas, error: mErr } = await admin
     .from("condominio_maquinas")
-    .select("id,condominio_id,categoria,capacidade_kg,quantidade,valor_ciclo")
+    .select("categoria,capacidade_kg,quantidade,valor_ciclo")
     .eq("condominio_id", aud.condominio_id)
-    .order("categoria", { ascending: true })
-    .order("capacidade_kg", { ascending: true });
+    .order("categoria");
 
   if (mErr) return NextResponse.json({ error: mErr.message }, { status: 400 });
 
-  // Itens salvos
   const { data: saved, error: sErr } = await admin
     .from("auditoria_ciclos")
-    .select("id,auditoria_id,maquina_tag,tipo,ciclos")
+    .select("id,auditoria_id,categoria,capacidade_kg,ciclos")
     .eq("auditoria_id", auditoriaId);
 
   if (sErr) return NextResponse.json({ error: sErr.message }, { status: 400 });
 
-  const expanded = expandMaquinas(maquinas ?? []);
-  const map = new Map<string, any>((saved ?? []).map((r: any) => [String(r.maquina_tag), r]));
+  const map = new Map(
+    (saved ?? []).map((r: any) => [`${r.categoria}::${r.capacidade_kg}`, r])
+  );
 
-  const itens = expanded.map((x) => {
-    const meta = x.meta ?? {};
-    const savedRow = map.get(x.maquina_tag);
+  const itens: any[] = [];
 
-    return {
-      id: savedRow?.id ?? null,
-      auditoria_id: auditoriaId,
-      maquina_tag: x.maquina_tag,
-      tipo: savedRow?.tipo ?? x.tipo,
-      ciclos: Number(savedRow?.ciclos ?? 0),
+  for (const m of maquinas ?? []) {
+    const qtd = Number(m.quantidade ?? 0);
+    for (let i = 1; i <= qtd; i++) {
+      const key = `${m.categoria}::${m.capacidade_kg}`;
+      const savedRow = map.get(key);
 
-      // >>> ENRIQUECIMENTO (relatório financeiro)
-      categoria: meta.categoria ?? null,
-      capacidade_kg: meta.capacidade_kg ?? null,
-      valor_ciclo: meta.valor_ciclo ?? null,
-    };
-  });
+      itens.push({
+        id: savedRow?.id ?? null,
+        auditoria_id: auditoriaId,
+        maquina_tag: makeTag(m.categoria, m.capacidade_kg, i),
+        categoria: m.categoria,
+        capacidade_kg: m.capacidade_kg,
+        ciclos: Number(savedRow?.ciclos ?? 0),
+        valor_ciclo: m.valor_ciclo ?? 0,
+      });
+    }
+  }
 
   return NextResponse.json({
     data: {
@@ -161,7 +92,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
         mes_ref: aud.mes_ref,
         status: normalizeStatus(aud.status),
       },
-      maquinas: maquinas ?? [],
       itens,
     },
   });
@@ -171,35 +101,27 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const ctx = await getUserAndRole();
   if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
-  const role = (ctx.role ?? null) as Role | null;
-  const isStaff = roleGte(role, "interno");
-  if (!isStaff) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  const role = ctx.role as Role | null;
+  if (!roleGte(role, "interno")) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
 
   const admin = supabaseAdmin();
   const auditoriaId = params.id;
 
-  const body = await req.json().catch(() => null);
+  const body = await req.json();
   const itens = Array.isArray(body?.itens) ? body.itens : [];
 
-  // validação mínima
-  for (const it of itens) {
-    if (!it?.maquina_tag) return NextResponse.json({ error: "maquina_tag obrigatório" }, { status: 400 });
-    if (Number.isNaN(Number(it?.ciclos ?? 0))) return NextResponse.json({ error: "ciclos inválido" }, { status: 400 });
-  }
-
-  // upsert (chave natural: auditoria_id + maquina_tag)
   const payload = itens.map((it: any) => ({
     auditoria_id: auditoriaId,
-    maquina_tag: String(it.maquina_tag),
-    tipo: it.tipo ?? null,
+    categoria: it.categoria,
+    capacidade_kg: it.capacidade_kg,
     ciclos: Number(it.ciclos ?? 0),
   }));
 
-  const { error: upErr } = await admin.from("auditoria_ciclos").upsert(payload, {
-    onConflict: "auditoria_id,maquina_tag",
+  const { error } = await admin.from("auditoria_ciclos").upsert(payload, {
+    onConflict: "auditoria_id,categoria,capacidade_kg",
   });
 
-  if (upErr) return NextResponse.json({ error: upErr.message }, { status: 400 });
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
   return NextResponse.json({ ok: true });
 }
