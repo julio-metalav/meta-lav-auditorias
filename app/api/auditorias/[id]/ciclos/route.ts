@@ -20,18 +20,55 @@ function normalizeStatus(input: any) {
   return s || "aberta";
 }
 
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function toSafeToken(v: any) {
+  return String(v ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^A-Z0-9_-]/g, "");
+}
+
+function buildTag(categoria: any, capacidadeKg: any, index1: number) {
+  // Ex: LAV_10_01 ou SEC_GAS_18_03
+  const cat = toSafeToken(categoria || "MAQ");
+  const cap = capacidadeKg === null || capacidadeKg === undefined || Number.isNaN(Number(capacidadeKg))
+    ? "0"
+    : String(Math.trunc(Number(capacidadeKg)));
+  return `${cat}_${cap}_${pad2(index1)}`;
+}
+
+function inferTipoFromCategoria(cat: any) {
+  const s = String(cat ?? "").toLowerCase();
+  if (s.includes("lav")) return "lavadora";
+  if (s.includes("sec")) return "secadora";
+  return "maquina";
+}
+
+/**
+ * Expande o cadastro agregado (por categoria/capacidade/quantidade)
+ * para uma lista 1:1 (uma linha por máquina) com maquina_tag determinístico.
+ */
 function expandMaquinas(maquinas: any[]) {
   const items: { maquina_tag: string; tipo: string; meta: any }[] = [];
 
   for (const m of maquinas ?? []) {
-    const tag = String(m.tag ?? "").trim();
-    const tipo = String(m.tipo ?? m.categoria ?? "").trim();
+    const categoria = m.categoria ?? null;
+    const capacidade_kg = m.capacidade_kg ?? null;
 
-    if (!tag) continue;
+    const qtdRaw = Number(m.quantidade ?? 0);
+    const qtd = Number.isFinite(qtdRaw) && qtdRaw > 0 ? Math.trunc(qtdRaw) : 0;
+    if (qtd <= 0) continue;
 
-    // opcional: se o tag vier no formato LAV-10-01 e existir qtd, a gente pode expandir
-    // mas no nosso cadastro atual já vem com tag único por máquina, então é 1:1.
-    items.push({ maquina_tag: tag, tipo: tipo || "maquina", meta: m });
+    const tipo = inferTipoFromCategoria(categoria);
+
+    for (let i = 1; i <= qtd; i++) {
+      const tag = buildTag(categoria, capacidade_kg, i);
+      items.push({ maquina_tag: tag, tipo, meta: m });
+    }
   }
 
   return items;
@@ -50,7 +87,12 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const auditoriaId = params.id;
 
   // Auditoria
-  const { data: aud, error: audErr } = await admin.from("auditorias").select("*").eq("id", auditoriaId).maybeSingle();
+  const { data: aud, error: audErr } = await admin
+    .from("auditorias")
+    .select("*")
+    .eq("id", auditoriaId)
+    .maybeSingle();
+
   if (audErr) return NextResponse.json({ error: audErr.message }, { status: 400 });
   if (!aud) return NextResponse.json({ error: "Auditoria não encontrada" }, { status: 404 });
 
@@ -71,11 +113,14 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (!isOwner && !hasLink) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
   }
 
-  // Máquinas do condomínio (fonte de valor_ciclo)
+  // Máquinas do condomínio (fonte de valor_ciclo + quantidade)
+  // ✅ REMOVIDO: tag/tipo (não existem no schema real)
   const { data: maquinas, error: mErr } = await admin
     .from("condominio_maquinas")
-    .select("id,condominio_id,tag,tipo,categoria,capacidade_kg,valor_ciclo")
-    .eq("condominio_id", aud.condominio_id);
+    .select("id,condominio_id,categoria,capacidade_kg,quantidade,valor_ciclo")
+    .eq("condominio_id", aud.condominio_id)
+    .order("categoria", { ascending: true })
+    .order("capacidade_kg", { ascending: true });
 
   if (mErr) return NextResponse.json({ error: mErr.message }, { status: 400 });
 
