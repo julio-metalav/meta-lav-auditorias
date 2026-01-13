@@ -213,7 +213,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const a = (root?.auditoria ?? root) as any;
 
       const audRow: Aud = {
-        id: String(a?.id ?? root?.id ?? id), // ✅ nunca undefined
+        id: String(a?.id ?? root?.id ?? id), // nunca undefined
         condominio_id: String(a?.condominio_id ?? root?.condominio_id ?? ""),
         mes_ref: (a?.mes_ref ?? a?.ano_mes ?? root?.mes_ref ?? root?.ano_mes ?? null) as any,
         status: a?.status ?? root?.status ?? null,
@@ -222,9 +222,13 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         energia_leitura: a?.energia_leitura ?? a?.leitura_energia ?? root?.energia_leitura ?? root?.leitura_energia ?? null,
         gas_leitura: a?.gas_leitura ?? a?.leitura_gas ?? root?.gas_leitura ?? root?.leitura_gas ?? null,
 
-        base_agua: a?.base_agua ?? root?.base_agua ?? null,
-        base_energia: a?.base_energia ?? root?.base_energia ?? null,
-        base_gas: a?.base_gas ?? root?.base_gas ?? null,
+        // ✅ CORREÇÃO: banco usa *_leitura_base, UI usa base_*
+        base_agua:
+          a?.agua_leitura_base ?? root?.agua_leitura_base ?? a?.base_agua ?? root?.base_agua ?? null,
+        base_energia:
+          a?.energia_leitura_base ?? root?.energia_leitura_base ?? a?.base_energia ?? root?.base_energia ?? null,
+        base_gas:
+          a?.gas_leitura_base ?? root?.gas_leitura_base ?? a?.base_gas ?? root?.base_gas ?? null,
 
         // condo pode vir no root ou dentro do objeto auditoria
         condominios: root?.condominios ?? a?.condominios ?? null,
@@ -233,7 +237,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
       setAud(audRow);
 
-      // ✅ NÃO chama /api/condominios/[id] (pode não existir)
+      // NÃO chama /api/condominios/[id] (pode não existir)
       setCondo(pickCondoFromAud(audRow));
 
       const ciclosJson = await fetchJSON(`/api/auditorias/${id}/ciclos`, { cache: "no-store" });
