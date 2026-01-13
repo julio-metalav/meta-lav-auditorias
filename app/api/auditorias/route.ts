@@ -49,7 +49,6 @@ function pickMonthISO(row: any, sch: Schema) {
 }
 
 function validMonthISO(s: string) {
-  // formato esperado: YYYY-MM-01
   return /^\d{4}-\d{2}-01$/.test(s);
 }
 
@@ -92,14 +91,41 @@ export async function GET() {
   const list = rows ?? [];
 
   const condoIds = Array.from(new Set(list.map((r: any) => r[sch.condoCol]).filter(Boolean)));
-  const auditorIds = Array.from(new Set(list.map((r: any) => r[sch.auditorCol]).filter(Boolean)));
+
+  // ✅ Enriquecimento: se auditor_id estiver null, pega do vínculo auditor_condominios (mais recente)
+  const condoToAssignedAuditor = new Map<string, string>();
+  if (condoIds.length) {
+    const { data: links, error: linkErr } = await admin
+      .from("auditor_condominios")
+      .select("condominio_id,auditor_id,created_at")
+      .in("condominio_id", condoIds)
+      .order("created_at", { ascending: false });
+
+    if (linkErr) return NextResponse.json({ error: linkErr.message }, { status: 400 });
+
+    for (const l of links ?? []) {
+      const cid = (l as any).condominio_id as string;
+      const aid = (l as any).auditor_id as string;
+      if (cid && aid && !condoToAssignedAuditor.has(cid)) {
+        condoToAssignedAuditor.set(cid, aid); // pega o mais recente
+      }
+    }
+  }
+
+  const effectiveAuditorIds = Array.from(
+    new Set(
+      list
+        .map((r: any) => r[sch.auditorCol] ?? condoToAssignedAuditor.get(r[sch.condoCol]) ?? null)
+        .filter(Boolean)
+    )
+  );
 
   const [{ data: condos, error: condoErr }, { data: profs, error: profErr }] = await Promise.all([
     condoIds.length
       ? admin.from("condominios").select("id,nome,cidade,uf").in("id", condoIds)
       : Promise.resolve({ data: [] as any[], error: null as any }),
-    auditorIds.length
-      ? admin.from("profiles").select("id,email,role").in("id", auditorIds)
+    effectiveAuditorIds.length
+      ? admin.from("profiles").select("id,email,role").in("id", effectiveAuditorIds)
       : Promise.resolve({ data: [] as any[], error: null as any }),
   ]);
 
@@ -111,16 +137,18 @@ export async function GET() {
 
   const normalized = list.map((r: any) => {
     const condominio_id = r[sch.condoCol];
-    const auditor_id = r[sch.auditorCol] ?? null;
+    const auditor_id_db = r[sch.auditorCol] ?? null;
+    const auditor_id_eff = auditor_id_db ?? condoToAssignedAuditor.get(condominio_id) ?? null;
 
     return {
       ...r,
       condominio_id,
-      auditor_id,
+      // ✅ auditor_id “de exibição” (não altera banco): usa vínculo se estiver null no registro
+      auditor_id: auditor_id_eff,
       mes_ref: pickMonthISO(r, sch),
       status: normalizeStatus(r[sch.statusCol]),
       condominios: condoMap.get(condominio_id) ?? null,
-      profiles: auditor_id ? profMap.get(auditor_id) ?? null : null,
+      profiles: auditor_id_eff ? profMap.get(auditor_id_eff) ?? null : null,
     };
   });
 
@@ -157,13 +185,12 @@ export async function POST(req: Request) {
     [sch.statusCol]: status,
   };
 
-  // se a coluna existir e vier no payload, aceita; senão deixa null
+  // se vier no payload, aceita
   if (body?.auditor_id) {
     insertRow[sch.auditorCol] = String(body.auditor_id).trim();
   }
 
-  // evita duplicidade (condominio + mês) sem depender de UNIQUE:
-  // 1) procura existente
+  // evita duplicidade (condominio + mês)
   const { data: existing, error: exErr } = await admin
     .from(sch.table)
     .select("id")

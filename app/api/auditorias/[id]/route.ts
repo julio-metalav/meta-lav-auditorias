@@ -6,30 +6,24 @@ import { supabaseServer } from "@/lib/supabaseServer";
 type Role = "auditor" | "interno" | "gestor";
 type Status = "aberta" | "em_andamento" | "em_conferencia" | "final";
 
-/**
- * Schema REAL: public.auditorias
- */
 type AudRow = {
   id: string;
   condominio_id: string;
   auditor_id: string | null;
-  mes_ref: string | null; // date ISO
-  status: Status | string | null;
+  mes_ref: string | null;
+  status: string | null;
 
   agua_leitura: number | null;
   energia_leitura: number | null;
   gas_leitura: number | null;
-
   observacoes: string | null;
 
-  foto_agua_url?: string | null;
-  foto_energia_url?: string | null;
-  foto_gas_url?: string | null;
-
-  // ✅ extras (fotos obrigatórias do checklist de campo)
-  foto_quimicos_url?: string | null;
-  foto_bombonas_url?: string | null;
-  foto_conector_bala_url?: string | null;
+  foto_agua_url: string | null;
+  foto_energia_url: string | null;
+  foto_gas_url: string | null;
+  foto_quimicos_url: string | null;
+  foto_bombonas_url: string | null;
+  foto_conector_bala_url: string | null;
 };
 
 function roleGte(role: Role | null, min: Role) {
@@ -40,17 +34,11 @@ function roleGte(role: Role | null, min: Role) {
 
 function normalizeStatus(input: any): Status {
   const s = String(input ?? "aberta").trim().toLowerCase();
-  if (s === "em conferencia" || s === "em_conferencia") return "em_conferencia";
-  if (s === "em andamento" || s === "em_andamento") return "em_andamento";
-  if (s === "aberta") return "aberta";
-  if (s === "final") return "final";
-  return "aberta";
-}
-
-function toNumberOrNull(v: any): number | null {
-  if (v === null || v === undefined || v === "") return null;
-  const n = typeof v === "number" ? v : Number(String(v).replace(",", "."));
-  return Number.isFinite(n) ? n : null;
+  if (s === "em conferência" || s === "em conferencia") return "em_conferencia";
+  if (s === "em andamento") return "em_andamento";
+  if (s === "finalizado") return "final";
+  if (s === "aberto") return "aberta";
+  return (s as Status) || "aberta";
 }
 
 async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise<Role | null> {
@@ -59,31 +47,6 @@ async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise
 
   const { data: prof } = await supabase.from("profiles").select("role").eq("id", auth.user.id).maybeSingle();
   return (prof?.role ?? null) as Role | null;
-}
-
-/**
- * ✅ Checklist de campo (gás opcional)
- * Obrigatório:
- * - leituras: água e energia
- * - fotos: água, energia, químicos, bombonas, conector
- * Opcional:
- * - gás e foto gás
- */
-function buildChecklistMissing(effective: AudRow) {
-  const missing: string[] = [];
-
-  if (effective.agua_leitura == null) missing.push("Leitura de água");
-  if (effective.energia_leitura == null) missing.push("Leitura de energia");
-
-  if (!effective.foto_agua_url) missing.push("Foto do medidor de água");
-  if (!effective.foto_energia_url) missing.push("Foto do medidor de energia");
-
-  if (!effective.foto_quimicos_url) missing.push("Foto da proveta (químicos)");
-  if (!effective.foto_bombonas_url) missing.push("Foto das bombonas (detergente + amaciante)");
-  if (!effective.foto_conector_bala_url) missing.push("Foto do conector bala conectado");
-
-  // gás opcional: não exige gas_leitura nem foto_gas_url
-  return missing;
 }
 
 // ---------- GET ----------
@@ -167,9 +130,22 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const aud = audRaw as AudRow;
 
     const isOwnerAuditor = !!aud.auditor_id && aud.auditor_id === user.id;
+
+    // ✅ Opção A: auditoria pode nascer sem auditor_id.
+    // Auditor pode editar se estiver vinculado ao condomínio em auditor_condominios.
+    let isAssignedAuditor = false;
+    if (role === "auditor") {
+      const { data: link, error: linkErr } = await (supabase.from("auditor_condominios") as any)
+        .select("auditor_id")
+        .eq("auditor_id", user.id)
+        .eq("condominio_id", aud.condominio_id)
+        .maybeSingle();
+      if (!linkErr && link) isAssignedAuditor = true;
+    }
+
     const isManager = roleGte(role, "interno"); // interno ou gestor
     const isGestor = role === "gestor";
-    const canEdit = isOwnerAuditor || isManager;
+    const canEdit = isOwnerAuditor || isAssignedAuditor || isManager;
 
     if (!canEdit) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
 
@@ -184,90 +160,25 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     // Auditor NÃO pode editar após em_conferencia/final
     if (isOnlyAuditor && (prevStatus === "em_conferencia" || prevStatus === "final")) {
-      return NextResponse.json({ error: "Auditor não pode editar após em_conferencia/final" }, { status: 403 });
+      return NextResponse.json({ error: "Auditor não pode editar após Em conferência/Final" }, { status: 403 });
     }
 
-    // Só gestor pode editar auditoria final
-    if (!isGestor && prevStatus === "final") {
-      return NextResponse.json({ error: "Somente gestor pode editar auditoria final" }, { status: 403 });
-    }
-
-    // Auditor: só pode concluir -> em_conferencia
+    // Auditor pode marcar em_conferencia quando concluir em campo
     if (isOnlyAuditor && nextStatus && nextStatus !== prevStatus) {
-      const canConclude =
-        (prevStatus === "aberta" || prevStatus === "em_andamento") && nextStatus === "em_conferencia";
-
-      if (!canConclude) {
-        return NextResponse.json(
-          { error: "Auditor só pode concluir em campo (status em_conferencia). Não pode reabrir nem finalizar." },
-          { status: 403 }
-        );
+      if (!(prevStatus === "aberta" && nextStatus === "em_conferencia")) {
+        return NextResponse.json({ error: "Transição de status não permitida para auditor" }, { status: 403 });
       }
     }
 
-    // Finalização: interno/gestor, somente em_conferencia -> final
-    if (nextStatus === "final" && prevStatus !== "final") {
-      if (!roleGte(role, "interno")) {
-        return NextResponse.json({ error: "Somente interno/gestor pode finalizar auditoria" }, { status: 403 });
-      }
-      if (prevStatus !== "em_conferencia") {
-        return NextResponse.json(
-          { error: "Só é possível finalizar quando a auditoria estiver em_conferencia" },
-          { status: 400 }
-        );
-      }
-    }
-
-    // 4) Patch
-    const patch: Partial<AudRow> & { status?: Status } = {};
-
-    if (body?.agua_leitura !== undefined) patch.agua_leitura = toNumberOrNull(body.agua_leitura);
-    if (body?.energia_leitura !== undefined) patch.energia_leitura = toNumberOrNull(body.energia_leitura);
-    if (body?.gas_leitura !== undefined) patch.gas_leitura = toNumberOrNull(body.gas_leitura);
-
-    if (body?.observacoes !== undefined) patch.observacoes = body.observacoes ?? null;
-
-    if (body?.foto_agua_url !== undefined) patch.foto_agua_url = body.foto_agua_url ?? null;
-    if (body?.foto_energia_url !== undefined) patch.foto_energia_url = body.foto_energia_url ?? null;
-    if (body?.foto_gas_url !== undefined) patch.foto_gas_url = body.foto_gas_url ?? null;
-
-    if (body?.foto_quimicos_url !== undefined) patch.foto_quimicos_url = body.foto_quimicos_url ?? null;
-    if (body?.foto_bombonas_url !== undefined) patch.foto_bombonas_url = body.foto_bombonas_url ?? null;
-    if (body?.foto_conector_bala_url !== undefined) patch.foto_conector_bala_url = body.foto_conector_bala_url ?? null;
-
+    // 4) Update payload (aceita só campos conhecidos)
+    const patch: any = {};
+    if (body?.agua_leitura !== undefined) patch.agua_leitura = body.agua_leitura;
+    if (body?.energia_leitura !== undefined) patch.energia_leitura = body.energia_leitura;
+    if (body?.gas_leitura !== undefined) patch.gas_leitura = body.gas_leitura;
+    if (body?.observacoes !== undefined) patch.observacoes = body.observacoes;
     if (nextStatus) patch.status = nextStatus;
 
-    // 4.1) Se vai para em_conferencia, checklist deve estar completo
-    if (nextStatus === "em_conferencia" && prevStatus !== "em_conferencia") {
-      const effective: AudRow = {
-        ...aud,
-        ...patch,
-        foto_agua_url: (patch.foto_agua_url ?? aud.foto_agua_url ?? null) as any,
-        foto_energia_url: (patch.foto_energia_url ?? aud.foto_energia_url ?? null) as any,
-        foto_gas_url: (patch.foto_gas_url ?? aud.foto_gas_url ?? null) as any,
-        foto_quimicos_url: (patch.foto_quimicos_url ?? aud.foto_quimicos_url ?? null) as any,
-        foto_bombonas_url: (patch.foto_bombonas_url ?? aud.foto_bombonas_url ?? null) as any,
-        foto_conector_bala_url: (patch.foto_conector_bala_url ?? aud.foto_conector_bala_url ?? null) as any,
-      };
-
-      const missing = buildChecklistMissing(effective);
-      if (missing.length > 0) {
-        return NextResponse.json(
-          {
-            error: "Checklist incompleto. Não é possível concluir (em_conferencia).",
-            missing,
-          },
-          { status: 400 }
-        );
-      }
-    }
-
-    if (Object.keys(patch).length === 0) {
-      return NextResponse.json({ ok: true, auditoria: aud });
-    }
-
-    // 5) Update
-    const { data: updatedRaw, error: updErr } = await (supabase.from("auditorias") as any)
+    const { data: saved, error: upErr } = await (supabase.from("auditorias") as any)
       .update(patch)
       .eq("id", id)
       .select(
@@ -291,28 +202,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       )
       .maybeSingle();
 
-    if (updErr) return NextResponse.json({ error: updErr.message }, { status: 400 });
+    if (upErr) return NextResponse.json({ error: upErr.message }, { status: 400 });
 
-    const updated = (updatedRaw ?? null) as AudRow | null;
-
-    // 6) Log de status (se existir tabela)
-    if (nextStatus && normalizeStatus(aud.status) !== nextStatus) {
-      const note =
-        typeof body?.note === "string" && body.note.trim().length > 0 ? body.note.trim().slice(0, 500) : null;
-
-      const logPayload = {
-        auditoria_id: id,
-        from_status: prevStatus,
-        to_status: nextStatus,
-        actor_id: user.id,
-        actor_role: role,
-        note,
-      };
-
-      await (supabase.from("auditoria_status_logs") as any).insert(logPayload);
-    }
-
-    return NextResponse.json({ ok: true, auditoria: updated });
+    return NextResponse.json({ auditoria: saved as AudRow });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
