@@ -207,22 +207,28 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const meJson = await fetchJSON("/api/me", { cache: "no-store" });
       setMe(meJson as Me);
 
+      // Auditoria: aceita formatos diferentes (data.auditoria | data | raiz)
       const aJson = await fetchJSON(`/api/auditorias/${id}`, { cache: "no-store" });
-      const a = (aJson?.data ?? aJson) as any;
+      const root = (aJson?.data ?? aJson) as any;
+      const a = (root?.auditoria ?? root) as any;
 
       const audRow: Aud = {
-        id: String(a.id),
-        condominio_id: String(a.condominio_id),
-        mes_ref: (a.mes_ref ?? a.ano_mes ?? null) as any,
-        status: a.status ?? null,
-        agua_leitura: a.agua_leitura ?? a.leitura_agua ?? null,
-        energia_leitura: a.energia_leitura ?? a.leitura_energia ?? null,
-        gas_leitura: a.gas_leitura ?? a.leitura_gas ?? null,
-        base_agua: a.base_agua ?? null,
-        base_energia: a.base_energia ?? null,
-        base_gas: a.base_gas ?? null,
-        condominios: a.condominios ?? null,
-        condominio: a.condominio ?? null,
+        id: String(a?.id ?? root?.id ?? id), // ✅ nunca undefined
+        condominio_id: String(a?.condominio_id ?? root?.condominio_id ?? ""),
+        mes_ref: (a?.mes_ref ?? a?.ano_mes ?? root?.mes_ref ?? root?.ano_mes ?? null) as any,
+        status: a?.status ?? root?.status ?? null,
+
+        agua_leitura: a?.agua_leitura ?? a?.leitura_agua ?? root?.agua_leitura ?? root?.leitura_agua ?? null,
+        energia_leitura: a?.energia_leitura ?? a?.leitura_energia ?? root?.energia_leitura ?? root?.leitura_energia ?? null,
+        gas_leitura: a?.gas_leitura ?? a?.leitura_gas ?? root?.gas_leitura ?? root?.leitura_gas ?? null,
+
+        base_agua: a?.base_agua ?? root?.base_agua ?? null,
+        base_energia: a?.base_energia ?? root?.base_energia ?? null,
+        base_gas: a?.base_gas ?? root?.base_gas ?? null,
+
+        // condo pode vir no root ou dentro do objeto auditoria
+        condominios: root?.condominios ?? a?.condominios ?? null,
+        condominio: root?.condominio ?? a?.condominio ?? null,
       };
 
       setAud(audRow);
@@ -243,13 +249,16 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       }));
       setCiclos(normalized);
 
-      const mustAskBase = (audRow.base_agua === null || audRow.base_energia === null) && (meJson?.role === "interno" || meJson?.role === "gestor");
+      const mustAskBase =
+        (audRow.base_agua === null || audRow.base_energia === null) &&
+        (meJson?.role === "interno" || meJson?.role === "gestor");
+
       setNeedBase(!!mustAskBase);
 
       if (mustAskBase) {
-        setBaseAgua(audRow.base_agua ? String(audRow.base_agua) : "");
-        setBaseEnergia(audRow.base_energia ? String(audRow.base_energia) : "");
-        setBaseGas(audRow.base_gas ? String(audRow.base_gas) : "");
+        setBaseAgua(audRow.base_agua !== null && audRow.base_agua !== undefined ? String(audRow.base_agua) : "");
+        setBaseEnergia(audRow.base_energia !== null && audRow.base_energia !== undefined ? String(audRow.base_energia) : "");
+        setBaseGas(audRow.base_gas !== null && audRow.base_gas !== undefined ? String(audRow.base_gas) : "");
       }
     } catch (e: any) {
       setErr(e?.message ?? "Erro inesperado");
@@ -259,13 +268,14 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   }
 
   async function salvarBaseManual() {
-    if (!aud) return;
+    const audId = String(aud?.id ?? id).trim();
+    if (!audId) return;
 
     setSavingBase(true);
     setErr(null);
 
     try {
-      const res = await fetch(`/api/auditorias/${aud.id}/base`, {
+      const res = await fetch(`/api/auditorias/${audId}/base`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -278,7 +288,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("application/json")) {
         const text = await res.text().catch(() => "");
-        throw new Error(`/api/auditorias/${aud.id}/base retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 200)}`);
+        throw new Error(`/api/auditorias/${audId}/base retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 200)}`);
       }
 
       const json = await res.json();
@@ -294,13 +304,14 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   }
 
   async function salvarCiclos() {
-    if (!aud) return;
+    const audId = String(aud?.id ?? id).trim();
+    if (!audId) return;
 
     setSavingCiclos(true);
     setErr(null);
 
     try {
-      const res = await fetch(`/api/auditorias/${aud.id}/ciclos`, {
+      const res = await fetch(`/api/auditorias/${audId}/ciclos`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -315,7 +326,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("application/json")) {
         const text = await res.text().catch(() => "");
-        throw new Error(`/api/auditorias/${aud.id}/ciclos retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 200)}`);
+        throw new Error(`/api/auditorias/${audId}/ciclos retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 200)}`);
       }
 
       const json = await res.json();
