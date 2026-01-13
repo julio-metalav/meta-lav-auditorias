@@ -5,151 +5,240 @@ import { AppShell } from "@/app/components/AppShell";
 
 type Role = "auditor" | "interno" | "gestor";
 
+type Me = {
+  user: { id: string; email: string };
+  role: Role | null;
+};
+
 type Aud = {
   id: string;
   condominio_id: string;
-  auditor_id: string | null;
-  mes_ref?: string | null;
-  ano_mes?: string | null;
+  mes_ref: string | null;
   status: string | null;
 
+  // leituras do mês (auditor ou interno)
   agua_leitura?: number | null;
   energia_leitura?: number | null;
   gas_leitura?: number | null;
 
-  observacoes?: string | null;
-
-  foto_agua_url?: string | null;
-  foto_energia_url?: string | null;
-  foto_gas_url?: string | null;
-  foto_quimicos_url?: string | null;
-  foto_bombonas_url?: string | null;
-  foto_conector_bala_url?: string | null;
-
-  comprovante_fechamento_url?: string | null;
-
-  created_at?: string | null;
-  updated_at?: string | null;
-
-  condominios?: { nome: string; cidade: string; uf: string } | null;
-  profiles?: { email?: string | null; role?: Role | null } | null;
+  // base manual (quando não há histórico)
+  base_agua?: number | null;
+  base_energia?: number | null;
+  base_gas?: number | null;
 };
 
-type CondoMaquina = {
+type Condo = {
   id: string;
-  condominio_id: string;
-  tag: string; // ex: LAV-10-01
-  tipo: string; // ex: lavadora 10kg
+  nome: string;
+  cidade: string;
+  uf: string;
 };
 
 type CicloItem = {
-  maquina_id: string;
-  maquina_tag: string;
-  tipo: string;
-  ciclos: number;
-};
-
-type FechamentoItem = {
-  id?: string;
-  auditoria_id?: string;
   maquina_tag: string;
   tipo?: string | null;
   ciclos: number;
-  valor_total?: number;
-  valor_repasse?: number;
-  valor_cashback?: number;
-  observacoes?: string | null;
+
+  // enriquecido pelo backend (/api/auditorias/[id]/ciclos)
+  categoria?: "lavadora" | "secadora" | string | null;
+  capacidade_kg?: number | null;
+  valor_ciclo?: number | null;
 };
 
 function toList<T = any>(payload: any): T[] {
   if (Array.isArray(payload)) return payload as T[];
   if (payload?.data && Array.isArray(payload.data)) return payload.data as T[];
+  if (payload?.data?.data && Array.isArray(payload.data.data)) return payload.data.data as T[];
   return [];
 }
 
-function monthISO(d = new Date()) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}-01`;
-}
-
-function normalizeStatus(input: any) {
-  const s = String(input ?? "aberta").trim().toLowerCase();
-  if (s === "em conferência" || s === "em conferencia") return "em_conferencia";
-  if (s === "em andamento") return "em_andamento";
-  if (s === "finalizado") return "final";
-  if (s === "aberto") return "aberta";
-  return s || "aberta";
-}
-
-function safeNum(v: any) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function calcConsumo(atual: number | null | undefined, base: number | null | undefined) {
-  const a = safeNum(atual);
-  const b = safeNum(base);
-  if (!a || !b) return null;
-  return a - b;
+function money(n: number) {
+  return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export default function InternoAuditoriaPage({ params }: { params: { id: string } }) {
-  const auditoriaId = params.id;
+  const id = params.id;
 
+  const [me, setMe] = useState<Me | null>(null);
   const [aud, setAud] = useState<Aud | null>(null);
-  const [maquinas, setMaquinas] = useState<CondoMaquina[]>([]);
-  const [ciclos, setCiclos] = useState<CicloItem[]>([]);
-  const [fechamento, setFechamento] = useState<FechamentoItem[]>([]);
-  const [comprovanteUrl, setComprovanteUrl] = useState<string | null>(null);
-  const [savingFechamento, setSavingFechamento] = useState(false);
-  const [finalizando, setFinalizando] = useState(false);
-
-  const [loading, setLoading] = useState(false);
+  const [condo, setCondo] = useState<Condo | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const [baseModalOpen, setBaseModalOpen] = useState(false);
-  const [base, setBase] = useState<{ agua: string; energia: string; gas: string }>({ agua: "", energia: "", gas: "" });
+  // base manual modal
+  const [needBase, setNeedBase] = useState(false);
+  const [baseAgua, setBaseAgua] = useState("");
+  const [baseEnergia, setBaseEnergia] = useState("");
+  const [baseGas, setBaseGas] = useState("");
+  const [savingBase, setSavingBase] = useState(false);
 
-  const isFinal = normalizeStatus(aud?.status) === "final";
+  // ciclos
+  const [ciclos, setCiclos] = useState<CicloItem[]>([]);
+  const [savingCiclos, setSavingCiclos] = useState(false);
 
-  const totalCiclos = useMemo(() => ciclos.reduce((s, x) => s + safeNum(x.ciclos), 0), [ciclos]);
+  const isStaff = useMemo(() => {
+    const r = me?.role ?? null;
+    return r === "interno" || r === "gestor";
+  }, [me?.role]);
 
-  async function carregarTudo() {
+  const relatorio = useMemo(() => {
+    const toLower = (s: any) => String(s ?? "").toLowerCase();
+
+    const isLav = (it: CicloItem) => {
+      const c = toLower(it.categoria);
+      if (c) return c === "lavadora";
+      return toLower(it.tipo).includes("lavadora") || toLower(it.maquina_tag).startsWith("lav");
+    };
+
+    const isSec = (it: CicloItem) => {
+      const c = toLower(it.categoria);
+      if (c) return c === "secadora";
+      return toLower(it.tipo).includes("secadora") || toLower(it.maquina_tag).startsWith("sec");
+    };
+
+    const linhas = (ciclos ?? []).map((it) => {
+      const valor = Number(it.valor_ciclo ?? 0);
+      const receita = Number(it.ciclos ?? 0) * valor;
+      return {
+        ...it,
+        valor_ciclo: valor,
+        receita,
+        bucket: isLav(it) ? "lavadora" : isSec(it) ? "secadora" : "outro",
+      };
+    });
+
+    const sum = (arr: any[], key: string) => arr.reduce((acc, x) => acc + Number(x?.[key] ?? 0), 0);
+
+    const lav = linhas.filter((x) => x.bucket === "lavadora");
+    const sec = linhas.filter((x) => x.bucket === "secadora");
+    const out = linhas.filter((x) => x.bucket === "outro");
+
+    const lavCiclos = sum(lav, "ciclos");
+    const secCiclos = sum(sec, "ciclos");
+    const outCiclos = sum(out, "ciclos");
+
+    const lavRec = sum(lav, "receita");
+    const secRec = sum(sec, "receita");
+    const outRec = sum(out, "receita");
+
+    return {
+      linhas,
+      lav: { ciclos: lavCiclos, receita: lavRec },
+      sec: { ciclos: secCiclos, receita: secRec },
+      out: { ciclos: outCiclos, receita: outRec },
+      total: {
+        ciclos: lavCiclos + secCiclos + outCiclos,
+        receita: lavRec + secRec + outRec,
+      },
+    };
+  }, [ciclos]);
+
+  const titulo = useMemo(() => {
+    if (!condo) return "—";
+    return `${condo.nome} - ${condo.cidade}/${condo.uf}`;
+  }, [condo]);
+
+  const mesRef = aud?.mes_ref ?? "";
+  const prevMes = useMemo(() => {
+    // calcula mês anterior no formato YYYY-MM-01
+    if (!mesRef || mesRef.length < 10) return "";
+    const [y, m] = mesRef.slice(0, 10).split("-").map((x) => Number(x));
+    if (!y || !m) return "";
+    const d = new Date(y, m - 1, 1);
+    d.setMonth(d.getMonth() - 1);
+    const yy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    return `${yy}-${mm}-01`;
+  }, [mesRef]);
+
+  const consumo = useMemo(() => {
+    // consumo = leitura atual - base
+    const a = Number(aud?.agua_leitura ?? 0);
+    const e = Number(aud?.energia_leitura ?? 0);
+    const g = Number(aud?.gas_leitura ?? 0);
+
+    const ba = aud?.base_agua;
+    const be = aud?.base_energia;
+    const bg = aud?.base_gas;
+
+    const hasBase = ba !== null && ba !== undefined && be !== null && be !== undefined;
+    const hasGasBase = bg !== null && bg !== undefined;
+
+    return {
+      hasBase,
+      agua: hasBase ? a - Number(ba ?? 0) : null,
+      energia: hasBase ? e - Number(be ?? 0) : null,
+      gas: hasGasBase ? g - Number(bg ?? 0) : null,
+    };
+  }, [aud?.agua_leitura, aud?.energia_leitura, aud?.gas_leitura, aud?.base_agua, aud?.base_energia, aud?.base_gas]);
+
+  async function carregar() {
     setLoading(true);
     setErr(null);
 
     try {
-      // 1) auditoria (dados do mês)
-      const aRes = await fetch(`/api/auditorias/${auditoriaId}`, { cache: "no-store" });
+      const meRes = await fetch("/api/me", { cache: "no-store" });
+      const meJson = await meRes.json();
+      if (!meRes.ok) throw new Error(meJson?.error ?? "Falha ao carregar usuário");
+      setMe(meJson as Me);
+
+      const aRes = await fetch(`/api/auditorias/${id}`, { cache: "no-store" });
       const aJson = await aRes.json();
       if (!aRes.ok) throw new Error(aJson?.error ?? "Falha ao carregar auditoria");
-      const audRow = aJson?.data ?? aJson ?? null;
+      const a = (aJson?.data ?? aJson) as any;
+
+      const audRow: Aud = {
+        id: String(a.id),
+        condominio_id: String(a.condominio_id),
+        mes_ref: (a.mes_ref ?? a.ano_mes ?? null) as any,
+        status: a.status ?? null,
+        agua_leitura: a.agua_leitura ?? a.leitura_agua ?? null,
+        energia_leitura: a.energia_leitura ?? a.leitura_energia ?? null,
+        gas_leitura: a.gas_leitura ?? a.leitura_gas ?? null,
+        base_agua: a.base_agua ?? null,
+        base_energia: a.base_energia ?? null,
+        base_gas: a.base_gas ?? null,
+      };
+
       setAud(audRow);
 
-      // 2) máquinas do condomínio
-      const cId = audRow?.condominio_id;
-      if (!cId) throw new Error("Auditoria sem condominio_id");
-      const mRes = await fetch(`/api/condominios/${cId}/maquinas`, { cache: "no-store" });
-      const mJson = await mRes.json();
-      if (!mRes.ok) throw new Error(mJson?.error ?? "Falha ao carregar máquinas");
-      const mList = toList<CondoMaquina>(mJson);
-      setMaquinas(mList);
+      // condo
+      const cRes = await fetch(`/api/condominios/${audRow.condominio_id}`, { cache: "no-store" });
+      const cJson = await cRes.json();
+      if (!cRes.ok) throw new Error(cJson?.error ?? "Falha ao carregar condomínio");
+      const c = (cJson?.data ?? cJson) as any;
+      setCondo({
+        id: String(c.id),
+        nome: String(c.nome ?? ""),
+        cidade: String(c.cidade ?? ""),
+        uf: String(c.uf ?? ""),
+      });
 
-      // 3) ciclos por máquina
-      const ciclosRes = await fetch(`/api/auditorias/${auditoriaId}/ciclos`, { cache: "no-store" });
-      const ciclosJson = await ciclosRes.json();
-      if (!ciclosRes.ok) throw new Error(ciclosJson?.error ?? "Falha ao carregar ciclos");
-      const cicloList = toList<CicloItem>(ciclosJson?.itens ?? ciclosJson);
-      const normalized = cicloList.map((it) => ({
-        maquina_id: it.maquina_id,
-        maquina_tag: it.maquina_tag,
-        tipo: it.tipo,
-        ciclos: safeNum(it.ciclos),
+      // ciclos
+      const ciclosRes = await fetch(`/api/auditorias/${id}/ciclos`, { cache: "no-store" });
+      const cJson2 = await ciclosRes.json();
+      if (!ciclosRes.ok) throw new Error(cJson2?.error ?? "Falha ao carregar ciclos");
+
+      const list = (cJson2?.data?.itens ?? cJson2?.itens ?? cJson2?.data ?? []) as any[];
+      const normalized: CicloItem[] = (list ?? []).map((x: any) => ({
+        maquina_tag: String(x.maquina_tag ?? ""),
+        tipo: x.tipo ?? null,
+        ciclos: Number(x.ciclos ?? 0),
+        categoria: x.categoria ?? null,
+        capacidade_kg: x.capacidade_kg ? Number(x.capacidade_kg) : null,
+        valor_ciclo: x.valor_ciclo !== null && x.valor_ciclo !== undefined ? Number(x.valor_ciclo) : null,
       }));
-      setCiclos(normalized.filter((x) => x.maquina_tag));
+      setCiclos(normalized);
 
-      await carregarFechamento();
+      // se não há base, abre modal
+      const mustAskBase = (audRow.base_agua === null || audRow.base_energia === null) && isStaff;
+      setNeedBase(!!mustAskBase);
+
+      if (mustAskBase) {
+        setBaseAgua(audRow.base_agua ? String(audRow.base_agua) : "");
+        setBaseEnergia(audRow.base_energia ? String(audRow.base_energia) : "");
+        setBaseGas(audRow.base_gas ? String(audRow.base_gas) : "");
+      }
     } catch (e: any) {
       setErr(e?.message ?? "Erro inesperado");
     } finally {
@@ -157,735 +246,356 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
-  async function salvarBaseLeitura() {
-    setErr(null);
-    try {
-      const payload = {
-        agua_base: base.agua ? safeNum(base.agua) : null,
-        energia_base: base.energia ? safeNum(base.energia) : null,
-        gas_base: base.gas ? safeNum(base.gas) : null,
-      };
+  async function salvarBaseManual() {
+    if (!aud) return;
 
-      const res = await fetch(`/api/auditorias/${auditoriaId}/base`, {
+    setSavingBase(true);
+    setErr(null);
+
+    try {
+      const res = await fetch(`/api/auditorias/${aud.id}/base`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          base_agua: baseAgua ? Number(baseAgua) : null,
+          base_energia: baseEnergia ? Number(baseEnergia) : null,
+          base_gas: baseGas ? Number(baseGas) : null,
+        }),
       });
 
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "Falha ao salvar base");
-      setBaseModalOpen(false);
-      await carregarTudo();
+
+      setNeedBase(false);
+      await carregar();
     } catch (e: any) {
-      setErr(e?.message ?? "Erro ao salvar base");
+      setErr(e?.message ?? "Erro inesperado ao salvar base");
+    } finally {
+      setSavingBase(false);
     }
   }
 
   async function salvarCiclos() {
+    if (!aud) return;
+
+    setSavingCiclos(true);
     setErr(null);
+
     try {
-      const res = await fetch(`/api/auditorias/${auditoriaId}/ciclos`, {
+      const res = await fetch(`/api/auditorias/${aud.id}/ciclos`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ itens: ciclos }),
+        body: JSON.stringify({
+          itens: ciclos.map((x) => ({
+            maquina_tag: x.maquina_tag,
+            tipo: x.tipo ?? null,
+            ciclos: Number(x.ciclos ?? 0),
+          })),
+        }),
       });
 
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "Falha ao salvar ciclos");
 
-      await carregarTudo();
+      await carregar();
     } catch (e: any) {
-      setErr(e?.message ?? "Erro ao salvar ciclos");
-    }
-  }
-
-  async function carregarFechamento() {
-    try {
-      const res = await fetch(`/api/auditorias/${auditoriaId}/fechamento`, { cache: "no-store" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error ?? "Falha ao carregar relatório financeiro");
-      setFechamento(Array.isArray(json?.itens) ? json.itens : []);
-      setComprovanteUrl(json?.auditoria?.comprovante_fechamento_url ?? null);
-    } catch (e: any) {
-      // não trava a tela principal
-      console.error(e);
-    }
-  }
-
-  async function gerarItensRelatorio() {
-    if (!ciclos.length) return;
-    setSavingFechamento(true);
-    setErr(null);
-
-    try {
-      // só gera se ainda não existir nada (pra não sobrescrever valores)
-      if (fechamento.length) return;
-
-      for (const it of ciclos) {
-        const res = await fetch(`/api/auditorias/${auditoriaId}/fechamento`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            maquina_tag: it.maquina_tag,
-            tipo: it.tipo,
-            ciclos: it.ciclos,
-            valor_total: 0,
-            valor_repasse: 0,
-            valor_cashback: 0,
-            observacoes: null,
-          }),
-        });
-
-        const json = await res.json();
-        if (!res.ok) throw new Error(json?.error ?? "Falha ao gerar itens do relatório");
-      }
-
-      await carregarFechamento();
-    } catch (e: any) {
-      setErr(e?.message ?? "Erro ao gerar itens do relatório");
+      setErr(e?.message ?? "Erro inesperado ao salvar ciclos");
     } finally {
-      setSavingFechamento(false);
-    }
-  }
-
-  async function salvarRelatorio() {
-    setSavingFechamento(true);
-    setErr(null);
-
-    try {
-      for (const it of fechamento) {
-        const res = await fetch(`/api/auditorias/${auditoriaId}/fechamento`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            item_id: it.id,
-            maquina_tag: it.maquina_tag,
-            tipo: it.tipo,
-            ciclos: it.ciclos,
-            valor_total: Number(it.valor_total ?? 0),
-            valor_repasse: Number(it.valor_repasse ?? 0),
-            valor_cashback: Number(it.valor_cashback ?? 0),
-            observacoes: it.observacoes ?? null,
-          }),
-        });
-
-        const json = await res.json();
-        if (!res.ok) throw new Error(json?.error ?? "Falha ao salvar relatório");
-      }
-
-      await carregarFechamento();
-    } catch (e: any) {
-      setErr(e?.message ?? "Erro ao salvar relatório");
-    } finally {
-      setSavingFechamento(false);
-    }
-  }
-
-  async function uploadComprovante(file: File) {
-    setErr(null);
-
-    const fd = new FormData();
-    fd.append("kind", "comprovante_fechamento");
-    fd.append("file", file);
-
-    const res = await fetch(`/api/auditorias/${auditoriaId}/fotos`, {
-      method: "POST",
-      body: fd,
-    });
-
-    const json = await res.json();
-    if (!res.ok) {
-      throw new Error(json?.error ?? "Falha ao enviar comprovante");
-    }
-
-    const url = json?.url ?? json?.publicUrl ?? json?.data?.publicUrl ?? null;
-    if (url) setComprovanteUrl(url);
-
-    await carregarFechamento();
-  }
-
-  async function finalizarMes() {
-    setFinalizando(true);
-    setErr(null);
-
-    try {
-      const res = await fetch(`/api/auditorias/${auditoriaId}/fechamento`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          comprovante_fechamento_url: comprovanteUrl,
-        }),
-      });
-
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error ?? "Falha ao finalizar mês");
-
-      await carregarTudo();
-      await carregarFechamento();
-    } catch (e: any) {
-      setErr(e?.message ?? "Erro ao finalizar mês");
-    } finally {
-      setFinalizando(false);
+      setSavingCiclos(false);
     }
   }
 
   useEffect(() => {
-    carregarTudo();
+    carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auditoriaId]);
-
-  const mes = (aud?.mes_ref ?? aud?.ano_mes ?? monthISO()) as string;
-
-  // leitura base (vinda do backend em /fechamento GET). aqui a tela só calcula, não armazena.
-  // modal de base escreve em /api/auditorias/[id]/base.
-  const aguaAtual = safeNum(aud?.agua_leitura);
-  const energiaAtual = safeNum(aud?.energia_leitura);
-  const gasAtual = safeNum(aud?.gas_leitura);
-
-  // card “consumo calculado”: a base real vem do endpoint /fechamento (ele calcula com mês anterior ou base informada).
-  // Por enquanto, manter a UI simples e usar o texto “Base: informada manualmente” como já estava na sua tela.
-  // (O backend é quem garante se existe histórico/base.)
+  }, []);
 
   return (
-  <AppShell title="Fechamento (Interno)">
-      <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+    <AppShell title="Fechamento (Interno)">
+      <div className="mx-auto max-w-5xl px-6 py-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div style={{ fontSize: 14, color: "#666" }}>Auditoria (Interno)</div>
-            <h1 style={{ fontSize: 28, fontWeight: 800, marginTop: 6 }}>Fechamento (Interno)</h1>
-            <div style={{ color: "#666", marginTop: 6 }}>
-              <span style={{ fontFamily: "monospace" }}>{aud?.condominio_id ?? "-"}</span>
-            </div>
-            <div style={{ color: "#666", marginTop: 6 }}>
-              Mês: <b>{mes}</b> · ID: <span style={{ fontFamily: "monospace" }}>{auditoriaId}</span>
+            <div className="text-2xl font-extrabold">Fechamento (Interno)</div>
+            <div className="text-xs text-gray-500">{aud?.condominio_id ?? "—"}</div>
+            <div className="mt-1 text-xs text-gray-500">
+              Mês: <b>{mesRef || "—"}</b> • Anterior: <b>{prevMes || "—"}</b> • ID: <b>{id}</b>
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 10 }}>
+          <div className="flex items-center gap-2">
             <button
-              onClick={carregarTudo}
-              style={{
-                padding: "10px 16px",
-                borderRadius: 14,
-                border: "1px solid #d8d8d8",
-                background: "white",
-                cursor: "pointer",
-              }}
+              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50"
+              onClick={carregar}
+              disabled={loading}
             >
               {loading ? "Carregando..." : "Recarregar"}
             </button>
-            <button
-              onClick={() => history.back()}
-              style={{
-                padding: "10px 16px",
-                borderRadius: 14,
-                border: "1px solid #d8d8d8",
-                background: "white",
-                cursor: "pointer",
-              }}
-            >
+            <a className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50" href="/auditorias">
               Voltar
-            </button>
+            </a>
           </div>
         </div>
 
-        {err ? (
-          <div style={{ marginTop: 14, padding: 12, borderRadius: 12, background: "#fff1f1", color: "#b00020" }}>
-            {err}
-          </div>
-        ) : null}
+        {err ? <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div> : null}
 
-        <div
-          style={{
-            marginTop: 18,
-            padding: 18,
-            border: "1px solid #e6e6e6",
-            borderRadius: 16,
-            background: "white",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontSize: 16, fontWeight: 800 }}>Consumo do mês (calculado)</div>
+        <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">Consumo do mês (calculado)</div>
+              <div className="text-xs text-gray-500">Base: {consumo.hasBase ? "informada manualmente" : "não definida"}</div>
+            </div>
+
             <button
-              onClick={() => setBaseModalOpen(true)}
-              style={{
-                padding: "10px 14px",
-                borderRadius: 14,
-                border: "1px solid #d8d8d8",
-                background: "white",
-                cursor: "pointer",
-              }}
+              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+              onClick={() => setNeedBase(true)}
+              disabled={!isStaff}
             >
               Definir leitura base
             </button>
           </div>
 
-          <div style={{ color: "#666", marginTop: 6 }}>Base: informada manualmente</div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 14 }}>
-            <div style={{ border: "1px solid #f0f0f0", borderRadius: 14, padding: 14 }}>
-              <div style={{ fontWeight: 800 }}>Água</div>
-              <div style={{ marginTop: 6 }}>Atual: <b>{aguaAtual || "-"}</b></div>
-              <div>Base: <b>1</b></div>
-              <div>Consumo: <b>{calcConsumo(aguaAtual, 1) ?? "-"}</b></div>
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border border-gray-100 p-4">
+              <div className="text-xs text-gray-500">Água</div>
+              <div className="mt-1 text-sm">
+                <div>
+                  Atual: <b>{aud?.agua_leitura ?? "—"}</b>
+                </div>
+                <div>
+                  Base: <b>{aud?.base_agua ?? "—"}</b>
+                </div>
+                <div>
+                  Consumo: <b>{consumo.agua ?? "—"}</b>
+                </div>
+              </div>
             </div>
 
-            <div style={{ border: "1px solid #f0f0f0", borderRadius: 14, padding: 14 }}>
-              <div style={{ fontWeight: 800 }}>Energia</div>
-              <div style={{ marginTop: 6 }}>Atual: <b>{energiaAtual || "-"}</b></div>
-              <div>Base: <b>1</b></div>
-              <div>Consumo: <b>{calcConsumo(energiaAtual, 1) ?? "-"}</b></div>
+            <div className="rounded-2xl border border-gray-100 p-4">
+              <div className="text-xs text-gray-500">Energia</div>
+              <div className="mt-1 text-sm">
+                <div>
+                  Atual: <b>{aud?.energia_leitura ?? "—"}</b>
+                </div>
+                <div>
+                  Base: <b>{aud?.base_energia ?? "—"}</b>
+                </div>
+                <div>
+                  Consumo: <b>{consumo.energia ?? "—"}</b>
+                </div>
+              </div>
             </div>
 
-            <div style={{ border: "1px solid #f0f0f0", borderRadius: 14, padding: 14 }}>
-              <div style={{ fontWeight: 800 }}>Gás</div>
-              <div style={{ marginTop: 6 }}>Atual: <b>{gasAtual || "-"}</b></div>
-              <div>Base: <b>1</b></div>
-              <div>Consumo: <b>{calcConsumo(gasAtual, 1) ?? "-"}</b></div>
+            <div className="rounded-2xl border border-gray-100 p-4">
+              <div className="text-xs text-gray-500">Gás</div>
+              <div className="mt-1 text-sm">
+                <div>
+                  Atual: <b>{aud?.gas_leitura ?? "—"}</b>
+                </div>
+                <div>
+                  Base: <b>{aud?.base_gas ?? "—"}</b>
+                </div>
+                <div>
+                  Consumo: <b>{consumo.gas ?? "—"}</b>
+                </div>
+              </div>
             </div>
           </div>
         </div>
 
-        <div
-          style={{
-            marginTop: 18,
-            padding: 18,
-            border: "1px solid #e6e6e6",
-            borderRadius: 16,
-            background: "white",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <div style={{ fontSize: 16, fontWeight: 800 }}>Ciclos por máquina</div>
-              <div style={{ color: "#666", marginTop: 4 }}>
+              <div className="text-sm font-semibold">Ciclos por máquina</div>
+              <div className="text-xs text-gray-500">
                 O Interno lança ciclos por máquina individual. A lista vem do cadastro do condomínio (condominio_maquinas).
               </div>
             </div>
 
             <button
+              className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
               onClick={salvarCiclos}
-              disabled={isFinal}
-              style={{
-                padding: "10px 16px",
-                borderRadius: 14,
-                border: "none",
-                background: "#1f6feb",
-                color: "white",
-                fontWeight: 900,
-                cursor: "pointer",
-                opacity: isFinal ? 0.5 : 1,
-              }}
+              disabled={savingCiclos}
             >
-              Salvar ciclos
+              {savingCiclos ? "Salvando..." : "Salvar ciclos"}
             </button>
           </div>
 
-          <div style={{ marginTop: 14, overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
-                  <th style={{ padding: "10px 8px" }}>Máquina</th>
-                  <th style={{ padding: "10px 8px" }}>Tipo</th>
-                  <th style={{ padding: "10px 8px", textAlign: "right" }}>Ciclos</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {ciclos.map((m) => (
-                  <tr key={m.maquina_id} style={{ borderBottom: "1px solid #f3f3f3" }}>
-                    <td style={{ padding: "10px 8px", fontWeight: 700 }}>{m.maquina_tag}</td>
-                    <td style={{ padding: "10px 8px", color: "#666" }}>{m.tipo}</td>
-                    <td style={{ padding: "10px 8px", textAlign: "right" }}>
-                      <input
-                        type="number"
-                        value={m.ciclos}
-                        disabled={isFinal}
-                        onChange={(e) => {
-                          const v = safeNum(e.target.value);
-                          setCiclos((arr) => arr.map((x) => (x.maquina_id === m.maquina_id ? { ...x, ciclos: v } : x)));
-                        }}
-                        style={{
-                          width: 90,
-                          padding: "8px 10px",
-                          borderRadius: 12,
-                          border: "1px solid #ddd",
-                          textAlign: "right",
-                          opacity: isFinal ? 0.6 : 1,
-                        }}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-
-              <tfoot>
-                <tr>
-                  <td style={{ padding: "10px 8px", fontWeight: 900 }} colSpan={2}>
-                    Total
-                  </td>
-                  <td style={{ padding: "10px 8px", textAlign: "right", fontWeight: 900 }}>{totalCiclos}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-
-          <div style={{ marginTop: 10, color: "#666" }}>
-            Próximo: gerar o <b>relatório financeiro</b> (condomínio, valor, conta) e anexar o comprovante.
-          </div>
-        </div>
-
-        {/* RELATÓRIO FINANCEIRO */}
-        <div
-          style={{
-            marginTop: 18,
-            padding: 18,
-            border: "1px solid #e6e6e6",
-            borderRadius: 16,
-            background: "white",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 18, fontWeight: 800 }}>Relatório financeiro</div>
-              <div style={{ color: "#666", marginTop: 4 }}>Preencha valores, anexe comprovante e finalize o mês.</div>
+          <div className="mt-4 overflow-hidden rounded-2xl border border-gray-100">
+            <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
+              <div className="col-span-6">Máquina</div>
+              <div className="col-span-3">Tipo</div>
+              <div className="col-span-3 text-right">Ciclos</div>
             </div>
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              {fechamento.length === 0 ? (
-                <button
-                  onClick={gerarItensRelatorio}
-                  disabled={savingFechamento || ciclos.length === 0 || isFinal}
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: 14,
-                    border: "1px solid #d8d8d8",
-                    background: "white",
-                    cursor: "pointer",
-                    opacity: savingFechamento || ciclos.length === 0 || isFinal ? 0.6 : 1,
-                  }}
-                >
-                  {savingFechamento ? "Gerando..." : "Gerar itens"}
-                </button>
-              ) : null}
+            {ciclos.map((it, idx) => (
+              <div key={it.maquina_tag} className="grid grid-cols-12 items-center px-4 py-3">
+                <div className="col-span-6 text-sm font-semibold">{it.maquina_tag}</div>
+                <div className="col-span-3 text-xs text-gray-600">{it.tipo ?? "—"}</div>
+                <div className="col-span-3 flex justify-end">
+                  <input
+                    className="w-24 rounded-xl border border-gray-200 px-3 py-2 text-right text-sm"
+                    value={String(it.ciclos ?? 0)}
+                    inputMode="numeric"
+                    onChange={(e) => {
+                      const v = Number(e.target.value ?? 0);
+                      setCiclos((prev) => prev.map((x, i) => (i === idx ? { ...x, ciclos: Number.isNaN(v) ? 0 : v } : x)));
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
 
-              <button
-                onClick={salvarRelatorio}
-                disabled={savingFechamento || fechamento.length === 0 || isFinal}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 14,
-                  border: "none",
-                  background: "#1f6feb",
-                  color: "white",
-                  fontWeight: 800,
-                  cursor: "pointer",
-                  opacity: savingFechamento || fechamento.length === 0 || isFinal ? 0.6 : 1,
-                }}
-              >
-                {savingFechamento ? "Salvando..." : "Salvar relatório"}
+          {/* Relatório financeiro (prévia) */}
+          <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">Relatório financeiro (prévia)</div>
+                <div className="text-xs text-gray-500">
+                  Cálculo por máquina usando <b>condominio_maquinas.valor_ciclo</b>. Split: <b>Água = lavadoras</b>;{" "}
+                  <b>Gás = secadoras</b> (se houver gás no condomínio).
+                </div>
+              </div>
+
+              <div className="text-right">
+                <div className="text-xs text-gray-500">Receita total</div>
+                <div className="text-lg font-extrabold">R$ {money(relatorio.total.receita)}</div>
+              </div>
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="rounded-2xl border border-gray-100 p-3">
+                <div className="text-xs text-gray-500">Lavadoras</div>
+                <div className="mt-1 flex items-baseline justify-between">
+                  <div className="text-sm font-semibold">{relatorio.lav.ciclos} ciclos</div>
+                  <div className="text-sm font-extrabold">R$ {money(relatorio.lav.receita)}</div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-gray-100 p-3">
+                <div className="text-xs text-gray-500">Secadoras</div>
+                <div className="mt-1 flex items-baseline justify-between">
+                  <div className="text-sm font-semibold">{relatorio.sec.ciclos} ciclos</div>
+                  <div className="text-sm font-extrabold">R$ {money(relatorio.sec.receita)}</div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-gray-100 p-3">
+                <div className="text-xs text-gray-500">Consumo do mês</div>
+                <div className="mt-1 text-xs text-gray-600">
+                  Água: <b>{consumo.agua ?? "—"}</b> • Energia: <b>{consumo.energia ?? "—"}</b> • Gás: <b>{consumo.gas ?? "—"}</b>
+                </div>
+                <div className="mt-1 text-[11px] text-gray-500">
+                  (Energia pode afetar lavadora e secadora; água só lavadora; gás só secadora onde existir.)
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 overflow-hidden rounded-2xl border border-gray-100">
+              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600">
+                <div className="col-span-5">Máquina</div>
+                <div className="col-span-2">Categoria</div>
+                <div className="col-span-2 text-right">Ciclos</div>
+                <div className="col-span-3 text-right">Receita (R$)</div>
+              </div>
+              {relatorio.linhas.map((l) => (
+                <div key={l.maquina_tag} className="grid grid-cols-12 px-3 py-2 text-sm">
+                  <div className="col-span-5">
+                    <div className="font-semibold">{l.maquina_tag}</div>
+                    <div className="text-xs text-gray-500">{l.tipo ?? ""}</div>
+                  </div>
+                  <div className="col-span-2 text-xs text-gray-600">{l.categoria ?? "—"}</div>
+                  <div className="col-span-2 text-right font-semibold">{l.ciclos}</div>
+                  <div className="col-span-3 text-right font-extrabold">
+                    {l.receita.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-3 text-xs text-gray-500">
+              Próximo passo: eu crio o bloco de <b>Repasse / Conta / Comprovante</b> + botão <b>Finalizar auditoria</b> (status = final) só após anexar comprovante.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* MODAL: leitura base manual */}
+      {needBase && isStaff && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">Leitura anterior não encontrada</div>
+                <div className="mt-1 text-xs text-gray-600">
+                  Condomínio novo ou histórico vazio. Informe a leitura anterior/base para o cálculo do consumo do mês.
+                </div>
+                <div className="mt-1 text-xs text-gray-500">
+                  Condomínio: <b>{titulo}</b> • Mês: <b>{mesRef}</b> • Anterior: <b>{prevMes}</b>
+                </div>
+              </div>
+
+              <button className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50" onClick={() => setNeedBase(false)} disabled={savingBase}>
+                Fechar
               </button>
             </div>
-          </div>
 
-          {fechamento.length === 0 ? (
-            <div style={{ marginTop: 14, color: "#666" }}>
-              Nenhum item ainda. Clique em <b>Gerar itens</b> (depois de salvar ciclos) para criar o relatório por
-              máquina.
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-xs text-gray-600">Água (base)</label>
+                <input
+                  className="w-full rounded-xl border px-3 py-2"
+                  value={baseAgua}
+                  onChange={(e) => setBaseAgua(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="ex: 12345"
+                  disabled={savingBase}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs text-gray-600">Energia (base)</label>
+                <input
+                  className="w-full rounded-xl border px-3 py-2"
+                  value={baseEnergia}
+                  onChange={(e) => setBaseEnergia(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="ex: 67890"
+                  disabled={savingBase}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs text-gray-600">Gás (base)</label>
+                <input
+                  className="w-full rounded-xl border px-3 py-2"
+                  value={baseGas}
+                  onChange={(e) => setBaseGas(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="se não tiver, vazio"
+                  disabled={savingBase}
+                />
+              </div>
             </div>
-          ) : (
-            <>
-              <div style={{ marginTop: 14, overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
-                      <th style={{ padding: "10px 8px" }}>Máquina</th>
-                      <th style={{ padding: "10px 8px" }}>Tipo</th>
-                      <th style={{ padding: "10px 8px" }}>Ciclos</th>
-                      <th style={{ padding: "10px 8px" }}>Valor total</th>
-                      <th style={{ padding: "10px 8px" }}>Repasse</th>
-                      <th style={{ padding: "10px 8px" }}>Cashback</th>
-                      <th style={{ padding: "10px 8px" }}>Obs.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {fechamento.map((it) => (
-                      <tr key={it.maquina_tag} style={{ borderBottom: "1px solid #f3f3f3" }}>
-                        <td style={{ padding: "10px 8px", fontWeight: 700 }}>{it.maquina_tag}</td>
-                        <td style={{ padding: "10px 8px", color: "#666" }}>{it.tipo ?? "-"}</td>
-                        <td style={{ padding: "10px 8px" }}>{it.ciclos}</td>
-                        <td style={{ padding: "10px 8px" }}>
-                          <input
-                            type="number"
-                            value={it.valor_total ?? 0}
-                            disabled={isFinal}
-                            onChange={(e) =>
-                              setFechamento((arr) =>
-                                arr.map((x) =>
-                                  x.maquina_tag === it.maquina_tag ? { ...x, valor_total: Number(e.target.value) } : x
-                                )
-                              )
-                            }
-                            style={{
-                              width: 120,
-                              padding: "8px 10px",
-                              borderRadius: 12,
-                              border: "1px solid #ddd",
-                              opacity: isFinal ? 0.6 : 1,
-                            }}
-                          />
-                        </td>
-                        <td style={{ padding: "10px 8px" }}>
-                          <input
-                            type="number"
-                            value={it.valor_repasse ?? 0}
-                            disabled={isFinal}
-                            onChange={(e) =>
-                              setFechamento((arr) =>
-                                arr.map((x) =>
-                                  x.maquina_tag === it.maquina_tag
-                                    ? { ...x, valor_repasse: Number(e.target.value) }
-                                    : x
-                                )
-                              )
-                            }
-                            style={{
-                              width: 120,
-                              padding: "8px 10px",
-                              borderRadius: 12,
-                              border: "1px solid #ddd",
-                              opacity: isFinal ? 0.6 : 1,
-                            }}
-                          />
-                        </td>
-                        <td style={{ padding: "10px 8px" }}>
-                          <input
-                            type="number"
-                            value={it.valor_cashback ?? 0}
-                            disabled={isFinal}
-                            onChange={(e) =>
-                              setFechamento((arr) =>
-                                arr.map((x) =>
-                                  x.maquina_tag === it.maquina_tag
-                                    ? { ...x, valor_cashback: Number(e.target.value) }
-                                    : x
-                                )
-                              )
-                            }
-                            style={{
-                              width: 120,
-                              padding: "8px 10px",
-                              borderRadius: 12,
-                              border: "1px solid #ddd",
-                              opacity: isFinal ? 0.6 : 1,
-                            }}
-                          />
-                        </td>
-                        <td style={{ padding: "10px 8px" }}>
-                          <input
-                            value={it.observacoes ?? ""}
-                            disabled={isFinal}
-                            onChange={(e) =>
-                              setFechamento((arr) =>
-                                arr.map((x) =>
-                                  x.maquina_tag === it.maquina_tag ? { ...x, observacoes: e.target.value } : x
-                                )
-                              )
-                            }
-                            style={{
-                              width: 240,
-                              padding: "8px 10px",
-                              borderRadius: 12,
-                              border: "1px solid #ddd",
-                              opacity: isFinal ? 0.6 : 1,
-                            }}
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
 
-              <div style={{ marginTop: 12, display: "flex", gap: 16, flexWrap: "wrap", color: "#333" }}>
-                <div>
-                  <b>Total:</b> {fechamento.reduce((s, x) => s + Number(x.valor_total ?? 0), 0).toFixed(2)}
-                </div>
-                <div>
-                  <b>Repasse:</b> {fechamento.reduce((s, x) => s + Number(x.valor_repasse ?? 0), 0).toFixed(2)}
-                </div>
-                <div>
-                  <b>Cashback:</b> {fechamento.reduce((s, x) => s + Number(x.valor_cashback ?? 0), 0).toFixed(2)}
-                </div>
-              </div>
+            <div className="mt-4 flex flex-wrap gap-2 justify-end">
+              <button className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50" onClick={() => setNeedBase(false)} disabled={savingBase}>
+                Cancelar
+              </button>
 
-              <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-                <div>
-                  <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Comprovante</div>
-                  {comprovanteUrl ? (
-                    <div style={{ marginBottom: 6 }}>
-                      <a href={comprovanteUrl} target="_blank" rel="noreferrer">
-                        Ver comprovante
-                      </a>
-                    </div>
-                  ) : (
-                    <div style={{ marginBottom: 6, color: "#666" }}>Ainda não anexado.</div>
-                  )}
+              <button
+                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                onClick={salvarBaseManual}
+                disabled={savingBase}
+              >
+                {savingBase ? "Salvando..." : "Salvar base"}
+              </button>
+            </div>
 
-                  <input
-                    type="file"
-                    accept="image/*,.pdf"
-                    disabled={isFinal}
-                    onChange={async (e) => {
-                      const f = e.target.files?.[0];
-                      if (!f) return;
-                      try {
-                        await uploadComprovante(f);
-                      } catch (err2: any) {
-                        setErr(err2?.message ?? "Erro ao enviar comprovante");
-                      } finally {
-                        (e.target as HTMLInputElement).value = "";
-                      }
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: "flex", alignItems: "end" }}>
-                  <button
-                    onClick={finalizarMes}
-                    disabled={finalizando || !comprovanteUrl || fechamento.length === 0 || isFinal}
-                    style={{
-                      padding: "12px 16px",
-                      borderRadius: 14,
-                      border: "none",
-                      background: "#16a34a",
-                      color: "white",
-                      fontWeight: 900,
-                      cursor: "pointer",
-                      opacity: finalizando || !comprovanteUrl || fechamento.length === 0 || isFinal ? 0.6 : 1,
-                    }}
-                  >
-                    {finalizando ? "Finalizando..." : "Finalizar mês"}
-                  </button>
-                </div>
-              </div>
-
-              {isFinal ? <div style={{ marginTop: 12, color: "#16a34a", fontWeight: 800 }}>Auditoria finalizada.</div> : null}
-            </>
-          )}
+            <div className="mt-3 text-xs text-gray-500">Depois que tiver histórico, isso some: o sistema usa automaticamente o mês anterior.</div>
+          </div>
         </div>
-
-        {/* MODAL BASE */}
-        {baseModalOpen ? (
-          <div
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(0,0,0,0.35)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 18,
-              zIndex: 50,
-            }}
-          >
-            <div style={{ width: 520, maxWidth: "100%", background: "white", borderRadius: 18, padding: 18 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 16, fontWeight: 900 }}>Leitura anterior não encontrada</div>
-                  <div style={{ marginTop: 6, color: "#666" }}>
-                    Condomínio novo ou histórico vazio. Informe a leitura anterior/base para o cálculo do consumo do mês.
-                  </div>
-                  <div style={{ marginTop: 6, color: "#666" }}>
-                    Condomínio: <span style={{ fontFamily: "monospace" }}>{aud?.condominio_id ?? "-"}</span> · Mês:{" "}
-                    {mes}
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => setBaseModalOpen(false)}
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: 14,
-                    border: "1px solid #d8d8d8",
-                    background: "white",
-                    cursor: "pointer",
-                    height: 42,
-                  }}
-                >
-                  Fechar
-                </button>
-              </div>
-
-              <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Água (base)</div>
-                  <input
-                    value={base.agua}
-                    onChange={(e) => setBase((b) => ({ ...b, agua: e.target.value }))}
-                    placeholder="ex: 12345"
-                    style={{ width: "100%", padding: "10px 12px", borderRadius: 14, border: "1px solid #ddd" }}
-                  />
-                </div>
-
-                <div>
-                  <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Energia (base)</div>
-                  <input
-                    value={base.energia}
-                    onChange={(e) => setBase((b) => ({ ...b, energia: e.target.value }))}
-                    placeholder="ex: 67890"
-                    style={{ width: "100%", padding: "10px 12px", borderRadius: 14, border: "1px solid #ddd" }}
-                  />
-                </div>
-
-                <div>
-                  <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Gás (base)</div>
-                  <input
-                    value={base.gas}
-                    onChange={(e) => setBase((b) => ({ ...b, gas: e.target.value }))}
-                    placeholder="se não tiver, vazio"
-                    style={{ width: "100%", padding: "10px 12px", borderRadius: 14, border: "1px solid #ddd" }}
-                  />
-                </div>
-              </div>
-
-              <div style={{ marginTop: 14, display: "flex", justifyContent: "end", gap: 10 }}>
-                <button
-                  onClick={() => setBaseModalOpen(false)}
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: 14,
-                    border: "1px solid #d8d8d8",
-                    background: "white",
-                    cursor: "pointer",
-                  }}
-                >
-                  Cancelar
-                </button>
-
-                <button
-                  onClick={salvarBaseLeitura}
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: 14,
-                    border: "none",
-                    background: "#16a34a",
-                    color: "white",
-                    fontWeight: 900,
-                    cursor: "pointer",
-                  }}
-                >
-                  Salvar base
-                </button>
-              </div>
-
-              <div style={{ marginTop: 10, color: "#666", fontSize: 12 }}>
-                Depois que tiver histórico, isso some: o sistema usa automaticamente o mês anterior.
-              </div>
-            </div>
-          </div>
-        ) : null}
-      </div>
+      )}
     </AppShell>
   );
 }

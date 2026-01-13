@@ -1,228 +1,160 @@
-import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer";
-
 export const runtime = "nodejs";
+
+import { NextResponse } from "next/server";
+import { getUserAndRole, supabaseAdmin } from "@/lib/auth";
 
 type Role = "auditor" | "interno" | "gestor";
 
-function roleRank(role: Role | null) {
-  const w: Record<Role, number> = { auditor: 1, interno: 2, gestor: 3 };
-  if (!role) return 0;
-  return w[role] ?? 0;
+function roleGte(role: Role | null, min: Role) {
+  const rank: Record<Role, number> = { auditor: 1, interno: 2, gestor: 3 };
+  if (!role) return false;
+  return rank[role] >= rank[min];
 }
 
-function roleGte(role: Role | null, min: Role): boolean {
-  return roleRank(role) >= roleRank(min);
+function normalizeStatus(input: any) {
+  const s = String(input ?? "aberta").trim().toLowerCase();
+  if (s === "em conferência" || s === "em conferencia") return "em_conferencia";
+  if (s === "em andamento") return "em_andamento";
+  if (s === "finalizado") return "final";
+  if (s === "aberto") return "aberta";
+  return s || "aberta";
 }
 
-async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise<Role | null> {
-  const { data: auth, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !auth?.user) return null;
-
-  const { data: prof, error: profErr } = await supabase.from("profiles").select("role").eq("id", auth.user.id).single();
-  if (profErr) return null;
-
-  return (prof?.role ?? null) as Role | null;
-}
-
-function normCategoria(v: any) {
-  const s = String(v ?? "").trim().toLowerCase();
-  if (s === "lavadora" || s === "secadora") return s;
-  return "";
-}
-
-function pad2(n: number) {
-  return String(n).padStart(2, "0");
-}
-
-function tagPrefix(cat: string) {
-  if (cat === "lavadora") return "LAV";
-  if (cat === "secadora") return "SEC";
-  return "MAQ";
-}
-
-function toNonNegInt(v: any) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return 0;
-  const i = Math.trunc(n);
-  return i < 0 ? 0 : i;
-}
-
-/**
- * Gera a lista "explodida" de máquinas por quantidade:
- * condominio_maquinas: (categoria, capacidade_kg, quantidade)
- * -> itens individuais com maquina_tag: LAV-10-01, LAV-10-02, SEC-15-01 ...
- */
 function expandMaquinas(maquinas: any[]) {
   const items: { maquina_tag: string; tipo: string; meta: any }[] = [];
 
-  // ordena pra tags serem estáveis
-  const sorted = [...(maquinas ?? [])].sort((a, b) => {
-    const ca = String(a?.categoria ?? "");
-    const cb = String(b?.categoria ?? "");
-    if (ca !== cb) return ca.localeCompare(cb);
-    const ka = Number(a?.capacidade_kg ?? 0);
-    const kb = Number(b?.capacidade_kg ?? 0);
-    if (ka !== kb) return ka - kb;
-    return 0;
-  });
+  for (const m of maquinas ?? []) {
+    const tag = String(m.tag ?? "").trim();
+    const tipo = String(m.tipo ?? m.categoria ?? "").trim();
 
-  for (const m of sorted) {
-    const cat = normCategoria(m?.categoria);
-    const cap = Number(m?.capacidade_kg ?? 0);
-    const qtd = Math.max(0, Math.trunc(Number(m?.quantidade ?? 0)));
+    if (!tag) continue;
 
-    if (!cat || !Number.isFinite(cap) || qtd <= 0) continue;
-
-    const prefix = tagPrefix(cat);
-    const tipo = `${cat} ${cap}kg`;
-
-    for (let i = 1; i <= qtd; i++) {
-      const maquina_tag = `${prefix}-${cap}-${pad2(i)}`;
-      items.push({ maquina_tag, tipo, meta: m });
-    }
+    // opcional: se o tag vier no formato LAV-10-01 e existir qtd, a gente pode expandir
+    // mas no nosso cadastro atual já vem com tag único por máquina, então é 1:1.
+    items.push({ maquina_tag: tag, tipo: tipo || "maquina", meta: m });
   }
 
   return items;
 }
 
-/**
- * GET /api/auditorias/:id/ciclos
- * Retorna SEMPRE a lista completa de máquinas (explodida) + ciclos já lançados (se existirem)
- */
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  try {
-    const supabase = supabaseServer();
-    const auditoriaId = params.id;
+  const ctx = await getUserAndRole();
+  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
-    // auth
-    const { data: auth, error: authErr } = await supabase.auth.getUser();
-    if (authErr || !auth?.user) return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+  const role = (ctx.role ?? null) as Role | null;
+  const isAuditor = role === "auditor";
+  const isStaff = roleGte(role, "interno");
+  if (!isAuditor && !isStaff) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
 
-    const role = await getUserRole(supabase);
-    if (!roleGte(role, "auditor")) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  const admin = supabaseAdmin();
+  const auditoriaId = params.id;
 
-    // auditoria
-    const { data: aud, error: audErr } = await supabase
-      .from("auditorias")
-      .select("id, condominio_id, mes_ref, status")
-      .eq("id", auditoriaId)
-      .single();
+  // Auditoria
+  const { data: aud, error: audErr } = await admin.from("auditorias").select("*").eq("id", auditoriaId).maybeSingle();
+  if (audErr) return NextResponse.json({ error: audErr.message }, { status: 400 });
+  if (!aud) return NextResponse.json({ error: "Auditoria não encontrada" }, { status: 404 });
 
-    if (audErr || !aud) {
-      return NextResponse.json({ error: audErr?.message ?? "Auditoria não encontrada" }, { status: 404 });
-    }
+  // Auditor: só pode ver se for dono OU se tiver vínculo do condomínio
+  if (isAuditor && !isStaff) {
+    const isOwner = !!aud.auditor_id && aud.auditor_id === ctx.user.id;
 
-    const condominioId = String((aud as any).condominio_id);
+    const { data: ac, error: acErr } = await admin
+      .from("auditor_condominios")
+      .select("condominio_id")
+      .eq("auditor_id", ctx.user.id)
+      .eq("condominio_id", aud.condominio_id)
+      .maybeSingle();
 
-    // maquinas do condomínio (cat + capacidade + qtd + valor_ciclo etc)
-    const { data: maquinas, error: maqErr } = await supabase
-      .from("condominio_maquinas")
-      .select("id, condominio_id, categoria, capacidade_kg, quantidade, valor_ciclo, ativo")
-      .eq("condominio_id", condominioId)
-      .eq("ativo", true)
-      .order("categoria", { ascending: true })
-      .order("capacidade_kg", { ascending: true });
+    if (acErr) return NextResponse.json({ error: acErr.message }, { status: 400 });
 
-    if (maqErr) return NextResponse.json({ error: maqErr.message }, { status: 400 });
+    const hasLink = !!ac?.condominio_id;
+    if (!isOwner && !hasLink) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  }
 
-    const expanded = expandMaquinas(maquinas ?? []);
+  // Máquinas do condomínio (fonte de valor_ciclo)
+  const { data: maquinas, error: mErr } = await admin
+    .from("condominio_maquinas")
+    .select("id,condominio_id,tag,tipo,categoria,capacidade_kg,valor_ciclo")
+    .eq("condominio_id", aud.condominio_id);
 
-    // itens já lançados no fechamento (por máquina_tag)
-    const { data: itensSaved, error: itErr } = await supabase
-      .from("auditoria_fechamento_itens")
-      .select("id, auditoria_id, maquina_tag, tipo, ciclos")
-      .eq("auditoria_id", auditoriaId);
+  if (mErr) return NextResponse.json({ error: mErr.message }, { status: 400 });
 
-    if (itErr) return NextResponse.json({ error: itErr.message }, { status: 400 });
+  // Itens salvos
+  const { data: saved, error: sErr } = await admin
+    .from("auditoria_ciclos")
+    .select("id,auditoria_id,maquina_tag,tipo,ciclos")
+    .eq("auditoria_id", auditoriaId);
 
-    const map = new Map<string, any>();
-    for (const r of itensSaved ?? []) map.set(String(r.maquina_tag), r);
+  if (sErr) return NextResponse.json({ error: sErr.message }, { status: 400 });
 
-    const itens = expanded.map((x) => {
-      const saved = map.get(x.maquina_tag);
-      return {
-        id: saved?.id ?? null,
-        auditoria_id: auditoriaId,
-        maquina_tag: x.maquina_tag,
-        tipo: saved?.tipo ?? x.tipo,
-        ciclos: Number(saved?.ciclos ?? 0),
-      };
-    });
+  const expanded = expandMaquinas(maquinas ?? []);
+  const map = new Map<string, any>((saved ?? []).map((r: any) => [String(r.maquina_tag), r]));
 
-    return NextResponse.json({
-      ok: true,
-      auditoria: { ...(aud as any), ano_mes: (aud as any).mes_ref ?? null }, // compat
-      condominio_id: condominioId,
+  const itens = expanded.map((x) => {
+    const meta = x.meta ?? {};
+    const savedRow = map.get(x.maquina_tag);
+
+    return {
+      id: savedRow?.id ?? null,
+      auditoria_id: auditoriaId,
+      maquina_tag: x.maquina_tag,
+      tipo: savedRow?.tipo ?? x.tipo,
+      ciclos: Number(savedRow?.ciclos ?? 0),
+
+      // >>> ENRIQUECIMENTO (relatório financeiro)
+      categoria: meta.categoria ?? null,
+      capacidade_kg: meta.capacidade_kg ?? null,
+      valor_ciclo: meta.valor_ciclo ?? null,
+    };
+  });
+
+  return NextResponse.json({
+    data: {
+      auditoria: {
+        id: aud.id,
+        condominio_id: aud.condominio_id,
+        mes_ref: aud.mes_ref,
+        status: normalizeStatus(aud.status),
+      },
       maquinas: maquinas ?? [],
       itens,
-      data: itens, // compat com telas antigas que leem data
-    });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
-  }
+    },
+  });
 }
 
-/**
- * POST /api/auditorias/:id/ciclos
- * Somente interno/gestor.
- * Body: { itens: [{ maquina_tag, tipo, ciclos }] } ou array direto.
- */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
-  try {
-    const supabase = supabaseServer();
-    const auditoriaId = params.id;
+  const ctx = await getUserAndRole();
+  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
-    // auth
-    const { data: auth, error: authErr } = await supabase.auth.getUser();
-    if (authErr || !auth?.user) return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+  const role = (ctx.role ?? null) as Role | null;
+  const isStaff = roleGte(role, "interno");
+  if (!isStaff) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
 
-    const role = await getUserRole(supabase);
-    if (!roleGte(role, "interno")) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  const admin = supabaseAdmin();
+  const auditoriaId = params.id;
 
-    // auditoria existe
-    const { data: aud, error: audErr } = await supabase.from("auditorias").select("id").eq("id", auditoriaId).single();
-    if (audErr || !aud) return NextResponse.json({ error: audErr?.message ?? "Auditoria não encontrada" }, { status: 404 });
+  const body = await req.json().catch(() => null);
+  const itens = Array.isArray(body?.itens) ? body.itens : [];
 
-    const body = await req.json().catch(() => null);
-    const itemsRaw = Array.isArray(body) ? body : body?.itens ?? body?.data ?? [];
-    const items = Array.isArray(itemsRaw) ? itemsRaw : [];
-
-    const payload = items
-      .map((it: any) => ({
-        auditoria_id: auditoriaId,
-        maquina_tag: String(it?.maquina_tag ?? "").trim(),
-        tipo: it?.tipo ? String(it.tipo) : null,
-        ciclos: toNonNegInt(it?.ciclos),
-        // valores por enquanto ficam 0 (apuração vem depois)
-        valor_total: 0,
-        valor_repasse: 0,
-        valor_cashback: 0,
-        observacoes: null,
-      }))
-      .filter((p) => !!p.maquina_tag);
-
-    if (payload.length === 0) {
-      return NextResponse.json({ ok: true, upserted: 0, data: [] });
-    }
-
-    // precisa do UNIQUE (auditoria_id, maquina_tag) que te mandei no SQL
-    const { data: saved, error: upErr } = await supabase
-      .from("auditoria_fechamento_itens")
-      .upsert(payload, { onConflict: "auditoria_id,maquina_tag" })
-      .select("id, auditoria_id, maquina_tag, tipo, ciclos");
-
-    if (upErr) return NextResponse.json({ error: upErr.message }, { status: 400 });
-
-    return NextResponse.json({
-      ok: true,
-      upserted: saved?.length ?? 0,
-      data: (saved ?? []).map((r: any) => ({
-        ...r,
-        ciclos: Number(r.ciclos ?? 0),
-      })),
-    });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
+  // validação mínima
+  for (const it of itens) {
+    if (!it?.maquina_tag) return NextResponse.json({ error: "maquina_tag obrigatório" }, { status: 400 });
+    if (Number.isNaN(Number(it?.ciclos ?? 0))) return NextResponse.json({ error: "ciclos inválido" }, { status: 400 });
   }
+
+  // upsert (chave natural: auditoria_id + maquina_tag)
+  const payload = itens.map((it: any) => ({
+    auditoria_id: auditoriaId,
+    maquina_tag: String(it.maquina_tag),
+    tipo: it.tipo ?? null,
+    ciclos: Number(it.ciclos ?? 0),
+  }));
+
+  const { error: upErr } = await admin.from("auditoria_ciclos").upsert(payload, {
+    onConflict: "auditoria_id,maquina_tag",
+  });
+
+  if (upErr) return NextResponse.json({ error: upErr.message }, { status: 400 });
+
+  return NextResponse.json({ ok: true });
 }
