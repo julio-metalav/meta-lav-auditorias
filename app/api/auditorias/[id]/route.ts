@@ -5,6 +5,7 @@ import { supabaseServer } from "@/lib/supabaseServer";
 
 type Role = "auditor" | "interno" | "gestor";
 type Status = "aberta" | "em_andamento" | "em_conferencia" | "final";
+type PagamentoMetodo = "direto" | "boleto";
 
 type AudRow = {
   id: string;
@@ -37,6 +38,9 @@ type AudRow = {
   fechamento_obs?: string | null;
   fechado_por?: string | null;
   fechado_em?: string | null;
+
+  // derivado do cadastro do condomínio
+  pagamento_metodo?: PagamentoMetodo | null;
 };
 
 function roleGte(role: Role | null, min: Role) {
@@ -47,7 +51,7 @@ function roleGte(role: Role | null, min: Role) {
 
 function normalizeStatus(input: any): Status {
   const s = String(input ?? "aberta").trim().toLowerCase();
-  if (s === "em conferencia" || s === "em_conferencia" || s === "em conferência") return "em_conferencia";
+  if (s === "em conferencia" || s === "em_conferencia" || s === "em conferÔö£┬¼ncia") return "em_conferencia";
   if (s === "em andamento" || s === "em_andamento") return "em_andamento";
   if (s === "final" || s === "finalizado") return "final";
   if (s === "aberta" || s === "aberto") return "aberta";
@@ -66,6 +70,20 @@ async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise
 
   const { data: prof } = await supabase.from("profiles").select("role").eq("id", auth.user.id).maybeSingle();
   return (prof?.role ?? null) as Role | null;
+}
+
+async function getPagamentoMetodoDoCondominio(
+  supabase: ReturnType<typeof supabaseServer>,
+  condominio_id: string
+): Promise<PagamentoMetodo> {
+  const { data } = await supabase
+    .from("condominios")
+    .select("pagamento_metodo")
+    .eq("id", condominio_id)
+    .maybeSingle();
+
+  const m = String((data as any)?.pagamento_metodo ?? "direto").toLowerCase().trim();
+  return m === "boleto" ? "boleto" : "direto";
 }
 
 /**
@@ -110,7 +128,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
     if (!data) return NextResponse.json({ error: "Auditoria não encontrada" }, { status: 404 });
 
-    return NextResponse.json({ auditoria: data as AudRow });
+    const pagamento_metodo = await getPagamentoMetodoDoCondominio(supabase, String((data as any).condominio_id));
+
+    return NextResponse.json({ auditoria: { ...(data as AudRow), pagamento_metodo } });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
@@ -141,6 +161,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const aud = audRaw as AudRow;
     const prevStatus: Status = normalizeStatus(aud.status);
 
+    const pagamento_metodo = await getPagamentoMetodoDoCondominio(supabase, String(aud.condominio_id));
+    aud.pagamento_metodo = pagamento_metodo;
+
     const isOwnerAuditor = !!aud.auditor_id && aud.auditor_id === user.id;
     const isManager = roleGte(role, "interno"); // interno/gestor
     const isGestor = role === "gestor";
@@ -160,7 +183,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
 
     /**
-     * REABRIR PARA CORREÇÃO
+     * REABRIR PARA CORREÇÃO (política A)
      * interno/gestor pode mudar: final -> em_conferencia
      * mas interno NÃO pode editar campos em final (só reabrir).
      */
@@ -204,11 +227,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         return NextResponse.json({ error: "Só é possível finalizar quando a auditoria estiver em_conferencia" }, { status: 400 });
       }
 
-      // REGRA: só finaliza se existir comprovante
-      const comprovante = String(aud.comprovante_fechamento_url ?? "").trim();
-      if (!comprovante) {
+      // REGRA: comprovante só é obrigatório quando pagamento é DIRETO
+      const precisaComprovante = pagamento_metodo !== "boleto";
+      if (precisaComprovante && !aud.comprovante_fechamento_url) {
         return NextResponse.json(
-          { error: "Não é possível finalizar sem comprovante de fechamento anexado (comprovante_fechamento)." },
+          { error: "Não é possível finalizar sem comprovante de fechamento (pagamento direto). Para boleto, não exige." },
           { status: 400 }
         );
       }
@@ -290,8 +313,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     // 5) Log de status (best-effort)
     if (nextStatus && normalizeStatus(aud.status) !== nextStatus) {
-      const note =
-        typeof body?.note === "string" && body.note.trim().length > 0 ? body.note.trim().slice(0, 500) : null;
+      const note = typeof body?.note === "string" && body.note.trim().length > 0 ? body.note.trim().slice(0, 500) : null;
 
       const logPayload = {
         auditoria_id: id,
@@ -309,7 +331,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       }
     }
 
-    return NextResponse.json({ ok: true, auditoria: updated });
+    return NextResponse.json({ ok: true, auditoria: { ...(updated as any), pagamento_metodo } });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }

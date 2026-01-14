@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/app/components/AppShell";
 
 type Role = "auditor" | "interno" | "gestor";
+type PagamentoMetodo = "direto" | "boleto";
 
 type Me = {
   user: { id: string; email: string };
@@ -28,6 +29,9 @@ type Aud = {
   comprovante_fechamento_url?: string | null;
   fechamento_obs?: string | null;
 
+  // vindo do backend (derivado do cadastro do condomínio)
+  pagamento_metodo?: PagamentoMetodo | null;
+
   // pode vir junto do backend
   condominios?: { id?: string; nome?: string; cidade?: string; uf?: string } | null;
   condominio?: { id?: string; nome?: string; cidade?: string; uf?: string } | null;
@@ -41,7 +45,7 @@ type Condo = {
 };
 
 type CicloItem = {
-  id?: string | null; // usado para detectar se já foi salvo
+  id?: string | null;
   maquina_tag: string;
   tipo?: string | null;
   ciclos: number;
@@ -109,11 +113,11 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   const [ciclos, setCiclos] = useState<CicloItem[]>([]);
   const [savingCiclos, setSavingCiclos] = useState(false);
 
-  // trava edição (com botão alterar/corrigir)
+  // trava edição
   const [baseEditMode, setBaseEditMode] = useState(false);
   const [ciclosEditMode, setCiclosEditMode] = useState(false);
 
-  // snapshot para "Cancelar edição" voltar pro backend
+  // snapshot para cancelar
   const [ciclosOrig, setCiclosOrig] = useState<CicloItem[]>([]);
 
   // comprovante
@@ -160,12 +164,12 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     return !!u;
   }, [aud?.comprovante_fechamento_url]);
 
-  const statusNorm = useMemo(() => {
-    return String(aud?.status ?? "").trim();
-  }, [aud?.status]);
+  const pagamentoMetodo: PagamentoMetodo = useMemo(() => {
+    const m = String(aud?.pagamento_metodo ?? "direto").toLowerCase().trim();
+    return m === "boleto" ? "boleto" : "direto";
+  }, [aud?.pagamento_metodo]);
 
-  const isFinal = useMemo(() => statusNorm === "final", [statusNorm]);
-  const canFinalizeByStatus = useMemo(() => statusNorm === "em_conferencia", [statusNorm]);
+  const exigeComprovante = useMemo(() => pagamentoMetodo !== "boleto", [pagamentoMetodo]);
 
   const consumo = useMemo(() => {
     const a = Number(aud?.agua_leitura ?? 0);
@@ -268,6 +272,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         comprovante_fechamento_url: a?.comprovante_fechamento_url ?? root?.comprovante_fechamento_url ?? null,
         fechamento_obs: a?.fechamento_obs ?? root?.fechamento_obs ?? null,
 
+        pagamento_metodo: (a?.pagamento_metodo ?? root?.pagamento_metodo ?? "direto") as any,
+
         condominios: root?.condominios ?? a?.condominios ?? null,
         condominio: root?.condominio ?? a?.condominio ?? null,
       };
@@ -275,7 +281,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       setAud(audRow);
       setCondo(pickCondoFromAud(audRow));
 
-      // pré-preenche obs com o que já está salvo
       setFechamentoObs(String(audRow.fechamento_obs ?? ""));
 
       const ciclosJson = await fetchJSON(`/api/auditorias/${id}/ciclos`, { cache: "no-store" });
@@ -303,7 +308,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       setBaseEditMode(false);
       setCiclosEditMode(false);
 
-      // sempre deixa inputs prontos
       setBaseAgua(audRow.base_agua !== null && audRow.base_agua !== undefined ? String(audRow.base_agua) : "");
       setBaseEnergia(audRow.base_energia !== null && audRow.base_energia !== undefined ? String(audRow.base_energia) : "");
       setBaseGas(audRow.base_gas !== null && audRow.base_gas !== undefined ? String(audRow.base_gas) : "");
@@ -439,12 +443,9 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     const audId = String(aud?.id ?? id).trim();
     if (!audId) return;
 
-    if (!comprovanteOk) {
-      setErr("Anexe o comprovante de fechamento antes de finalizar.");
-      return;
-    }
-    if (!canFinalizeByStatus) {
-      setErr("Para finalizar, o status precisa estar em_conferencia.");
+    // boleto: pode finalizar sem comprovante
+    if (exigeComprovante && !comprovanteOk) {
+      setErr("Anexe o comprovante de fechamento antes de finalizar (pagamento direto).");
       return;
     }
 
@@ -490,17 +491,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     return s || "—";
   }, [aud?.status]);
 
-  const finalizarDisabledReason = useMemo(() => {
-    if (!isStaff) return "Apenas interno/gestor";
-    if (isFinal) return "Já está finalizada";
-    if (!comprovanteOk) return "Anexe o comprovante";
-    if (!canFinalizeByStatus) return "Status precisa estar em_conferencia";
-    return "";
-  }, [isStaff, isFinal, comprovanteOk, canFinalizeByStatus]);
-
-  const canFinalize = useMemo(() => {
-    return isStaff && !isFinal && comprovanteOk && canFinalizeByStatus && !finalizando;
-  }, [isStaff, isFinal, comprovanteOk, canFinalizeByStatus, finalizando]);
+  const isFinal = useMemo(() => String(aud?.status ?? "") === "final", [aud?.status]);
 
   return (
     <AppShell title="Fechamento (Interno)">
@@ -510,12 +501,17 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
             <div className="text-2xl font-extrabold">Fechamento (Interno)</div>
             <div className="text-xs text-gray-500">{titulo}</div>
             <div className="mt-1 text-xs text-gray-500">
-              Mês: <b>{mesRef || "—"}</b> • Anterior: <b>{prevMes || "—"}</b> • Status: <b>{statusLabel}</b> • ID: <b>{id}</b>
+              Mês: <b>{mesRef || "—"}</b> • Anterior: <b>{prevMes || "—"}</b> • Status: <b>{statusLabel}</b> • Pagamento:{" "}
+              <b>{pagamentoMetodo === "boleto" ? "Boleto" : "Direto"}</b> • ID: <b>{id}</b>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <button className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50" onClick={carregar} disabled={loading}>
+            <button
+              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50"
+              onClick={carregar}
+              disabled={loading}
+            >
               {loading ? "Carregando..." : "Recarregar"}
             </button>
             <a className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50" href="/auditorias">
@@ -532,16 +528,13 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
             <div>
               <div className="text-sm font-semibold">Comprovante de fechamento</div>
               <div className="text-xs text-gray-500">
-                Anexe o comprovante (PDF ou imagem). Depois disso, você pode finalizar a auditoria.
+                {pagamentoMetodo === "boleto"
+                  ? "Este condomínio é BOLETO: você pode finalizar sem comprovante agora (o pagamento vem depois)."
+                  : "Pagamento direto: anexe o comprovante (PDF ou imagem) para conseguir finalizar."}
                 {comprovanteOk ? (
                   <span className="ml-2 inline-flex rounded-full bg-green-50 px-2 py-0.5 text-[11px] text-green-700">anexado</span>
                 ) : (
                   <span className="ml-2 inline-flex rounded-full bg-yellow-50 px-2 py-0.5 text-[11px] text-yellow-700">pendente</span>
-                )}
-                {canFinalizeByStatus ? (
-                  <span className="ml-2 inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700">em_conferencia</span>
-                ) : (
-                  <span className="ml-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">não está em_conferencia</span>
                 )}
               </div>
             </div>
@@ -577,8 +570,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               <button
                 className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
                 onClick={finalizarAuditoria}
-                disabled={!canFinalize}
-                title={finalizarDisabledReason}
+                disabled={!isStaff || finalizando || (exigeComprovante && !comprovanteOk) || isFinal}
+                title={exigeComprovante && !comprovanteOk ? "Pagamento direto: anexe comprovante antes de finalizar" : isFinal ? "Já está finalizada" : ""}
               >
                 {finalizando ? "Finalizando..." : isFinal ? "Finalizada" : "Finalizar auditoria"}
               </button>
@@ -596,7 +589,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               disabled={!isStaff || uploadingComprovante || finalizando}
             />
             <div className="mt-1 text-[11px] text-gray-500">
-              Dica: se quiser que a obs vá para o banco, preencha antes de anexar o comprovante (ela é salva junto com o upload).
+              Se você preencher isso e anexar o comprovante, a observação vai junto (sem criar mais tela).
             </div>
           </div>
         </div>
@@ -608,9 +601,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               <div className="text-sm font-semibold">Consumo do mês (calculado)</div>
               <div className="text-xs text-gray-500">
                 Base: {consumo.hasBase ? "informada manualmente" : "não definida"}{" "}
-                {baseDefinida ? (
-                  <span className="ml-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">travada</span>
-                ) : null}
+                {baseDefinida ? <span className="ml-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">travada</span> : null}
               </div>
             </div>
 
@@ -640,45 +631,27 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
             <div className="rounded-2xl border border-gray-100 p-4">
               <div className="text-xs text-gray-500">Água</div>
               <div className="mt-1 text-sm">
-                <div>
-                  Atual: <b>{aud?.agua_leitura ?? "—"}</b>
-                </div>
-                <div>
-                  Base: <b>{aud?.base_agua ?? "—"}</b>
-                </div>
-                <div>
-                  Consumo: <b>{consumo.agua ?? "—"}</b>
-                </div>
+                <div>Atual: <b>{aud?.agua_leitura ?? "—"}</b></div>
+                <div>Base: <b>{aud?.base_agua ?? "—"}</b></div>
+                <div>Consumo: <b>{consumo.agua ?? "—"}</b></div>
               </div>
             </div>
 
             <div className="rounded-2xl border border-gray-100 p-4">
               <div className="text-xs text-gray-500">Energia</div>
               <div className="mt-1 text-sm">
-                <div>
-                  Atual: <b>{aud?.energia_leitura ?? "—"}</b>
-                </div>
-                <div>
-                  Base: <b>{aud?.base_energia ?? "—"}</b>
-                </div>
-                <div>
-                  Consumo: <b>{consumo.energia ?? "—"}</b>
-                </div>
+                <div>Atual: <b>{aud?.energia_leitura ?? "—"}</b></div>
+                <div>Base: <b>{aud?.base_energia ?? "—"}</b></div>
+                <div>Consumo: <b>{consumo.energia ?? "—"}</b></div>
               </div>
             </div>
 
             <div className="rounded-2xl border border-gray-100 p-4">
               <div className="text-xs text-gray-500">Gás</div>
               <div className="mt-1 text-sm">
-                <div>
-                  Atual: <b>{aud?.gas_leitura ?? "—"}</b>
-                </div>
-                <div>
-                  Base: <b>{aud?.base_gas ?? "—"}</b>
-                </div>
-                <div>
-                  Consumo: <b>{consumo.gas ?? "—"}</b>
-                </div>
+                <div>Atual: <b>{aud?.gas_leitura ?? "—"}</b></div>
+                <div>Base: <b>{aud?.base_gas ?? "—"}</b></div>
+                <div>Consumo: <b>{consumo.gas ?? "—"}</b></div>
               </div>
             </div>
           </div>
@@ -797,7 +770,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           </div>
 
           <div className="mt-3 text-xs text-gray-500">
-            Fluxo simples: Interno lança ciclos + base (se precisar) → emite relatório → financeiro paga → interno anexa comprovante → finaliza.
+            Fluxo simples: Interno lança ciclos + base (se precisar) → emite relatório → financeiro paga (ou aguarda boleto) → (se direto) anexa comprovante → finaliza.
           </div>
         </div>
       </div>
@@ -880,7 +853,11 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 Cancelar
               </button>
 
-              <button className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" onClick={salvarBaseManual} disabled={savingBase}>
+              <button
+                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                onClick={salvarBaseManual}
+                disabled={savingBase}
+              >
                 {savingBase ? "Salvando..." : baseDefinida ? "Salvar correção" : "Salvar base"}
               </button>
             </div>
