@@ -3,32 +3,30 @@
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/app/components/AppShell";
 
-type Item = {
-  condominio_id: string | null;
-  condominio: string;
+type Row = {
+  mes_ref: string | null;
 
-  banco_nome?: string | null;
-  banco_agencia?: string | null;
-  banco_conta?: string | null;
-  banco_pix?: string | null;
+  condominio_id: string;
+  condominio_nome: string | null;
+  cidade: string | null;
+  uf: string | null;
 
-  cashback: number;
-  repasse: number;
-  total: number;
+  valor_total_pagar: number | null;
+  valor_cashback: number | null;
+  valor_repasse_utilidades: number | null;
 
-  variacao?: {
-    cashback_percent: number | null;
-    repasse_percent: number | null;
-    total_percent: number | null;
-  } | null;
-};
+  valor_repasse_agua: number | null;
+  valor_repasse_energia: number | null;
+  valor_repasse_gas: number | null;
 
-type ApiResp = {
-  ok: boolean;
-  mes: string;
-  mes_anterior: string;
-  totais: { cashback: number; repasse: number; total: number };
-  itens: Item[];
+  favorecido_nome: string | null;
+  banco_nome: string | null;
+  banco_agencia: string | null;
+  banco_conta: string | null;
+  banco_pix: string | null;
+
+  status: string | null;
+  auditoria_id: string | null;
 };
 
 function monthISO(d = new Date()) {
@@ -37,48 +35,48 @@ function monthISO(d = new Date()) {
   return `${y}-${m}-01`;
 }
 
-function addMonths(isoMonth: string, delta: number) {
-  const [y, m] = isoMonth.slice(0, 10).split("-").map((x) => Number(x));
-  const d = new Date(y, (m || 1) - 1, 1);
+function addMonths(iso: string, delta: number) {
+  if (!iso || iso.length < 10) return iso;
+  const [y, m] = iso.slice(0, 10).split("-").map((x) => Number(x));
+  if (!y || !m) return iso;
+  const d = new Date(y, m - 1, 1);
   d.setMonth(d.getMonth() + delta);
-  const yy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${yy}-${mm}-01`;
+  return monthISO(d);
 }
 
-function labelMes(isoMonth: string) {
-  const [y, m] = isoMonth.slice(0, 10).split("-").map((x) => Number(x));
-  const d = new Date(y, (m || 1) - 1, 1);
-  return d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+function labelMes(iso: string) {
+  if (!iso || iso.length < 7) return "—";
+  const [y, m] = iso.slice(0, 7).split("-").map((x) => Number(x));
+  if (!y || !m) return iso;
+  const nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+  return `${nomes[m - 1]}/${y}`;
 }
 
-function money(n: number) {
-  return (n ?? 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function money(v: any) {
+  const n = Number(v ?? 0);
+  return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-async function fetchJSON(url: string) {
-  // no browser, cookie vai junto automaticamente por ser same-origin
-  const res = await fetch(url, { cache: "no-store" });
+async function fetchJSON(url: string, init?: RequestInit) {
+  const res = await fetch(url, init);
   const ct = res.headers.get("content-type") || "";
-
   if (!ct.includes("application/json")) {
     const text = await res.text().catch(() => "");
-    const head = text.slice(0, 220).replace(/\s+/g, " ").trim();
+    const head = text.slice(0, 240).replace(/\s+/g, " ").trim();
     throw new Error(`${url} retornou ${res.status} (não-JSON). Trecho: ${head || "(vazio)"}`);
   }
-
   const json = await res.json();
   if (!res.ok) throw new Error(json?.error ?? `${url} falhou (${res.status})`);
   return json;
 }
 
 export default function RelatoriosPage() {
-  const [mes, setMes] = useState<string>(() => monthISO());
-  const [data, setData] = useState<ApiResp | null>(null);
+  const [mesRef, setMesRef] = useState<string>(() => monthISO());
+  const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const tituloMes = useMemo(() => labelMes(mes), [mes]);
+  const tituloMes = useMemo(() => labelMes(mesRef), [mesRef]);
 
   async function carregar(m: string) {
     setLoading(true);
@@ -86,154 +84,171 @@ export default function RelatoriosPage() {
 
     try {
       const url = `/api/financeiro/relatorio?mes=${encodeURIComponent(m)}`;
-      const json = (await fetchJSON(url)) as ApiResp;
-      setData(json);
+      const json = await fetchJSON(url, { cache: "no-store" });
+
+      const list = (json?.rows ?? []) as any[];
+      const normalized: Row[] = list.map((x: any) => ({
+        mes_ref: x?.mes_ref ?? null,
+
+        condominio_id: String(x?.condominio_id ?? ""),
+        condominio_nome: x?.condominio_nome ?? null,
+        cidade: x?.cidade ?? null,
+        uf: x?.uf ?? null,
+
+        valor_total_pagar: x?.valor_total_pagar !== undefined ? Number(x.valor_total_pagar ?? 0) : 0,
+        valor_cashback: x?.valor_cashback !== undefined ? Number(x.valor_cashback ?? 0) : 0,
+        valor_repasse_utilidades: x?.valor_repasse_utilidades !== undefined ? Number(x.valor_repasse_utilidades ?? 0) : 0,
+
+        valor_repasse_agua: x?.valor_repasse_agua !== undefined ? Number(x.valor_repasse_agua ?? 0) : 0,
+        valor_repasse_energia: x?.valor_repasse_energia !== undefined ? Number(x.valor_repasse_energia ?? 0) : 0,
+        valor_repasse_gas: x?.valor_repasse_gas !== undefined ? Number(x.valor_repasse_gas ?? 0) : 0,
+
+        favorecido_nome: x?.favorecido_nome ?? null,
+        banco_nome: x?.banco_nome ?? null,
+        banco_agencia: x?.banco_agencia ?? null,
+        banco_conta: x?.banco_conta ?? null,
+        banco_pix: x?.banco_pix ?? null,
+
+        status: x?.status ?? null,
+        auditoria_id: x?.auditoria_id ?? null,
+      }));
+
+      setRows(normalized);
     } catch (e: any) {
-      setData(null);
       setErr(e?.message ?? "Erro inesperado");
+      setRows([]);
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    carregar(mes);
+    carregar(mesRef);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mes]);
+  }, [mesRef]);
+
+  const totais = useMemo(() => {
+    const sum = (key: keyof Row) => rows.reduce((acc, r) => acc + Number((r[key] as any) ?? 0), 0);
+    return {
+      cashback: sum("valor_cashback"),
+      repasse: sum("valor_repasse_utilidades"),
+      total: sum("valor_total_pagar"),
+    };
+  }, [rows]);
 
   return (
-    <AppShell title="Relatórios">
-      <div className="mx-auto max-w-5xl px-6 py-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
+    <AppShell title="Relatórios (Financeiro)">
+      <div className="mx-auto max-w-6xl px-6 py-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-3xl font-extrabold">Relatório financeiro (mensal)</div>
-            <div className="mt-1 text-sm text-gray-500">
-              Sintético por condomínio: <b>Cashback</b>, <b>Repasse</b>, <b>Total</b> e variação vs mês anterior.
+            <div className="text-2xl font-extrabold">Relatório Financeiro</div>
+            <div className="mt-1 text-xs text-gray-500">
+              Mês: <b>{tituloMes}</b> • mes_ref: <b>{mesRef}</b>
             </div>
           </div>
 
-          <a className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50" href="/">
-            Voltar
-          </a>
-        </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50"
+              onClick={() => setMesRef(addMonths(mesRef, -1))}
+              disabled={loading}
+            >
+              ← {labelMes(addMonths(mesRef, -1))}
+            </button>
 
-        <div className="mt-5 flex flex-wrap items-center gap-2">
-          <button
-            className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-            onClick={() => setMes(addMonths(mes, -1))}
-            disabled={loading}
-          >
-            ← {labelMes(addMonths(mes, -1))}
-          </button>
+            <button
+              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50"
+              onClick={() => carregar(mesRef)}
+              disabled={loading}
+            >
+              {loading ? "Carregando..." : "Recarregar"}
+            </button>
 
-          <div className="rounded-full border border-gray-200 bg-white px-5 py-2 text-sm font-semibold">
-            {tituloMes}
+            <button
+              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50"
+              onClick={() => setMesRef(addMonths(mesRef, 1))}
+              disabled={loading}
+            >
+              {labelMes(addMonths(mesRef, 1))} →
+            </button>
           </div>
-
-          <button
-            className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-            onClick={() => setMes(addMonths(mes, 1))}
-            disabled={loading}
-          >
-            {labelMes(addMonths(mes, 1))} →
-          </button>
-
-          <button
-            className="ml-auto rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-            onClick={() => carregar(mes)}
-            disabled={loading}
-          >
-            {loading ? "Carregando..." : "Recarregar"}
-          </button>
         </div>
 
-        {err ? (
-          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div>
-        ) : null}
+        {err ? <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div> : null}
 
-        <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-5">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <div className="text-sm font-semibold">Totais do mês</div>
-              <div className="text-xs text-gray-500">Soma de todos os condomínios listados.</div>
-            </div>
-
-            <div className="flex items-end gap-6">
-              <div className="text-right">
-                <div className="text-xs text-gray-500">Cashback</div>
-                <div className="text-lg font-extrabold">R$ {money(data?.totais?.cashback ?? 0)}</div>
-              </div>
-              <div className="text-right">
-                <div className="text-xs text-gray-500">Repasse</div>
-                <div className="text-lg font-extrabold">R$ {money(data?.totais?.repasse ?? 0)}</div>
-              </div>
-              <div className="text-right">
-                <div className="text-xs text-gray-500">Total</div>
-                <div className="text-lg font-extrabold">R$ {money(data?.totais?.total ?? 0)}</div>
-              </div>
-            </div>
+        <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="rounded-2xl border border-gray-200 bg-white p-4">
+            <div className="text-xs text-gray-500">Cashback (total)</div>
+            <div className="mt-1 text-lg font-extrabold">R$ {money(totais.cashback)}</div>
+          </div>
+          <div className="rounded-2xl border border-gray-200 bg-white p-4">
+            <div className="text-xs text-gray-500">Repasse utilidades (total)</div>
+            <div className="mt-1 text-lg font-extrabold">R$ {money(totais.repasse)}</div>
+          </div>
+          <div className="rounded-2xl border border-gray-200 bg-white p-4">
+            <div className="text-xs text-gray-500">Total a pagar (cashback + repasse)</div>
+            <div className="mt-1 text-lg font-extrabold">R$ {money(totais.total)}</div>
           </div>
         </div>
 
         <div className="mt-6 overflow-hidden rounded-2xl border border-gray-200 bg-white">
-          <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
-            <div className="col-span-5">Condomínio</div>
-            <div className="col-span-2 text-right">Cashback</div>
-            <div className="col-span-2 text-right">Repasse</div>
-            <div className="col-span-3 text-right">Total / PIX / Banco</div>
+          <div className="grid grid-cols-12 gap-2 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
+            <div className="col-span-4">Condomínio</div>
+            <div className="col-span-2">Cashback</div>
+            <div className="col-span-2">Repasse</div>
+            <div className="col-span-2">Total</div>
+            <div className="col-span-2">PIX / Banco</div>
           </div>
 
-          {(data?.itens ?? []).length === 0 ? (
-            <div className="px-4 py-6 text-sm text-gray-500">{loading ? "Carregando..." : "Sem dados para este mês."}</div>
+          {rows.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-gray-500">{loading ? "Carregando..." : "Sem dados para este mês."}</div>
           ) : (
-            (data?.itens ?? []).map((it, idx) => {
-              const bank =
-                it.banco_pix
-                  ? `PIX: ${it.banco_pix}`
-                  : it.banco_nome || it.banco_agencia || it.banco_conta
-                    ? `${it.banco_nome ?? ""} ${it.banco_agencia ? `Ag ${it.banco_agencia}` : ""} ${
-                        it.banco_conta ? `Cc ${it.banco_conta}` : ""
-                      }`.trim()
-                    : "—";
-
-              return (
-                <div key={`${it.condominio_id ?? "x"}-${idx}`} className="grid grid-cols-12 items-center px-4 py-3">
-                  <div className="col-span-5">
-                    <div className="text-sm font-semibold">{it.condominio}</div>
-                    <div className="text-[11px] text-gray-500">{it.condominio_id ?? ""}</div>
+            rows.map((r, idx) => (
+              <div key={`${r.condominio_id}-${idx}`} className="grid grid-cols-12 gap-2 border-t border-gray-100 px-4 py-3">
+                <div className="col-span-4">
+                  <div className="text-sm font-semibold">{r.condominio_nome ?? "—"}</div>
+                  <div className="text-xs text-gray-500">
+                    {r.cidade ?? "—"}/{r.uf ?? "—"} • status: <b>{r.status ?? "—"}</b>
                   </div>
-
-                  <div className="col-span-2 text-right">
-                    <div className="text-sm font-semibold">R$ {money(it.cashback)}</div>
-                    {it.variacao?.cashback_percent != null ? (
-                      <div className="text-[11px] text-gray-500">{it.variacao.cashback_percent.toFixed(1)}%</div>
-                    ) : (
-                      <div className="text-[11px] text-gray-400">—</div>
-                    )}
-                  </div>
-
-                  <div className="col-span-2 text-right">
-                    <div className="text-sm font-semibold">R$ {money(it.repasse)}</div>
-                    {it.variacao?.repasse_percent != null ? (
-                      <div className="text-[11px] text-gray-500">{it.variacao.repasse_percent.toFixed(1)}%</div>
-                    ) : (
-                      <div className="text-[11px] text-gray-400">—</div>
-                    )}
-                  </div>
-
-                  <div className="col-span-3 text-right">
-                    <div className="text-sm font-extrabold">R$ {money(it.total)}</div>
-                    <div className="text-[11px] text-gray-500">{bank}</div>
-                  </div>
+                  {r.auditoria_id ? (
+                    <div className="mt-1 text-[11px] text-gray-400">
+                      auditoria_id: <span className="font-mono">{r.auditoria_id}</span>
+                    </div>
+                  ) : null}
                 </div>
-              );
-            })
+
+                <div className="col-span-2 text-sm">R$ {money(r.valor_cashback)}</div>
+                <div className="col-span-2 text-sm">R$ {money(r.valor_repasse_utilidades)}</div>
+                <div className="col-span-2 text-sm font-semibold">R$ {money(r.valor_total_pagar)}</div>
+
+                <div className="col-span-2">
+                  {r.banco_pix ? (
+                    <div className="text-xs">
+                      <div className="font-semibold">PIX</div>
+                      <div className="break-all text-gray-600">{r.banco_pix}</div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500">
+                      {r.banco_nome ? (
+                        <>
+                          <div className="font-semibold">{r.banco_nome}</div>
+                          <div className="text-gray-600">
+                            Ag {r.banco_agencia ?? "—"} • Cc {r.banco_conta ?? "—"}
+                          </div>
+                        </>
+                      ) : (
+                        "Sem dados bancários"
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))
           )}
         </div>
 
         <div className="mt-3 text-xs text-gray-500">
-          Observação: <b>Repasse</b> é utilidades (água/energia/gás onde houver) com tarifas no cadastro do condomínio.{" "}
-          <b>Cashback</b> é percentual sobre a receita.
+          Obs: este relatório é sintético. Tarifas ficam no cadastro do condomínio; consumo vem do fechamento (base vs leitura atual).
         </div>
       </div>
     </AppShell>
