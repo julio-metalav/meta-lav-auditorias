@@ -14,8 +14,6 @@ async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise
 }
 
 function parseMesRef(input: string | null): string {
-  // esperado: YYYY-MM-01 (ex: 2026-01-01)
-  // se vier YYYY-MM, normaliza pra YYYY-MM-01
   if (!input) return "";
   const s = String(input).trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
@@ -30,25 +28,24 @@ function currentMonthISO(): string {
   return `${y}-${m}-01`;
 }
 
-function prevMonthISO(iso: string): string {
-  // iso: YYYY-MM-01
-  const s = String(iso || "").slice(0, 10);
-  const [yy, mm] = s.split("-").map((x) => Number(x));
-  if (!yy || !mm) return currentMonthISO();
-  const d = new Date(yy, mm - 1, 1);
+function prevMonthISO(mesRef: string): string {
+  // mesRef: YYYY-MM-01
+  const [y, m] = mesRef.slice(0, 10).split("-").map((x) => Number(x));
+  const d = new Date(y, (m ?? 1) - 1, 1);
   d.setMonth(d.getMonth() - 1);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}-01`;
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${yy}-${mm}-01`;
 }
 
-function toNum(v: any): number {
-  const n = typeof v === "number" ? v : Number(String(v ?? "0").replace(",", "."));
+function num(v: any): number {
+  const n = typeof v === "number" ? v : Number(String(v ?? 0));
   return Number.isFinite(n) ? n : 0;
 }
 
 function pct(now: number, prev: number): number | null {
-  if (!prev) return null;
+  if (!Number.isFinite(now) || !Number.isFinite(prev)) return null;
+  if (prev === 0) return null; // evita infinito; financeiro entende como "sem base"
   return ((now - prev) / prev) * 100;
 }
 
@@ -64,15 +61,15 @@ export async function GET(req: Request) {
     const role = await getUserRole(supabase);
     if (!role) return NextResponse.json({ error: "Sem role" }, { status: 403 });
 
-    // segurança: relatório só para interno/gestor
+    // mais seguro: só interno/gestor
     if (role !== "interno" && role !== "gestor") {
       return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
     }
 
     // querystring
     const url = new URL(req.url);
-    const mes_ref = parseMesRef(url.searchParams.get("mes")) || currentMonthISO();
-    const mes_ref_prev = prevMonthISO(mes_ref);
+    const mes = parseMesRef(url.searchParams.get("mes")) || currentMonthISO();
+    const mesPrev = prevMonthISO(mes);
 
     const selectCols = [
       "mes_ref",
@@ -95,93 +92,63 @@ export async function GET(req: Request) {
       "auditoria_id",
     ].join(",");
 
-    // 1) mês atual
-    const { data: cur, error: curErr } = await supabase
+    // mês atual
+    const { data: rowsNow, error: errNow } = await supabase
       .from("vw_relatorio_financeiro")
       .select(selectCols)
-      .eq("mes_ref", mes_ref)
+      .eq("mes_ref", mes)
       .order("condominio_nome", { ascending: true });
 
-    if (curErr) return NextResponse.json({ error: curErr.message }, { status: 400 });
+    if (errNow) return NextResponse.json({ error: errNow.message }, { status: 400 });
 
-    // 2) mês anterior
-    const { data: prev, error: prevErr } = await supabase
+    // mês anterior (pra %)
+    const { data: rowsPrev, error: errPrev } = await supabase
       .from("vw_relatorio_financeiro")
-      .select(selectCols)
-      .eq("mes_ref", mes_ref_prev)
-      .order("condominio_nome", { ascending: true });
+      .select("condominio_id,valor_total_pagar")
+      .eq("mes_ref", mesPrev);
 
-    if (prevErr) return NextResponse.json({ error: prevErr.message }, { status: 400 });
+    if (errPrev) return NextResponse.json({ error: errPrev.message }, { status: 400 });
 
-    const prevMap = new Map<string, any>();
-    (prev ?? []).forEach((r: any) => {
-      const key = String(r?.condominio_id ?? "").trim();
-      if (key) prevMap.set(key, r);
+    const prevMap = new Map<string, number>();
+    (rowsPrev ?? []).forEach((r: any) => {
+      prevMap.set(String(r.condominio_id), num(r.valor_total_pagar));
     });
 
-    const rows = (cur ?? []).map((r: any) => {
-      const key = String(r?.condominio_id ?? "").trim();
-      const p = key ? prevMap.get(key) : null;
+    // traz método de pagamento do cadastro do condomínio (direto/boleto)
+    const condoIds = Array.from(new Set((rowsNow ?? []).map((r: any) => String(r.condominio_id))));
+    let metodoMap = new Map<string, string>();
+    if (condoIds.length > 0) {
+      const { data: condos } = await (supabase.from("condominios") as any)
+        .select("id,pagamento_metodo")
+        .in("id", condoIds);
 
-      const nowTotal = toNum(r?.valor_total_pagar);
-      const prevTotal = toNum(p?.valor_total_pagar);
+      (condos ?? []).forEach((c: any) => {
+        metodoMap.set(String(c.id), String(c.pagamento_metodo ?? "direto").trim().toLowerCase() || "direto");
+      });
+    }
 
-      const nowCb = toNum(r?.valor_cashback);
-      const prevCb = toNum(p?.valor_cashback);
+    const out = (rowsNow ?? []).map((r: any) => {
+      const id = String(r.condominio_id);
+      const totalNow = num(r.valor_total_pagar);
+      const totalPrev = prevMap.get(id) ?? 0;
+      const p = pct(totalNow, totalPrev);
 
-      const nowRep = toNum(r?.valor_repasse_utilidades);
-      const prevRep = toNum(p?.valor_repasse_utilidades);
+      const pagamento_metodo = metodoMap.get(id) ?? "direto";
 
       return {
         ...r,
-
-        prev_valor_total_pagar: prevTotal,
-        delta_valor_total_pagar: nowTotal - prevTotal,
-        pct_valor_total_pagar: pct(nowTotal, prevTotal),
-
-        prev_valor_cashback: prevCb,
-        delta_valor_cashback: nowCb - prevCb,
-        pct_valor_cashback: pct(nowCb, prevCb),
-
-        prev_valor_repasse_utilidades: prevRep,
-        delta_valor_repasse_utilidades: nowRep - prevRep,
-        pct_valor_repasse_utilidades: pct(nowRep, prevRep),
+        pagamento_metodo,                 // "direto" | "boleto"
+        variacao_total_pct: p,            // número (ex: -12.34) ou null se sem base
+        variacao_total_delta: totalNow - (prevMap.get(id) ?? 0), // delta opcional (se quiser exibir)
+        mes_ref_prev: mesPrev,
       };
     });
 
-    // Totais (cards)
-    const sum = (arr: any[], key: string) => arr.reduce((acc, x) => acc + toNum(x?.[key]), 0);
-
-    const total_now = {
-      valor_cashback: sum(rows, "valor_cashback"),
-      valor_repasse_utilidades: sum(rows, "valor_repasse_utilidades"),
-      valor_total_pagar: sum(rows, "valor_total_pagar"),
-    };
-
-    const total_prev = {
-      valor_cashback: sum(prev ?? [], "valor_cashback"),
-      valor_repasse_utilidades: sum(prev ?? [], "valor_repasse_utilidades"),
-      valor_total_pagar: sum(prev ?? [], "valor_total_pagar"),
-    };
-
-    const total_delta = {
-      valor_cashback: total_now.valor_cashback - total_prev.valor_cashback,
-      valor_repasse_utilidades: total_now.valor_repasse_utilidades - total_prev.valor_repasse_utilidades,
-      valor_total_pagar: total_now.valor_total_pagar - total_prev.valor_total_pagar,
-    };
-
-    const total_pct = {
-      valor_cashback: pct(total_now.valor_cashback, total_prev.valor_cashback),
-      valor_repasse_utilidades: pct(total_now.valor_repasse_utilidades, total_prev.valor_repasse_utilidades),
-      valor_total_pagar: pct(total_now.valor_total_pagar, total_prev.valor_total_pagar),
-    };
-
     return NextResponse.json({
       ok: true,
-      mes_ref,
-      mes_ref_prev,
-      totals: { now: total_now, prev: total_prev, delta: total_delta, pct: total_pct },
-      rows,
+      mes_ref: mes,
+      mes_ref_prev: mesPrev,
+      rows: out,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });

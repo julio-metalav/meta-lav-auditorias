@@ -5,7 +5,6 @@ import { supabaseServer } from "@/lib/supabaseServer";
 
 type Role = "auditor" | "interno" | "gestor";
 type Status = "aberta" | "em_andamento" | "em_conferencia" | "final";
-type PagamentoMetodo = "direto" | "boleto";
 
 type AudRow = {
   id: string;
@@ -38,9 +37,27 @@ type AudRow = {
   fechamento_obs?: string | null;
   fechado_por?: string | null;
   fechado_em?: string | null;
+};
 
-  // derivado do cadastro do condomínio
-  pagamento_metodo?: PagamentoMetodo | null;
+type CondoRow = {
+  id: string;
+  nome?: string | null;
+  cidade?: string | null;
+  uf?: string | null;
+  usa_gas?: boolean | null;
+
+  tarifa_agua_m3?: number | null;
+  tarifa_energia_kwh?: number | null;
+  tarifa_gas_m3?: number | null;
+
+  cashback_percent?: number | null;
+
+  banco_nome?: string | null;
+  banco_agencia?: string | null;
+  banco_conta?: string | null;
+  banco_pix?: string | null;
+
+  pagamento_metodo?: string | null; // "direto" | "boleto"
 };
 
 function roleGte(role: Role | null, min: Role) {
@@ -51,7 +68,7 @@ function roleGte(role: Role | null, min: Role) {
 
 function normalizeStatus(input: any): Status {
   const s = String(input ?? "aberta").trim().toLowerCase();
-  if (s === "em conferencia" || s === "em_conferencia" || s === "em conferÔö£┬¼ncia") return "em_conferencia";
+  if (s === "em conferencia" || s === "em_conferencia" || s === "em conferência") return "em_conferencia";
   if (s === "em andamento" || s === "em_andamento") return "em_andamento";
   if (s === "final" || s === "finalizado") return "final";
   if (s === "aberta" || s === "aberto") return "aberta";
@@ -70,20 +87,6 @@ async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise
 
   const { data: prof } = await supabase.from("profiles").select("role").eq("id", auth.user.id).maybeSingle();
   return (prof?.role ?? null) as Role | null;
-}
-
-async function getPagamentoMetodoDoCondominio(
-  supabase: ReturnType<typeof supabaseServer>,
-  condominio_id: string
-): Promise<PagamentoMetodo> {
-  const { data } = await supabase
-    .from("condominios")
-    .select("pagamento_metodo")
-    .eq("id", condominio_id)
-    .maybeSingle();
-
-  const m = String((data as any)?.pagamento_metodo ?? "direto").toLowerCase().trim();
-  return m === "boleto" ? "boleto" : "direto";
 }
 
 /**
@@ -128,9 +131,36 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
     if (!data) return NextResponse.json({ error: "Auditoria não encontrada" }, { status: 404 });
 
-    const pagamento_metodo = await getPagamentoMetodoDoCondominio(supabase, String((data as any).condominio_id));
+    // carrega condomínio para a UI (pagamento_metodo e dados bancários/tarifas)
+    let condominio: CondoRow | null = null;
+    try {
+      const { data: c } = await (supabase.from("condominios") as any)
+        .select(
+          [
+            "id",
+            "nome",
+            "cidade",
+            "uf",
+            "usa_gas",
+            "tarifa_agua_m3",
+            "tarifa_energia_kwh",
+            "tarifa_gas_m3",
+            "cashback_percent",
+            "banco_nome",
+            "banco_agencia",
+            "banco_conta",
+            "banco_pix",
+            "pagamento_metodo",
+          ].join(",")
+        )
+        .eq("id", data.condominio_id)
+        .maybeSingle();
+      condominio = (c ?? null) as any;
+    } catch {
+      // best-effort, não quebra
+    }
 
-    return NextResponse.json({ auditoria: { ...(data as AudRow), pagamento_metodo } });
+    return NextResponse.json({ auditoria: data as AudRow, condominio });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
@@ -154,15 +184,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       .select(AUD_SELECT)
       .eq("id", id)
       .maybeSingle();
-
     if (audErr) return NextResponse.json({ error: audErr.message }, { status: 400 });
     if (!audRaw) return NextResponse.json({ error: "Auditoria não encontrada" }, { status: 404 });
 
     const aud = audRaw as AudRow;
-    const prevStatus: Status = normalizeStatus(aud.status);
 
-    const pagamento_metodo = await getPagamentoMetodoDoCondominio(supabase, String(aud.condominio_id));
-    aud.pagamento_metodo = pagamento_metodo;
+    const prevStatus: Status = normalizeStatus(aud.status);
 
     const isOwnerAuditor = !!aud.auditor_id && aud.auditor_id === user.id;
     const isManager = roleGte(role, "interno"); // interno/gestor
@@ -170,6 +197,20 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const canEdit = isOwnerAuditor || isManager;
 
     if (!canEdit) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+
+    // 1.1) carrega método de pagamento do condomínio (default "direto")
+    let pagamentoMetodo: string = "direto";
+    try {
+      const { data: c } = await (supabase.from("condominios") as any)
+        .select("pagamento_metodo")
+        .eq("id", aud.condominio_id)
+        .maybeSingle();
+      pagamentoMetodo = String((c as any)?.pagamento_metodo ?? "direto").trim().toLowerCase() || "direto";
+    } catch {
+      pagamentoMetodo = "direto";
+    }
+
+    const exigeComprovante = pagamentoMetodo !== "boleto";
 
     // 2) Body
     const body = await req.json().catch(() => ({} as any));
@@ -220,18 +261,15 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     // Finalizar: interno/gestor somente em_conferencia -> final
     if (nextStatus === "final" && prevStatus !== "final") {
-      if (!roleGte(role, "interno")) {
-        return NextResponse.json({ error: "Somente interno/gestor pode finalizar auditoria" }, { status: 403 });
-      }
+      if (!roleGte(role, "interno")) return NextResponse.json({ error: "Somente interno/gestor pode finalizar auditoria" }, { status: 403 });
       if (prevStatus !== "em_conferencia") {
         return NextResponse.json({ error: "Só é possível finalizar quando a auditoria estiver em_conferencia" }, { status: 400 });
       }
 
-      // REGRA: comprovante só é obrigatório quando pagamento é DIRETO
-      const precisaComprovante = pagamento_metodo !== "boleto";
-      if (precisaComprovante && !aud.comprovante_fechamento_url) {
+      // REGRA: só exige comprovante quando pagamento é direto
+      if (exigeComprovante && !aud.comprovante_fechamento_url) {
         return NextResponse.json(
-          { error: "Não é possível finalizar sem comprovante de fechamento (pagamento direto). Para boleto, não exige." },
+          { error: "Não é possível finalizar sem comprovante (este condomínio está como pagamento direto)." },
           { status: 400 }
         );
       }
@@ -331,7 +369,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       }
     }
 
-    return NextResponse.json({ ok: true, auditoria: { ...(updated as any), pagamento_metodo } });
+    return NextResponse.json({ ok: true, auditoria: updated, pagamento_metodo: pagamentoMetodo });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
