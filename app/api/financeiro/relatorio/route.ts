@@ -5,37 +5,7 @@ import { supabaseServer } from "@/lib/supabaseServer";
 
 type Role = "auditor" | "interno" | "gestor";
 
-function toIsoMonthStart(input: string) {
-  // espera YYYY-MM-01 (ou qualquer YYYY-MM-DD) e normaliza para YYYY-MM-01
-  const s = String(input ?? "").trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
-  const [y, m] = s.split("-").map((x) => Number(x));
-  if (!y || !m) return null;
-  const mm = String(m).padStart(2, "0");
-  return `${y}-${mm}-01`;
-}
-
-function prevMonth(yyyyMm01: string) {
-  const [y, m] = yyyyMm01.split("-").map((x) => Number(x));
-  const d = new Date(y, (m ?? 1) - 1, 1);
-  d.setMonth(d.getMonth() - 1);
-  const yy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${yy}-${mm}-01`;
-}
-
-function toNumber(v: any) {
-  const n = typeof v === "number" ? v : Number(String(v ?? "").replace(",", "."));
-  return Number.isFinite(n) ? n : 0;
-}
-
-function pctVar(curr: number, prev: number) {
-  // se prev = 0, não dá % “honesta”
-  if (!prev) return null;
-  return ((curr - prev) / prev) * 100;
-}
-
-async function getRole(supabase: ReturnType<typeof supabaseServer>): Promise<Role | null> {
+async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise<Role | null> {
   const { data: auth, error: authErr } = await supabase.auth.getUser();
   if (authErr || !auth?.user) return null;
 
@@ -43,169 +13,155 @@ async function getRole(supabase: ReturnType<typeof supabaseServer>): Promise<Rol
   return (prof?.role ?? null) as Role | null;
 }
 
-function pickId(row: any) {
+function monthISO(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}-01`;
+}
+
+function prevMonthISO(isoMonth: string) {
+  const [y, m] = isoMonth.slice(0, 10).split("-").map((x) => Number(x));
+  const d = new Date(y, (m || 1) - 1, 1);
+  d.setMonth(d.getMonth() - 1);
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${yy}-${mm}-01`;
+}
+
+function num(v: any) {
+  const n = typeof v === "number" ? v : Number(String(v ?? "0").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function pct(curr: number, prev: number) {
+  if (!prev) return null; // evita % infinita quando mês anterior = 0
+  return ((curr - prev) / prev) * 100;
+}
+
+function pickMonthFromRow(r: any) {
   return (
-    row?.condominio_id ??
-    row?.condominioId ??
-    row?.condominio ??
-    row?.condominio_uuid ??
-    row?.condo_id ??
+    r?.mes_ref ??
+    r?.ano_mes ??
+    r?.mes ??
+    r?.mes_referencia ??
+    r?.competencia ??
+    r?.competencia_mes ??
     null
   );
 }
 
-function pickMes(row: any) {
-  return row?.mes_ref ?? row?.ano_mes ?? row?.mes ?? row?.competencia ?? null;
+function pickCondoId(r: any) {
+  return String(r?.condominio_id ?? r?.condo_id ?? r?.ponto_id ?? r?.id_condominio ?? "").trim();
+}
+
+function pickCondoNome(r: any) {
+  return String(r?.condominio_nome ?? r?.condominio ?? r?.nome_condominio ?? r?.nome ?? "").trim();
 }
 
 export async function GET(req: Request) {
   try {
     const supabase = supabaseServer();
 
-    // auth + role
+    // auth
     const { data: auth, error: authErr } = await supabase.auth.getUser();
-    if (authErr || !auth?.user) return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    const user = auth?.user ?? null;
+    if (authErr || !user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
-    const role = await getRole(supabase);
+    // role
+    const role = await getUserRole(supabase);
     if (role !== "interno" && role !== "gestor") {
-      return NextResponse.json({ error: "Apenas interno/gestor." }, { status: 403 });
+      return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
     }
 
     // params
     const url = new URL(req.url);
-    const mesParam = url.searchParams.get("mes") ?? "";
-    const mes = toIsoMonthStart(mesParam);
-    if (!mes) {
-      return NextResponse.json({ error: 'Parâmetro "mes" inválido. Use YYYY-MM-01.' }, { status: 400 });
-    }
-    const mesPrev = prevMonth(mes);
+    const mes = String(url.searchParams.get("mes") ?? "").trim() || monthISO();
+    const mesPrev = prevMonthISO(mes);
 
-    // 1) pega o mês atual na view
-    const { data: rowsNow, error: errNow } = await (supabase.from("vw_relatorio_financeiro") as any)
+    // busca mês atual
+    const { data: curRowsRaw, error: curErr } = await (supabase.from("vw_relatorio_financeiro") as any)
       .select("*")
-      .eq("mes_ref", mes)
+      .or(`mes_ref.eq.${mes},mes.eq.${mes},ano_mes.eq.${mes},competencia.eq.${mes}`)
       .limit(5000);
 
-    // fallback se a view usa outro nome de coluna (ano_mes)
-    let now = rowsNow as any[] | null;
-    if ((errNow || !now) && String(errNow?.message ?? "").toLowerCase().includes("column")) {
-      const alt = await (supabase.from("vw_relatorio_financeiro") as any).select("*").eq("ano_mes", mes).limit(5000);
-      if (alt.error) return NextResponse.json({ error: alt.error.message }, { status: 400 });
-      now = alt.data as any[];
-    } else if (errNow) {
-      return NextResponse.json({ error: errNow.message }, { status: 400 });
-    }
+    if (curErr) return NextResponse.json({ error: curErr.message }, { status: 400 });
 
-    // 2) pega o mês anterior na view
-    const { data: rowsPrev, error: errPrev } = await (supabase.from("vw_relatorio_financeiro") as any)
+    // busca mês anterior
+    const { data: prevRowsRaw, error: prevErr } = await (supabase.from("vw_relatorio_financeiro") as any)
       .select("*")
-      .eq("mes_ref", mesPrev)
+      .or(`mes_ref.eq.${mesPrev},mes.eq.${mesPrev},ano_mes.eq.${mesPrev},competencia.eq.${mesPrev}`)
       .limit(5000);
 
-    let prev = rowsPrev as any[] | null;
-    if ((errPrev || !prev) && String(errPrev?.message ?? "").toLowerCase().includes("column")) {
-      const alt = await (supabase.from("vw_relatorio_financeiro") as any).select("*").eq("ano_mes", mesPrev).limit(5000);
-      if (alt.error) return NextResponse.json({ error: alt.error.message }, { status: 400 });
-      prev = alt.data as any[];
-    } else if (errPrev) {
-      return NextResponse.json({ error: errPrev.message }, { status: 400 });
-    }
+    if (prevErr) return NextResponse.json({ error: prevErr.message }, { status: 400 });
 
-    const nowList = (now ?? []) as any[];
-    const prevList = (prev ?? []) as any[];
+    const curRows: any[] = (curRowsRaw ?? []) as any[];
+    const prevRows: any[] = (prevRowsRaw ?? []) as any[];
 
-    // 3) mapa do mês anterior por condomínio
+    // index prev por condominio
     const prevByCondo = new Map<string, any>();
-    for (const r of prevList) {
-      const cid = pickId(r);
-      if (!cid) continue;
-      prevByCondo.set(String(cid), r);
+    for (const r of prevRows) {
+      const cid = pickCondoId(r);
+      if (cid) prevByCondo.set(cid, r);
     }
 
-    // 4) buscar dados do condomínio (nome/cidade/UF + PIX/banco) pra compor o relatório sintético
-    const condoIds = Array.from(
-      new Set(nowList.map((r) => String(pickId(r) ?? "")).filter((x) => x && x !== "null" && x !== "undefined"))
-    );
+    const itens = curRows
+      .map((r) => {
+        const condominio_id = pickCondoId(r);
+        const nome = pickCondoNome(r) || "(sem nome)";
+        const prev = condominio_id ? prevByCondo.get(condominio_id) : null;
 
-    const condosById = new Map<string, any>();
-    if (condoIds.length) {
-      const { data: condos, error: condosErr } = await (supabase.from("condominios") as any)
-        .select("id,nome,cidade,uf,pix,banco_pix,banco_nome,banco_agencia,banco_conta")
-        .in("id", condoIds);
+        const cashback = num(r?.valor_cashback);
+        const repasse = num(r?.valor_repasse_utilidades)
+          || (num(r?.valor_repasse_agua) + num(r?.valor_repasse_energia) + num(r?.valor_repasse_gas));
 
-      if (condosErr) return NextResponse.json({ error: condosErr.message }, { status: 400 });
-      for (const c of condos ?? []) condosById.set(String(c.id), c);
-    }
+        const total = cashback + repasse;
 
-    // 5) monta itens
-    const itens = nowList.map((r) => {
-      const cid = String(pickId(r) ?? "");
-      const rPrev = prevByCondo.get(cid) ?? null;
-      const c = condosById.get(cid) ?? null;
-
-      const cashback = toNumber(r?.valor_cashback);
-      const repasse =
-        r?.valor_repasse_utilidades !== undefined && r?.valor_repasse_utilidades !== null
-          ? toNumber(r.valor_repasse_utilidades)
-          : toNumber(r?.valor_repasse_agua) + toNumber(r?.valor_repasse_energia) + toNumber(r?.valor_repasse_gas);
-
-      const cashbackPrev = rPrev ? toNumber(rPrev?.valor_cashback) : 0;
-      const repassePrev =
-        rPrev && (rPrev?.valor_repasse_utilidades !== undefined && rPrev?.valor_repasse_utilidades !== null)
-          ? toNumber(rPrev.valor_repasse_utilidades)
-          : rPrev
-          ? toNumber(rPrev?.valor_repasse_agua) + toNumber(rPrev?.valor_repasse_energia) + toNumber(rPrev?.valor_repasse_gas)
+        const cashbackPrev = prev ? num(prev?.valor_cashback) : 0;
+        const repassePrev = prev
+          ? (num(prev?.valor_repasse_utilidades) ||
+              (num(prev?.valor_repasse_agua) + num(prev?.valor_repasse_energia) + num(prev?.valor_repasse_gas)))
           : 0;
 
-      const total = cashback + repasse;
+        const totalPrev = cashbackPrev + repassePrev;
 
-      return {
-        mes: pickMes(r) ?? mes,
-        condominio_id: cid || null,
+        return {
+          condominio_id,
+          condominio: nome,
 
-        condominio: c?.nome ?? r?.condominio_nome ?? r?.condominio ?? null,
-        cidade: c?.cidade ?? r?.cidade ?? null,
-        uf: c?.uf ?? r?.uf ?? null,
+          // banco/pix (vem da view)
+          banco_nome: r?.banco_nome ?? null,
+          banco_agencia: r?.banco_agencia ?? null,
+          banco_conta: r?.banco_conta ?? null,
+          banco_pix: r?.banco_pix ?? null,
 
-        // valores
-        cashback,
-        cashback_prev: cashbackPrev,
-        cashback_var_pct: pctVar(cashback, cashbackPrev),
+          cashback,
+          repasse,
+          total,
 
-        repasse,
-        repasse_prev: repassePrev,
-        repasse_var_pct: pctVar(repasse, repassePrev),
+          variacao: {
+            cashback_percent: pct(cashback, cashbackPrev),
+            repasse_percent: pct(repasse, repassePrev),
+            total_percent: pct(total, totalPrev),
+          },
 
-        total_pagar: total,
+          // para debug suave se precisar
+          mes_ref: pickMonthFromRow(r) ?? mes,
+        };
+      })
+      .sort((a, b) => String(a.condominio).localeCompare(String(b.condominio), "pt-BR"));
 
-        // dados bancários/PIX (preferir cadastro do condomínio)
-        pix: c?.pix ?? c?.banco_pix ?? r?.pix ?? r?.banco_pix ?? null,
-        banco_nome: c?.banco_nome ?? r?.banco_nome ?? null,
-        banco_agencia: c?.banco_agencia ?? r?.banco_agencia ?? null,
-        banco_conta: c?.banco_conta ?? r?.banco_conta ?? null,
-
-        // obs do financeiro (você disse: opcional; por enquanto vem do que existir)
-        obs: r?.fechamento_obs ?? r?.obs ?? null,
-      };
-    });
-
-    // 6) totais
-    const totais = itens.reduce(
-      (acc, it) => {
-        acc.cashback += toNumber(it.cashback);
-        acc.repasse += toNumber(it.repasse);
-        acc.total_pagar += toNumber(it.total_pagar);
-        return acc;
-      },
-      { cashback: 0, repasse: 0, total_pagar: 0 }
-    );
+    const sum = (key: "cashback" | "repasse" | "total") => itens.reduce((acc, x) => acc + num(x?.[key]), 0);
 
     return NextResponse.json({
       ok: true,
       mes,
       mes_anterior: mesPrev,
+      totais: {
+        cashback: sum("cashback"),
+        repasse: sum("repasse"),
+        total: sum("total"),
+      },
       itens,
-      totais,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
