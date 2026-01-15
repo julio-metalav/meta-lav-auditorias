@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/app/components/AppShell";
 
 type Condo = {
@@ -8,6 +8,11 @@ type Condo = {
   nome: string;
   cidade: string;
   uf: string;
+  cep?: string;
+  rua?: string;
+  numero?: string;
+  bairro?: string;
+  complemento?: string;
 };
 
 type Me = { user: { id: string; email: string }; role: string };
@@ -16,11 +21,24 @@ type MaquinaRow = {
   categoria: "lavadora" | "secadora";
   capacidade_kg: number | null;
   quantidade: number;
+
+  // ✅ input livre (16,50)
   valor_ciclo_text: string;
+
+  // ✅ regras limpeza
   limpeza_quimica_ciclos: number;
   limpeza_mecanica_ciclos: number;
 };
 
+function brl(n: number) {
+  try {
+    return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  } catch {
+    return `R$ ${Number(n ?? 0).toFixed(2)}`;
+  }
+}
+
+/** Aceita "16,50" ou "16.50" ou "1.234,56" e devolve number */
 function parseMoneyPtBr(input: string): number {
   const s = String(input ?? "").trim();
   if (!s) return 0;
@@ -32,8 +50,20 @@ function parseMoneyPtBr(input: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Formata para pt-BR com 2 casas e vírgula */
 function formatMoneyPtBr(n: number): string {
-  return Number(n ?? 0).toFixed(2).replace(".", ",");
+  const fixed = Number(n ?? 0).toFixed(2);
+  return fixed.replace(".", ",");
+}
+
+function clampPosInt(n: number, fallback: number) {
+  if (!Number.isFinite(n)) return fallback;
+  const i = Math.trunc(n);
+  return i > 0 ? i : fallback;
+}
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
 }
 
 export default function CondominiosPage() {
@@ -43,15 +73,31 @@ export default function CondominiosPage() {
   const [ok, setOk] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const formRef = useRef<HTMLDivElement | null>(null);
-  const canEdit = me?.role === "interno" || me?.role === "gestor";
-
   const [form, setForm] = useState<any>({
     nome: "",
     cidade: "",
     uf: "",
+    cep: "",
+    rua: "",
+    numero: "",
+    bairro: "",
+    complemento: "",
+    sindico_nome: "",
+    sindico_telefone: "",
+    zelador_nome: "",
+    zelador_telefone: "",
+    valor_ciclo_lavadora: "",
+    valor_ciclo_secadora: "",
+    cashback_percent: "",
+    banco: "",
+    agencia: "",
+    conta: "",
+    tipo_conta: "",
+    pix: "",
+    favorecido_cnpj: "",
   });
 
+  // ✅ Parque de máquinas embutido no cadastro
   const [maquinas, setMaquinas] = useState<MaquinaRow[]>([
     {
       categoria: "lavadora",
@@ -63,12 +109,27 @@ export default function CondominiosPage() {
     },
   ]);
 
+  const canEdit = me?.role === "interno" || me?.role === "gestor";
+
   async function loadAll() {
+    setErr(null);
+    setOk(null);
+
     const [m, c] = await Promise.all([
       fetch("/api/me").then((r) => r.json()),
       fetch("/api/condominios").then((r) => r.json()),
     ]);
+
+    if (m?.error) {
+      setErr(m.error);
+      return;
+    }
     setMe(m);
+
+    if (c?.error) {
+      setErr(c.error);
+      return;
+    }
     setCondos(c.data || []);
   }
 
@@ -76,50 +137,129 @@ export default function CondominiosPage() {
     loadAll();
   }, []);
 
+  const mapsUrl = useMemo(() => {
+    const parts = [form.rua, form.numero, form.bairro, form.cidade, form.uf, form.cep]
+      .map((x: string) => String(x || "").trim())
+      .filter(Boolean)
+      .join(", ");
+    return parts ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts)}` : "";
+  }, [form]);
+
+  function addMaquina() {
+    setMaquinas((prev) => [
+      ...prev,
+      {
+        categoria: "lavadora",
+        capacidade_kg: 10,
+        quantidade: 1,
+        valor_ciclo_text: "0,00",
+        limpeza_quimica_ciclos: 500,
+        limpeza_mecanica_ciclos: 2000,
+      },
+    ]);
+  }
+
+  function removeMaquina(i: number) {
+    setMaquinas((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
+  function updateMaquina(i: number, patch: Partial<MaquinaRow>) {
+    setMaquinas((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+
+  const maquinasResumo = useMemo(() => {
+    const total = maquinas.reduce((acc, m) => acc + (Number(m.quantidade) || 0), 0);
+    const lav = maquinas.filter((m) => m.categoria === "lavadora").reduce((acc, m) => acc + (Number(m.quantidade) || 0), 0);
+    const sec = maquinas.filter((m) => m.categoria === "secadora").reduce((acc, m) => acc + (Number(m.quantidade) || 0), 0);
+    return { total, lav, sec };
+  }, [maquinas]);
+
   async function criar() {
     setErr(null);
     setOk(null);
     setSaving(true);
 
     try {
+      // Validação básica do condomínio
       if (!form.nome || !form.cidade || !form.uf) {
         throw new Error("Preencha Nome, Cidade e UF.");
       }
 
-      // 1) cria condomínio
+      // Validação básica das máquinas
+      if (!maquinas.length) throw new Error("Cadastre pelo menos 1 tipo de máquina.");
+      for (const m of maquinas) {
+        if (!m.categoria) throw new Error("Categoria da máquina é obrigatória.");
+        if (m.capacidade_kg !== null && !Number.isFinite(Number(m.capacidade_kg))) throw new Error("Capacidade (kg) inválida.");
+        if (!Number.isFinite(Number(m.quantidade)) || Number(m.quantidade) < 0) throw new Error("Quantidade inválida.");
+        const val = parseMoneyPtBr(m.valor_ciclo_text);
+        if (!Number.isFinite(val) || val < 0) throw new Error("Valor por ciclo inválido.");
+        if (!Number.isFinite(Number(m.limpeza_quimica_ciclos)) || Number(m.limpeza_quimica_ciclos) <= 0)
+          throw new Error("Limpeza química (ciclos) inválida.");
+        if (!Number.isFinite(Number(m.limpeza_mecanica_ciclos)) || Number(m.limpeza_mecanica_ciclos) <= 0)
+          throw new Error("Limpeza mecânica (ciclos) inválida.");
+      }
+
+      const payload = { ...form };
+
+      payload.valor_ciclo_lavadora = payload.valor_ciclo_lavadora
+        ? parseMoneyPtBr(String(payload.valor_ciclo_lavadora))
+        : null;
+      payload.valor_ciclo_secadora = payload.valor_ciclo_secadora
+        ? parseMoneyPtBr(String(payload.valor_ciclo_secadora))
+        : null;
+
+      payload.cashback_percent = payload.cashback_percent ? Number(payload.cashback_percent) : null;
+
+      // 1) salva condomínio
       const r = await fetch("/api/condominios", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
 
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.error || "Erro ao salvar condomínio");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(j?.error || "Erro ao salvar condomínio");
+      }
 
-      const condominioId = j?.data?.id;
-      if (!condominioId) throw new Error("ID do condomínio não retornado.");
+      const condominioId: string | undefined =
+        j?.data?.id ?? j?.id ?? j?.condominio?.id ?? j?.data?.[0]?.id;
 
-      // 2) gera maquinas COM maquina_tag
-      const maquinasPayload: any[] = [];
-      let lavCount = 1;
-      let secCount = 1;
+      if (!condominioId) {
+        throw new Error("Condomínio salvo, mas não veio o ID na resposta da API (/api/condominios).");
+      }
 
-      for (const m of maquinas) {
-        for (let i = 0; i < m.quantidade; i++) {
-          const tag =
-            m.categoria === "lavadora"
-              ? `LAV-${String(lavCount++).padStart(2, "0")}`
-              : `SEC-${String(secCount++).padStart(2, "0")}`;
+      // 2) salva máquinas do condomínio
+      // ✅ FIX: gera maquina_tag e expande quantidade
+      let lavN = 0;
+      let secN = 0;
 
-          maquinasPayload.push({
-            maquina_tag: tag,
-            categoria: m.categoria,
-            capacidade_kg: m.capacidade_kg,
-            valor_ciclo: parseMoneyPtBr(m.valor_ciclo_text),
-            limpeza_quimica_ciclos: m.limpeza_quimica_ciclos,
-            limpeza_mecanica_ciclos: m.limpeza_mecanica_ciclos,
-          });
+      const maquinasPayload = maquinas.flatMap((m) => {
+        const qtd = Math.max(0, Math.trunc(Number(m.quantidade) || 0));
+        const base = {
+          categoria: m.categoria,
+          capacidade_kg: m.capacidade_kg === null ? null : Number(m.capacidade_kg),
+          valor_ciclo: parseMoneyPtBr(m.valor_ciclo_text),
+          limpeza_quimica_ciclos: clampPosInt(Number(m.limpeza_quimica_ciclos), 500),
+          limpeza_mecanica_ciclos: clampPosInt(Number(m.limpeza_mecanica_ciclos), 2000),
+        };
+
+        const arr: any[] = [];
+        for (let i = 0; i < qtd; i++) {
+          if (m.categoria === "lavadora") lavN += 1;
+          else secN += 1;
+
+          const maquina_tag = m.categoria === "lavadora"
+            ? `LAV-${pad2(lavN)}`
+            : `SEC-${pad2(secN)}`;
+
+          arr.push({ ...base, maquina_tag });
         }
+        return arr;
+      });
+
+      if (!maquinasPayload.length) {
+        throw new Error("Informe quantidade de máquinas (mínimo 1).");
       }
 
       const r2 = await fetch(`/api/condominios/${condominioId}/maquinas`, {
@@ -128,11 +268,36 @@ export default function CondominiosPage() {
         body: JSON.stringify(maquinasPayload),
       });
 
-      const j2 = await r2.json();
-      if (!r2.ok) throw new Error(j2?.error || "Erro ao salvar máquinas");
+      const j2 = await r2.json().catch(() => ({}));
+      if (!r2.ok) {
+        throw new Error(j2?.error || "Condomínio salvo, mas falhou ao salvar máquinas.");
+      }
 
-      setOk("Condomínio e máquinas salvos com sucesso.");
-      setForm({ nome: "", cidade: "", uf: "" });
+      // reset form
+      setForm({
+        nome: "",
+        cidade: "",
+        uf: "",
+        cep: "",
+        rua: "",
+        numero: "",
+        bairro: "",
+        complemento: "",
+        sindico_nome: "",
+        sindico_telefone: "",
+        zelador_nome: "",
+        zelador_telefone: "",
+        valor_ciclo_lavadora: "",
+        valor_ciclo_secadora: "",
+        cashback_percent: "",
+        banco: "",
+        agencia: "",
+        conta: "",
+        tipo_conta: "",
+        pix: "",
+        favorecido_cnpj: "",
+      });
+
       setMaquinas([
         {
           categoria: "lavadora",
@@ -144,9 +309,10 @@ export default function CondominiosPage() {
         },
       ]);
 
+      setOk("Condomínio + máquinas salvos ✅");
       await loadAll();
     } catch (e: any) {
-      setErr(e.message);
+      setErr(e?.message ?? "Erro ao salvar");
     } finally {
       setSaving(false);
     }
@@ -154,44 +320,205 @@ export default function CondominiosPage() {
 
   return (
     <AppShell title="Cadastro do ponto">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <div>{condos.length} condomínios</div>
-        {canEdit && (
-          <button className="btn dark" onClick={() => formRef.current?.scrollIntoView({ behavior: "smooth" })}>
-            + Novo condomínio
-          </button>
-        )}
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <div className="small">{condos.length} condomínios</div>
+        <button className="btn" onClick={loadAll}>Recarregar</button>
       </div>
 
-      {err && <p style={{ color: "red" }}>{err}</p>}
-      {ok && <p style={{ color: "green" }}>{ok}</p>}
+      {err && <p style={{ color: "#b42318" }}>{err}</p>}
+      {ok && <p style={{ color: "#027a48" }}>{ok}</p>}
 
       {canEdit && (
-        <div ref={formRef} className="card" style={{ marginTop: 16 }}>
-          <input
-            className="input"
-            placeholder="Nome"
-            value={form.nome}
-            onChange={(e) => setForm({ ...form, nome: e.target.value })}
-          />
-          <input
-            className="input"
-            placeholder="Cidade"
-            value={form.cidade}
-            onChange={(e) => setForm({ ...form, cidade: e.target.value })}
-          />
-          <input
-            className="input"
-            placeholder="UF"
-            value={form.uf}
-            onChange={(e) => setForm({ ...form, uf: e.target.value })}
-          />
+        <div className="card" style={{ background: "#fbfcff", marginTop: 12 }}>
+          <div className="small" style={{ marginBottom: 8 }}>Novo condomínio</div>
 
-          <button className="btn primary" onClick={criar} disabled={saving}>
-            {saving ? "Salvando..." : "Salvar condomínio"}
-          </button>
+          <div className="grid2">
+            <div>
+              <div className="small">Nome</div>
+              <input className="input" value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} />
+            </div>
+            <div className="row">
+              <div style={{ flex: 2 }}>
+                <div className="small">Cidade</div>
+                <input className="input" value={form.cidade} onChange={(e) => setForm({ ...form, cidade: e.target.value })} />
+              </div>
+              <div style={{ width: 90 }}>
+                <div className="small">UF</div>
+                <input className="input" value={form.uf} onChange={(e) => setForm({ ...form, uf: e.target.value.toUpperCase() })} />
+              </div>
+            </div>
+          </div>
+
+          <div style={{ height: 10 }} />
+          <div className="small">Endereço</div>
+          <div className="grid2">
+            <div>
+              <div className="small">CEP</div>
+              <input className="input" value={form.cep} onChange={(e) => setForm({ ...form, cep: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Rua</div>
+              <input className="input" value={form.rua} onChange={(e) => setForm({ ...form, rua: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Número</div>
+              <input className="input" value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Bairro</div>
+              <input className="input" value={form.bairro} onChange={(e) => setForm({ ...form, bairro: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Complemento</div>
+              <input className="input" value={form.complemento} onChange={(e) => setForm({ ...form, complemento: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Mapa</div>
+              {mapsUrl ? <a className="btn" href={mapsUrl} target="_blank">Abrir no Google Maps</a> : <div className="small">Preencha endereço</div>}
+            </div>
+          </div>
+
+          <div style={{ height: 14 }} />
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <div className="small" style={{ fontWeight: 700 }}>Parque de máquinas</div>
+            <button className="btn" onClick={addMaquina}>+ Adicionar tipo</button>
+          </div>
+
+          <div className="card" style={{ marginTop: 10 }}>
+            <div className="small" style={{ marginBottom: 8 }}>
+              Total máquinas: <b>{maquinasResumo.total}</b> &nbsp;|&nbsp; Lavadoras: <b>{maquinasResumo.lav}</b> &nbsp;|&nbsp; Secadoras: <b>{maquinasResumo.sec}</b>
+            </div>
+
+            {maquinas.length === 0 ? (
+              <div className="small">Nenhuma máquina cadastrada.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                {maquinas.map((m, i) => (
+                  <div key={i} className="card" style={{ background: "#fff" }}>
+                    <div className="grid2" style={{ alignItems: "end" }}>
+                      <div>
+                        <div className="small">Categoria</div>
+                        <select
+                          className="input"
+                          value={m.categoria}
+                          onChange={(e) => updateMaquina(i, { categoria: e.target.value as any })}
+                        >
+                          <option value="lavadora">Lavadora</option>
+                          <option value="secadora">Secadora</option>
+                        </select>
+                      </div>
+
+                      <div className="row">
+                        <div style={{ flex: 1 }}>
+                          <div className="small">Capacidade (kg)</div>
+                          <input
+                            className="input"
+                            inputMode="numeric"
+                            value={m.capacidade_kg === null ? "" : String(m.capacidade_kg)}
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/[^\d.]/g, "");
+                              updateMaquina(i, { capacidade_kg: raw === "" ? null : Number(raw) });
+                            }}
+                          />
+                        </div>
+                        <div style={{ width: 120 }}>
+                          <div className="small">Qtd</div>
+                          <input
+                            className="input"
+                            inputMode="numeric"
+                            value={String(m.quantidade ?? 0)}
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/[^\d]/g, "");
+                              updateMaquina(i, { quantidade: raw === "" ? 0 : Number(raw) });
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="small">Valor por ciclo</div>
+                        <input
+                          className="input"
+                          inputMode="decimal"
+                          placeholder="ex: 16,50"
+                          value={m.valor_ciclo_text}
+                          onChange={(e) => {
+                            const raw = e.target.value.replace(/[^\d.,]/g, "");
+                            updateMaquina(i, { valor_ciclo_text: raw });
+                          }}
+                          onBlur={() => {
+                            const n = parseMoneyPtBr(m.valor_ciclo_text);
+                            updateMaquina(i, { valor_ciclo_text: formatMoneyPtBr(n) });
+                          }}
+                        />
+                        <div className="small" style={{ opacity: 0.7, marginTop: 4 }}>
+                          {brl(parseMoneyPtBr(m.valor_ciclo_text))}
+                        </div>
+                      </div>
+
+                      <div className="row">
+                        <div style={{ flex: 1 }}>
+                          <div className="small">Limpeza química (ciclos)</div>
+                          <input
+                            className="input"
+                            inputMode="numeric"
+                            value={String(m.limpeza_quimica_ciclos ?? 500)}
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/[^\d]/g, "");
+                              updateMaquina(i, { limpeza_quimica_ciclos: raw === "" ? 500 : Number(raw) });
+                            }}
+                          />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div className="small">Limpeza mecânica (ciclos)</div>
+                          <input
+                            className="input"
+                            inputMode="numeric"
+                            value={String(m.limpeza_mecanica_ciclos ?? 2000)}
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/[^\d]/g, "");
+                              updateMaquina(i, { limpeza_mecanica_ciclos: raw === "" ? 2000 : Number(raw) });
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="row" style={{ justifyContent: "flex-end" }}>
+                        <button className="btn" onClick={() => removeMaquina(i)}>Remover</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
+            <button
+              className="btn primary"
+              onClick={criar}
+              disabled={saving || !form.nome || !form.cidade || !form.uf}
+            >
+              {saving ? "Salvando..." : "Salvar (Condomínio + Máquinas)"}
+            </button>
+          </div>
         </div>
       )}
+
+      <hr className="hr" />
+
+      <div className="list">
+        {condos.map((c) => (
+          <div key={c.id} className="card">
+            <div style={{ fontWeight: 700 }}>{c.nome}</div>
+            <div className="small">{c.cidade}/{c.uf}</div>
+            <div className="small">{[c.rua, c.numero, c.bairro].filter(Boolean).join(", ")}</div>
+            <div className="row" style={{ marginTop: 8, gap: 8 }}>
+              <a className="btn" href={`/condominios/${c.id}/maquinas`}>Ver máquinas</a>
+            </div>
+          </div>
+        ))}
+      </div>
     </AppShell>
   );
 }
