@@ -18,10 +18,9 @@ type AudRow = {
   energia_leitura?: number | null;
   gas_leitura?: number | null;
 
-  agua_leitura_base?: number | null;
-  energia_leitura_base?: number | null;
-  gas_leitura_base?: number | null;
-  leitura_base_origem?: string | null;
+  base_agua?: number | null;
+  base_energia?: number | null;
+  base_gas?: number | null;
 
   observacoes?: string | null;
 
@@ -36,6 +35,12 @@ type AudRow = {
   fechamento_obs?: string | null;
   fechado_por?: string | null;
   fechado_em?: string | null;
+
+  // vamos injetar (derivado do condomínio) para a UI do Interno funcionar
+  pagamento_metodo?: "direto" | "boleto" | null;
+
+  // e também podemos mandar o condomínio aninhado (compat)
+  condominios?: { id?: string; nome?: string; cidade?: string; uf?: string; tipo_pagamento?: string | null } | null;
 };
 
 type CondoRow = {
@@ -85,16 +90,43 @@ function numOrNull(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-const AUD_SELECT =
-  "id,condominio_id,auditor_id,mes_ref,status,agua_leitura,energia_leitura,gas_leitura,agua_leitura_base,energia_leitura_base,gas_leitura_base,leitura_base_origem,observacoes,foto_agua_url,foto_energia_url,foto_gas_url,foto_quimicos_url,foto_bombonas_url,foto_conector_bala_url,comprovante_fechamento_url,fechamento_obs,fechado_por,fechado_em";
+const AUD_SELECT = `
+  id,
+  condominio_id,
+  auditor_id,
+  mes_ref,
+  status,
 
-async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise<Role | null> {
-  const { data: auth, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !auth?.user) return null;
+  agua_leitura,
+  energia_leitura,
+  gas_leitura,
 
-  const { data: prof } = await supabase.from("profiles").select("role").eq("id", auth.user.id).maybeSingle();
-  return (prof?.role ?? null) as Role | null;
-}
+  base_agua,
+  base_energia,
+  base_gas,
+
+  observacoes,
+
+  foto_agua_url,
+  foto_energia_url,
+  foto_gas_url,
+  foto_quimicos_url,
+  foto_bombonas_url,
+  foto_conector_bala_url,
+
+  comprovante_fechamento_url,
+  fechamento_obs,
+  fechado_por,
+  fechado_em,
+
+  condominios (
+    id,
+    nome,
+    cidade,
+    uf,
+    tipo_pagamento
+  )
+`;
 
 /**
  * Auditor pode acessar a auditoria se:
@@ -109,7 +141,7 @@ async function canAuditorAccessByVinculo(
 ): Promise<boolean> {
   // tabela esperada: auditor_condominios(auditor_id uuid, condominio_id uuid)
   const { data, error } = await (admin.from("auditor_condominios") as any)
-    .select("auditor_id,condominio_id")
+    .select("auditor_id, condominio_id")
     .eq("auditor_id", auditorUserId)
     .eq("condominio_id", condominioId)
     .maybeSingle();
@@ -118,13 +150,29 @@ async function canAuditorAccessByVinculo(
   return !!data;
 }
 
+async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise<Role | null> {
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !auth?.user) return null;
+
+  const { data: prof } = await supabase.from("profiles").select("role").eq("id", auth.user.id).maybeSingle();
+  return (prof?.role ?? null) as Role | null;
+}
+
+function derivePagamentoMetodo(tipo_pagamento: any): "direto" | "boleto" | null {
+  const t = String(tipo_pagamento ?? "").trim().toLowerCase();
+  if (t === "boleto") return "boleto";
+  if (t === "direto") return "direto";
+  return null;
+}
+
 // ---------- GET ----------
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
     const supabase = supabaseServer();
     const admin = supabaseAdmin();
 
-    const id = params.id;
+    const id = String(params?.id ?? "").trim();
+    if (!id) return NextResponse.json({ error: "ID ausente" }, { status: 400 });
 
     const { data: auth, error: authErr } = await supabase.auth.getUser();
     if (authErr || !auth?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
@@ -143,13 +191,15 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     const isOwnerAuditor =
       !!aud.auditor_id && (aud.auditor_id === user.id || aud.auditor_id === user.email);
 
-    const isLinkedAuditor =
-      !aud.auditor_id ? await canAuditorAccessByVinculo(admin, user.id, aud.condominio_id) : false;
+    const isLinkedAuditor = !aud.auditor_id
+      ? await canAuditorAccessByVinculo(admin, user.id, aud.condominio_id)
+      : false;
 
     if (!isManager && !isOwnerAuditor && !isLinkedAuditor) {
       return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
     }
 
+    // compat: condominio também solto (best-effort)
     let condominio: CondoRow | null = null;
     try {
       const { data: c } = await (admin.from("condominios") as any)
@@ -179,8 +229,18 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       // best-effort
     }
 
+    // ✅ injeta pagamento_metodo dentro da auditoria, que é o que o Interno usa
+    const tipo_pagamento = aud?.condominios?.tipo_pagamento ?? condominio?.tipo_pagamento ?? null;
+    const mergedAud: AudRow = {
+      ...aud,
+      pagamento_metodo: derivePagamentoMetodo(tipo_pagamento),
+    };
+
+    // ✅ resposta compatível com todas as telas que você já tem
     return NextResponse.json({
-      auditoria: aud,
+      ok: true,
+      data: mergedAud,
+      auditoria: mergedAud,
       condominio,
       meta: { is_owner: isOwnerAuditor, is_linked: isLinkedAuditor, role },
     });
@@ -201,7 +261,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const user = auth.user;
     const role = await getUserRole(supabase);
 
-    const id = params.id;
+    const id = String(params?.id ?? "").trim();
+    if (!id) return NextResponse.json({ error: "ID ausente" }, { status: 400 });
 
     const { data: audRaw, error: audErr } = await (admin.from("auditorias") as any)
       .select(AUD_SELECT)
@@ -218,8 +279,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const isOwnerAuditor =
       !!aud.auditor_id && (aud.auditor_id === user.id || aud.auditor_id === user.email);
 
-    const isLinkedAuditor =
-      !aud.auditor_id ? await canAuditorAccessByVinculo(admin, user.id, aud.condominio_id) : false;
+    const isLinkedAuditor = !aud.auditor_id
+      ? await canAuditorAccessByVinculo(admin, user.id, aud.condominio_id)
+      : false;
 
     const canEdit = isManager || isOwnerAuditor || isLinkedAuditor;
     if (!canEdit) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
@@ -240,6 +302,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if ("agua_leitura" in body) patch.agua_leitura = numOrNull(body.agua_leitura);
     if ("energia_leitura" in body) patch.energia_leitura = numOrNull(body.energia_leitura);
     if ("gas_leitura" in body) patch.gas_leitura = numOrNull(body.gas_leitura);
+
+    if ("base_agua" in body && isManager) patch.base_agua = numOrNull(body.base_agua);
+    if ("base_energia" in body && isManager) patch.base_energia = numOrNull(body.base_energia);
+    if ("base_gas" in body && isManager) patch.base_gas = numOrNull(body.base_gas);
 
     if ("observacoes" in body) patch.observacoes = textOrNull(body.observacoes);
 
@@ -267,7 +333,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     if (upErr) return NextResponse.json({ error: upErr.message }, { status: 400 });
 
-    return NextResponse.json({ ok: true, auditoria: updated });
+    const updatedAud = (updated ?? null) as AudRow | null;
+    if (!updatedAud) return NextResponse.json({ error: "Falha ao atualizar auditoria" }, { status: 500 });
+
+    // injeta pagamento_metodo para UI do Interno
+    const tipo_pagamento = updatedAud?.condominios?.tipo_pagamento ?? null;
+    const mergedAud: AudRow = { ...updatedAud, pagamento_metodo: derivePagamentoMetodo(tipo_pagamento) };
+
+    return NextResponse.json({ ok: true, data: mergedAud, auditoria: mergedAud });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
