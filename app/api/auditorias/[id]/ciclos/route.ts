@@ -30,7 +30,8 @@ function pickItens(body: any): any[] {
 }
 
 function isMissingColumn(errMsg: string, col: string) {
-  return errMsg.toLowerCase().includes(`column "${col.toLowerCase()}"`) && errMsg.toLowerCase().includes("does not exist");
+  const m = errMsg.toLowerCase();
+  return m.includes(`column "${col.toLowerCase()}"`) && m.includes("does not exist");
 }
 
 async function insertWithOptionalColumns(
@@ -39,7 +40,6 @@ async function insertWithOptionalColumns(
   rows: any[],
   optionalCols: string[]
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  // tenta inserir; se reclamar de coluna inexistente, remove e tenta de novo
   let currentRows = rows.map((r) => ({ ...r }));
 
   for (let tries = 0; tries < optionalCols.length + 1; tries++) {
@@ -47,8 +47,8 @@ async function insertWithOptionalColumns(
     if (!error) return { ok: true };
 
     const msg = String(error.message ?? error);
-    // remove colunas opcionais que não existirem
     let removedAny = false;
+
     for (const col of optionalCols) {
       if (isMissingColumn(msg, col)) {
         currentRows = currentRows.map((r) => {
@@ -59,6 +59,7 @@ async function insertWithOptionalColumns(
         removedAny = true;
       }
     }
+
     if (!removedAny) return { ok: false, error: msg };
   }
 
@@ -67,8 +68,6 @@ async function insertWithOptionalColumns(
 
 /**
  * GET: a tela usa para carregar ciclos lançados
- * - Principal: auditoria_fechamento_itens (fonte do financeiro)
- * - Fallback: auditoria_ciclos (legado)
  */
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
@@ -92,13 +91,13 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ ok: true, source: "auditoria_fechamento_itens", itens });
     }
 
-    const { data: ciclosLegado, error: errLeg } = await (supabase.from("auditoria_ciclos") as any)
+    const { data: legado, error: errLeg } = await (supabase.from("auditoria_ciclos") as any)
       .select("*")
       .eq("auditoria_id", auditoriaId);
 
     if (errLeg) return NextResponse.json({ error: errLeg.message }, { status: 400 });
 
-    return NextResponse.json({ ok: true, source: "auditoria_ciclos", itens: ciclosLegado ?? [] });
+    return NextResponse.json({ ok: true, source: "auditoria_ciclos", itens: legado ?? [] });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
@@ -106,11 +105,10 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
 /**
  * POST: salva ciclos do fechamento (Interno/Gestor)
- * ✅ Grava em auditoria_fechamento_itens, com maquina_tag (NOT NULL) e condominio_maquina_id (para calcular valor via valor_ciclo).
- *
- * A tela já envia itens com:
- * - maquina_tag
- * - ciclos
+ * ✅ Grava em auditoria_fechamento_itens (fonte usada pela view financeira).
+ * A tabela exige maquina_tag NOT NULL, então a gente deriva:
+ * - se vier maquina_tag, usa
+ * - senão, se vier condominio_maquina_id/maquina_id, busca a tag no cadastro (condominio_maquinas)
  */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {
@@ -126,10 +124,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     const body = await req.json().catch(() => null);
     const itens = pickItens(body);
-
     if (!itens.length) return NextResponse.json({ error: "Nenhum item informado" }, { status: 400 });
 
-    // auditoria -> condominio_id (pra mapear maquina_tag -> id da máquina)
+    // auditoria -> condominio_id
     const { data: aud, error: audErr } = await (supabase.from("auditorias") as any)
       .select("id,condominio_id")
       .eq("id", auditoriaId)
@@ -137,56 +134,80 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     if (audErr || !aud) return NextResponse.json({ error: audErr?.message ?? "Auditoria não encontrada" }, { status: 404 });
 
-    // mapa tag -> id
+    // carrega máquinas do condomínio (mapa id<->tag)
     const { data: maquinas, error: maqErr } = await (supabase.from("condominio_maquinas") as any)
       .select("id,maquina_tag")
       .eq("condominio_id", aud.condominio_id);
 
     if (maqErr) return NextResponse.json({ error: maqErr.message }, { status: 400 });
 
+    const tagById = new Map<string, string>();
     const idByTag = new Map<string, string>();
     for (const m of maquinas ?? []) {
-      const tag = String(m?.maquina_tag ?? "").trim();
       const id = String(m?.id ?? "").trim();
-      if (tag && id) idByTag.set(tag, id);
-    }
-
-    // valida mínimo
-    for (const it of itens) {
-      const tag = String(it?.maquina_tag ?? "").trim();
-      if (!tag) return NextResponse.json({ error: "maquina_tag obrigatório" }, { status: 400 });
-
-      const ciclos = Number(it?.ciclos ?? 0);
-      if (Number.isNaN(ciclos)) return NextResponse.json({ error: "ciclos inválido" }, { status: 400 });
-
-      if (!idByTag.has(tag)) {
-        return NextResponse.json({ error: `maquina_tag não encontrada no cadastro do condomínio: ${tag}` }, { status: 400 });
+      const tag = String(m?.maquina_tag ?? "").trim();
+      if (id && tag) {
+        tagById.set(id, tag);
+        idByTag.set(tag, id);
       }
     }
 
-    // idempotente: apaga tudo e regrava
+    // valida e normaliza
+    const normalized = itens.map((it: any) => {
+      const ciclos = Number(it?.ciclos ?? 0);
+      if (!Number.isFinite(ciclos)) {
+        return { ok: false as const, error: "ciclos inválido" };
+      }
+
+      const maybeTag = String(it?.maquina_tag ?? "").trim();
+      const maybeId = String(it?.condominio_maquina_id ?? it?.maquina_id ?? it?.id ?? "").trim();
+
+      // resolve tag + id
+      let maquina_tag = maybeTag || "";
+      let condominio_maquina_id = maybeId || "";
+
+      if (!maquina_tag && condominio_maquina_id) {
+        maquina_tag = tagById.get(condominio_maquina_id) ?? "";
+      }
+      if (!condominio_maquina_id && maquina_tag) {
+        condominio_maquina_id = idByTag.get(maquina_tag) ?? "";
+      }
+
+      if (!maquina_tag) return { ok: false as const, error: "maquina_tag obrigatório (não consegui derivar pelo id)" };
+      if (!condominio_maquina_id) return { ok: false as const, error: `máquina não encontrada no cadastro (tag: ${maquina_tag})` };
+
+      return {
+        ok: true as const,
+        maquina_tag,
+        condominio_maquina_id,
+        ciclos: Math.trunc(ciclos),
+      };
+    });
+
+    const firstBad = normalized.find((x: any) => !x.ok);
+    if (firstBad && !firstBad.ok) {
+      return NextResponse.json({ error: firstBad.error }, { status: 400 });
+    }
+
+    // idempotente: apaga e regrava
     const { error: delErr } = await (supabase.from("auditoria_fechamento_itens") as any)
       .delete()
       .eq("auditoria_id", auditoriaId);
 
     if (delErr) return NextResponse.json({ error: delErr.message }, { status: 400 });
 
-    const rows = itens.map((it: any) => {
-      const tag = String(it.maquina_tag).trim();
-      const ciclos = Number(it?.ciclos ?? 0);
-      const condominio_maquina_id = idByTag.get(tag) ?? null;
-
-      // valor_total fica null para usar valor_ciclo via join (view atual)
-      return {
+    const rows = (normalized as any[])
+      .filter((x) => x.ok)
+      .map((x) => ({
         auditoria_id: auditoriaId,
-        maquina_tag: tag,
-        condominio_maquina_id,
-        ciclos: Number.isFinite(ciclos) ? ciclos : 0,
+        maquina_tag: x.maquina_tag, // NOT NULL
+        condominio_maquina_id: x.condominio_maquina_id,
+        ciclos: x.ciclos,
+        // deixa null pra view usar valor_ciclo via join
         valor_total: null,
-      };
-    });
+      }));
 
-    // algumas colunas podem não existir dependendo do seu schema; a função abaixo remove se precisar
+    // se o schema não tiver essas colunas opcionais, remove e tenta de novo
     const optionalCols = ["condominio_maquina_id", "valor_total"];
     const ins = await insertWithOptionalColumns(supabase as any, "auditoria_fechamento_itens", rows, optionalCols);
     if (!ins.ok) return NextResponse.json({ error: ins.error }, { status: 400 });
