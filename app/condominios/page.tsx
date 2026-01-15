@@ -193,8 +193,12 @@ export default function CondominiosPage() {
 
   const maquinasResumo = useMemo(() => {
     const total = maquinas.reduce((acc, m) => acc + (Number(m.quantidade) || 0), 0);
-    const lav = maquinas.filter((m) => m.categoria === "lavadora").reduce((acc, m) => acc + (Number(m.quantidade) || 0), 0);
-    const sec = maquinas.filter((m) => m.categoria === "secadora").reduce((acc, m) => acc + (Number(m.quantidade) || 0), 0);
+    const lav = maquinas
+      .filter((m) => m.categoria === "lavadora")
+      .reduce((acc, m) => acc + (Number(m.quantidade) || 0), 0);
+    const sec = maquinas
+      .filter((m) => m.categoria === "secadora")
+      .reduce((acc, m) => acc + (Number(m.quantidade) || 0), 0);
     return { total, lav, sec };
   }, [maquinas]);
 
@@ -249,8 +253,10 @@ export default function CondominiosPage() {
       if (!maquinas.length) throw new Error("Cadastre pelo menos 1 tipo de máquina.");
       for (const m of maquinas) {
         if (!m.categoria) throw new Error("Categoria da máquina é obrigatória.");
-        if (m.capacidade_kg !== null && !Number.isFinite(Number(m.capacidade_kg))) throw new Error("Capacidade (kg) inválida.");
-        if (!Number.isFinite(Number(m.quantidade)) || Number(m.quantidade) < 0) throw new Error("Quantidade inválida.");
+        if (m.capacidade_kg !== null && !Number.isFinite(Number(m.capacidade_kg)))
+          throw new Error("Capacidade (kg) inválida.");
+        if (!Number.isFinite(Number(m.quantidade)) || Number(m.quantidade) < 0)
+          throw new Error("Quantidade inválida.");
         const val = parseMoneyPtBr(m.valor_ciclo_text);
         if (!Number.isFinite(val) || val < 0) throw new Error("Valor por ciclo inválido.");
         if (!Number.isFinite(Number(m.limpeza_quimica_ciclos)) || Number(m.limpeza_quimica_ciclos) <= 0)
@@ -261,12 +267,17 @@ export default function CondominiosPage() {
 
       const payload: any = { ...form };
 
-      payload.valor_ciclo_lavadora = payload.valor_ciclo_lavadora ? parseMoneyPtBr(String(payload.valor_ciclo_lavadora)) : null;
-      payload.valor_ciclo_secadora = payload.valor_ciclo_secadora ? parseMoneyPtBr(String(payload.valor_ciclo_secadora)) : null;
+      payload.valor_ciclo_lavadora = payload.valor_ciclo_lavadora
+        ? parseMoneyPtBr(String(payload.valor_ciclo_lavadora))
+        : null;
+      payload.valor_ciclo_secadora = payload.valor_ciclo_secadora
+        ? parseMoneyPtBr(String(payload.valor_ciclo_secadora))
+        : null;
       payload.cashback_percent = payload.cashback_percent ? Number(payload.cashback_percent) : null;
 
       // garante enum
-      payload.tipo_pagamento = String(payload.tipo_pagamento ?? "direto").toLowerCase() === "boleto" ? "boleto" : "direto";
+      payload.tipo_pagamento =
+        String(payload.tipo_pagamento ?? "direto").toLowerCase() === "boleto" ? "boleto" : "direto";
 
       // 1) salva condomínio
       const r = await fetch("/api/condominios", {
@@ -281,7 +292,8 @@ export default function CondominiosPage() {
       const condominioId: string | undefined =
         j?.data?.id ?? j?.id ?? j?.condominio?.id ?? j?.data?.[0]?.id;
 
-      if (!condominioId) throw new Error("Condomínio salvo, mas não veio o ID na resposta da API (/api/condominios).");
+      if (!condominioId)
+        throw new Error("Condomínio salvo, mas não veio o ID na resposta da API (/api/condominios).");
 
       // 2) salva máquinas do condomínio
       // ✅ FIX: gera maquina_tag e expande quantidade
@@ -303,9 +315,7 @@ export default function CondominiosPage() {
           if (m.categoria === "lavadora") lavN += 1;
           else secN += 1;
 
-          const maquina_tag = m.categoria === "lavadora"
-            ? `LAV-${pad2(lavN)}`
-            : `SEC-${pad2(secN)}`;
+          const maquina_tag = m.categoria === "lavadora" ? `LAV-${pad2(lavN)}` : `SEC-${pad2(secN)}`;
 
           arr.push({ ...base, maquina_tag });
         }
@@ -346,7 +356,9 @@ export default function CondominiosPage() {
               + Novo condomínio
             </button>
           )}
-          <button className="btn" onClick={loadAll}>Recarregar</button>
+          <button className="btn" onClick={loadAll}>
+            Recarregar
+          </button>
         </div>
       </div>
 
@@ -355,7 +367,9 @@ export default function CondominiosPage() {
 
       {canEdit && showForm && (
         <div className="card" style={{ background: "#fbfcff", marginTop: 12 }}>
-          <div className="small" style={{ marginBottom: 8 }}>Novo condomínio</div>
+          <div className="small" style={{ marginBottom: 8 }}>
+            Novo condomínio
+          </div>
 
           {/* Básico */}
           <div className="grid2">
@@ -382,11 +396,7 @@ export default function CondominiosPage() {
           <div className="grid2">
             <div>
               <div className="small">Tipo de pagamento</div>
-              <select
-                className="input"
-                value={form.tipo_pagamento}
-                onChange={(e) => setForm({ ...form, tipo_pagamento: e.target.value })}
-              >
+              <select className="input" value={form.tipo_pagamento} onChange={(e) => setForm({ ...form, tipo_pagamento: e.target.value })}>
                 <option value="direto">Direto (PIX/depósito)</option>
                 <option value="boleto">Boleto</option>
               </select>
@@ -470,8 +480,12 @@ export default function CondominiosPage() {
           {/* Parque máquinas */}
           <div style={{ height: 14 }} />
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <div className="small" style={{ fontWeight: 700 }}>Parque de máquinas</div>
-            <button className="btn" onClick={addMaquina}>+ Adicionar tipo</button>
+            <div className="small" style={{ fontWeight: 700 }}>
+              Parque de máquinas
+            </div>
+            <button className="btn" onClick={addMaquina}>
+              + Adicionar tipo
+            </button>
           </div>
 
           <div className="card" style={{ marginTop: 10 }}>
@@ -488,11 +502,7 @@ export default function CondominiosPage() {
                     <div className="grid2" style={{ alignItems: "end" }}>
                       <div>
                         <div className="small">Categoria</div>
-                        <select
-                          className="input"
-                          value={m.categoria}
-                          onChange={(e) => updateMaquina(i, { categoria: e.target.value as any })}
-                        >
+                        <select className="input" value={m.categoria} onChange={(e) => updateMaquina(i, { categoria: e.target.value as any })}>
                           <option value="lavadora">Lavadora</option>
                           <option value="secadora">Secadora</option>
                         </select>
@@ -574,7 +584,9 @@ export default function CondominiosPage() {
                       </div>
 
                       <div className="row" style={{ justifyContent: "flex-end" }}>
-                        <button className="btn" onClick={() => removeMaquina(i)}>Remover</button>
+                        <button className="btn" onClick={() => removeMaquina(i)}>
+                          Remover
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -619,11 +631,7 @@ export default function CondominiosPage() {
               Cancelar
             </button>
 
-            <button
-              className="btn primary"
-              onClick={criar}
-              disabled={saving || !form.nome || !form.cidade || !form.uf}
-            >
+            <button className="btn primary" onClick={criar} disabled={saving || !form.nome || !form.cidade || !form.uf}>
               {saving ? "Salvando..." : "Salvar (Condomínio + Máquinas)"}
             </button>
           </div>
@@ -639,10 +647,22 @@ export default function CondominiosPage() {
               {c.nome}
               {badgePagamento(c.tipo_pagamento)}
             </div>
-            <div className="small">{c.cidade}/{c.uf}</div>
+            <div className="small">
+              {c.cidade}/{c.uf}
+            </div>
             <div className="small">{[c.rua, c.numero, c.bairro].filter(Boolean).join(", ")}</div>
+
             <div className="row" style={{ marginTop: 8, gap: 8 }}>
-              <a className="btn" href={`/condominios/${c.id}/maquinas`}>Ver máquinas</a>
+              {/* ✅ NOVO: editar ponto */}
+              {canEdit && (
+                <a className="btn primary" href={`/condominios/${c.id}`}>
+                  Editar ponto
+                </a>
+              )}
+
+              <a className="btn" href={`/condominios/${c.id}/maquinas`}>
+                Ver máquinas
+              </a>
             </div>
           </div>
         ))}
