@@ -29,30 +29,36 @@ function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
 
+/* =========================
+   POST – salvar máquinas
+========================= */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const ctx = await getUserAndRole();
-  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  if (!ctx?.user) {
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  }
 
-  const role = (ctx.role ?? null) as Role | null;
-  // quem pode cadastrar/alterar condomínio/máquinas: interno e gestor
-  if (!roleGte(role, "interno")) {
+  const role = ctx.role as Role | null;
+
+  // 🔴 FIX: nunca passar null para roleGte
+  if (!role || !roleGte(role, "interno")) {
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
   }
 
   try {
     const condominioId = String(params?.id ?? "").trim();
-    if (!condominioId) return NextResponse.json({ error: "ID do condomínio ausente." }, { status: 400 });
+    if (!condominioId) {
+      return NextResponse.json({ error: "ID do condomínio ausente." }, { status: 400 });
+    }
 
     const body = await req.json().catch(() => null);
 
-    // UI manda ARRAY direto
     const list = Array.isArray(body)
       ? body
       : Array.isArray(body?.maquinas)
         ? body.maquinas
         : [];
 
-    // normaliza
     let lavN = 0;
     let secN = 0;
 
@@ -61,13 +67,10 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         const categoria = normCategoria(m?.categoria ?? m?.tipo);
         if (!categoria) return null;
 
-        // a UI (no teu ZIP) geralmente já expande e manda quantidade/maquina_tag,
-        // mas aqui a gente garante.
         const quantidade = Math.max(1, intOr(m?.quantidade, 1));
 
         const capacidade_kg = numOrNull(m?.capacidade_kg);
         const valor_ciclo = numOrNull(m?.valor_ciclo);
-
         const limpeza_quimica_ciclos = Math.max(1, intOr(m?.limpeza_quimica_ciclos, 500));
         const limpeza_mecanica_ciclos = Math.max(1, intOr(m?.limpeza_mecanica_ciclos, 2000));
 
@@ -75,7 +78,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         if (!maquina_tag) {
           if (categoria === "lavadora") lavN += 1;
           else secN += 1;
-          maquina_tag = categoria === "lavadora" ? `LAV-${pad2(lavN)}` : `SEC-${pad2(secN)}`;
+          maquina_tag = categoria === "lavadora"
+            ? `LAV-${pad2(lavN)}`
+            : `SEC-${pad2(secN)}`;
         }
 
         return {
@@ -86,62 +91,69 @@ export async function POST(req: Request, { params }: { params: { id: string } })
           valor_ciclo,
           limpeza_quimica_ciclos,
           limpeza_mecanica_ciclos,
-          maquina_tag, // NOT NULL
+          maquina_tag,
           ativo: m?.ativo === false ? false : true,
         };
       })
       .filter(Boolean) as any[];
 
-    // valida (tem que ter pelo menos 1 máquina com quantidade > 0)
     const totalQtd = rows.reduce((acc, r) => acc + (Number(r.quantidade) || 0), 0);
     if (!rows.length || totalQtd <= 0) {
-      return NextResponse.json({ error: "Nenhuma máquina válida para salvar (quantidade > 0)." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Nenhuma máquina válida para salvar (quantidade > 0)." },
+        { status: 400 }
+      );
     }
 
-    // REPLACE: apaga tudo e reinsere
-    const { error: delErr } = await supabaseAdmin
+    await supabaseAdmin
       .from("condominio_maquinas")
       .delete()
       .eq("condominio_id", condominioId);
 
-    if (delErr) return NextResponse.json({ error: delErr.message }, { status: 400 });
-
-    const { data: insData, error: insErr } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from("condominio_maquinas")
       .insert(rows)
-      .select("id,condominio_id,categoria,maquina_tag,capacidade_kg,quantidade,valor_ciclo,ativo");
+      .select();
 
-    if (insErr) return NextResponse.json({ error: insErr.message }, { status: 400 });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
 
-    return NextResponse.json({ ok: true, data: insData ?? [] });
+    return NextResponse.json({ ok: true, data });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
 }
 
+/* =========================
+   GET – listar máquinas
+========================= */
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const ctx = await getUserAndRole();
-  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  if (!ctx?.user) {
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  }
 
-  const role = (ctx.role ?? null) as Role | null;
-  if (!roleGte(role, "auditor")) {
+  const role = ctx.role as Role | null;
+  if (!role || !roleGte(role, "auditor")) {
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
   }
 
-  try {
-    const condominioId = String(params?.id ?? "").trim();
-    if (!condominioId) return NextResponse.json({ error: "ID do condomínio ausente." }, { status: 400 });
-
-    const { data, error } = await supabaseAdmin
-      .from("condominio_maquinas")
-      .select("id,categoria,maquina_tag,capacidade_kg,quantidade,valor_ciclo,ativo")
-      .eq("condominio_id", condominioId)
-      .order("categoria", { ascending: true })
-      .order("maquina_tag", { ascending: true });
-
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-    return NextResponse.json({ ok: true, data: data ?? [] });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
+  const condominioId = String(params?.id ?? "").trim();
+  if (!condominioId) {
+    return NextResponse.json({ error: "ID do condomínio ausente." }, { status: 400 });
   }
+
+  const { data, error } = await supabaseAdmin
+    .from("condominio_maquinas")
+    .select("*")
+    .eq("condominio_id", condominioId)
+    .order("categoria")
+    .order("maquina_tag");
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+
+  return NextResponse.json({ ok: true, data });
 }
