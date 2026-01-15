@@ -106,21 +106,20 @@ function sameKey(a: CicloItem, b: CicloItem) {
   return toLower(a.categoria) === toLower(b.categoria) && Number(a.capacidade_kg ?? 0) === Number(b.capacidade_kg ?? 0);
 }
 
-function ensureFourCombos(list: CicloItem[]) {
-  const base: CicloItem[] = [
-    { categoria: "lavadora", capacidade_kg: 10, ciclos: 0, valor_ciclo: null },
-    { categoria: "lavadora", capacidade_kg: 15, ciclos: 0, valor_ciclo: null },
-    { categoria: "secadora", capacidade_kg: 10, ciclos: 0, valor_ciclo: null },
-    { categoria: "secadora", capacidade_kg: 15, ciclos: 0, valor_ciclo: null },
-  ];
-
-  const out = [...base];
+/**
+ * ✅ NOVO: não inventa combos 10/15.
+ * Só renderiza o que o backend disse que existe (categoria+capacidade),
+ * e elimina duplicados por chave.
+ */
+function normalizeCiclos(list: CicloItem[]) {
+  const out: CicloItem[] = [];
 
   for (const it of list ?? []) {
     const cat = toLower(it.categoria ?? it.tipo);
     const cap = it.capacidade_kg ?? null;
 
-    if (!cat || !cap) continue;
+    // Só entra se vier completo do backend (categoria + capacidade)
+    if (!cat || cap === null || cap === undefined) continue;
 
     const normalized: CicloItem = {
       ...it,
@@ -134,6 +133,14 @@ function ensureFourCombos(list: CicloItem[]) {
     if (idx >= 0) out[idx] = { ...out[idx], ...normalized };
     else out.push(normalized);
   }
+
+  // ordena: lavadora antes, menor kg antes
+  out.sort((a, b) => {
+    const ac = toLower(a.categoria);
+    const bc = toLower(b.categoria);
+    if (ac !== bc) return ac === "lavadora" ? -1 : 1;
+    return Number(a.capacidade_kg ?? 0) - Number(b.capacidade_kg ?? 0);
+  });
 
   return out;
 }
@@ -222,7 +229,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         valor_ciclo: x.valor_ciclo !== null && x.valor_ciclo !== undefined ? Number(x.valor_ciclo) : null,
       }));
 
-      const normalized = ensureFourCombos(normalizedRaw);
+      // ✅ antes era ensureFourCombos(...) -> agora só usa o que o backend permitir
+      const normalized = normalizeCiclos(normalizedRaw);
 
       setCiclos(normalized);
       setCiclosOrig(normalized);
@@ -332,7 +340,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         tipo: x.tipo ?? null,
       }));
 
-      const normalized = ensureFourCombos(normalizedRaw);
+      // ✅ antes era ensureFourCombos(...)
+      const normalized = normalizeCiclos(normalizedRaw);
 
       setCiclos(normalized);
       setCiclosOrig(normalized);
@@ -438,12 +447,10 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const isLav = cat === "lavadora" || cat.includes("lav");
       const isSec = cat === "secadora" || cat.includes("sec");
 
-      // Se não veio valor_ciclo, não “zera” pra não confundir: marca como não calculável.
       const temPreco = it.valor_ciclo !== null && it.valor_ciclo !== undefined && Number.isFinite(Number(it.valor_ciclo));
       const v = temPreco ? Number(it.valor_ciclo) : null;
 
       if (!temPreco) {
-        // só marca como faltando preço se o usuário lançou ciclos > 0
         if (c > 0) faltouPreco = true;
       }
 
@@ -454,7 +461,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         secC += c;
         if (v !== null) secV += c * v;
       } else {
-        // fallback conservador: considera como lavadora
         lavC += c;
         if (v !== null) lavV += c * v;
       }
@@ -489,7 +495,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       setErr(null);
       setFinalizando(true);
 
-      // salva obs antes
       await salvarObsFinanceiro();
 
       if (exigeComprovante && !aud?.comprovante_fechamento_url) {
