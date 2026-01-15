@@ -34,30 +34,21 @@ function pad2(n: number) {
 ========================= */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const ctx = await getUserAndRole();
-  if (!ctx?.user) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  }
+  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
   const role = ctx.role as Role | null;
-
-  // 🔴 FIX: nunca passar null para roleGte
   if (!role || !roleGte(role, "interno")) {
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
   }
 
   try {
     const condominioId = String(params?.id ?? "").trim();
-    if (!condominioId) {
-      return NextResponse.json({ error: "ID do condomínio ausente." }, { status: 400 });
-    }
+    if (!condominioId) return NextResponse.json({ error: "ID do condomínio ausente." }, { status: 400 });
 
     const body = await req.json().catch(() => null);
 
-    const list = Array.isArray(body)
-      ? body
-      : Array.isArray(body?.maquinas)
-        ? body.maquinas
-        : [];
+    // UI manda ARRAY direto (ou compat: {maquinas:[...]} )
+    const list = Array.isArray(body) ? body : Array.isArray(body?.maquinas) ? body.maquinas : [];
 
     let lavN = 0;
     let secN = 0;
@@ -78,9 +69,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         if (!maquina_tag) {
           if (categoria === "lavadora") lavN += 1;
           else secN += 1;
-          maquina_tag = categoria === "lavadora"
-            ? `LAV-${pad2(lavN)}`
-            : `SEC-${pad2(secN)}`;
+          maquina_tag = categoria === "lavadora" ? `LAV-${pad2(lavN)}` : `SEC-${pad2(secN)}`;
         }
 
         return {
@@ -91,7 +80,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
           valor_ciclo,
           limpeza_quimica_ciclos,
           limpeza_mecanica_ciclos,
-          maquina_tag,
+          maquina_tag, // NOT NULL no banco
           ativo: m?.ativo === false ? false : true,
         };
       })
@@ -99,27 +88,23 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     const totalQtd = rows.reduce((acc, r) => acc + (Number(r.quantidade) || 0), 0);
     if (!rows.length || totalQtd <= 0) {
-      return NextResponse.json(
-        { error: "Nenhuma máquina válida para salvar (quantidade > 0)." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Nenhuma máquina válida para salvar (quantidade > 0)." }, { status: 400 });
     }
 
-    await supabaseAdmin
+    // ✅ FIX: supabaseAdmin é FUNÇÃO -> precisa chamar
+    const admin = supabaseAdmin();
+
+    const { error: delErr } = await admin
       .from("condominio_maquinas")
       .delete()
       .eq("condominio_id", condominioId);
 
-    const { data, error } = await supabaseAdmin
-      .from("condominio_maquinas")
-      .insert(rows)
-      .select();
+    if (delErr) return NextResponse.json({ error: delErr.message }, { status: 400 });
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
-    }
+    const { data, error: insErr } = await admin.from("condominio_maquinas").insert(rows).select();
+    if (insErr) return NextResponse.json({ error: insErr.message }, { status: 400 });
 
-    return NextResponse.json({ ok: true, data });
+    return NextResponse.json({ ok: true, data: data ?? [] });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
@@ -130,30 +115,29 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 ========================= */
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const ctx = await getUserAndRole();
-  if (!ctx?.user) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  }
+  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
   const role = ctx.role as Role | null;
   if (!role || !roleGte(role, "auditor")) {
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
   }
 
-  const condominioId = String(params?.id ?? "").trim();
-  if (!condominioId) {
-    return NextResponse.json({ error: "ID do condomínio ausente." }, { status: 400 });
+  try {
+    const condominioId = String(params?.id ?? "").trim();
+    if (!condominioId) return NextResponse.json({ error: "ID do condomínio ausente." }, { status: 400 });
+
+    const admin = supabaseAdmin();
+
+    const { data, error } = await admin
+      .from("condominio_maquinas")
+      .select("*")
+      .eq("condominio_id", condominioId)
+      .order("categoria", { ascending: true })
+      .order("maquina_tag", { ascending: true });
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    return NextResponse.json({ ok: true, data: data ?? [] });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
-
-  const { data, error } = await supabaseAdmin
-    .from("condominio_maquinas")
-    .select("*")
-    .eq("condominio_id", condominioId)
-    .order("categoria")
-    .order("maquina_tag");
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 });
-  }
-
-  return NextResponse.json({ ok: true, data });
 }
