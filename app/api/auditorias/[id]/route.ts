@@ -96,8 +96,29 @@ async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise
   return (prof?.role ?? null) as Role | null;
 }
 
-// ---------- GET ----------
+/**
+ * Auditor pode acessar a auditoria se:
+ * - for interno/gestor, OU
+ * - auditor_id bate com o user.id (ou user.email), OU
+ * - auditor_id é NULL e existe vínculo na tabela auditor_condominios para aquele condominio
+ */
+async function canAuditorAccessByVinculo(
+  admin: ReturnType<typeof supabaseAdmin>,
+  auditorUserId: string,
+  condominioId: string
+): Promise<boolean> {
+  // tabela esperada: auditor_condominios(auditor_id uuid, condominio_id uuid)
+  const { data, error } = await (admin.from("auditor_condominios") as any)
+    .select("auditor_id,condominio_id")
+    .eq("auditor_id", auditorUserId)
+    .eq("condominio_id", condominioId)
+    .maybeSingle();
 
+  if (error) return false;
+  return !!data;
+}
+
+// ---------- GET ----------
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
     const supabase = supabaseServer();
@@ -105,31 +126,30 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     const id = params.id;
 
-    // auth + role (não depender de RLS)
     const { data: auth, error: authErr } = await supabase.auth.getUser();
     if (authErr || !auth?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
     const user = auth.user;
     const role = await getUserRole(supabase);
 
-    // busca via admin (bypass RLS) e aplica permissão por regra de negócio
     const { data, error } = await (admin.from("auditorias") as any).select(AUD_SELECT).eq("id", id).maybeSingle();
-
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
     if (!data) return NextResponse.json({ error: "Auditoria não encontrada" }, { status: 404 });
 
     const aud = data as AudRow;
 
-    // auditor só acessa a própria; interno/gestor acessa tudo
+    const isManager = roleGte(role, "interno");
+
     const isOwnerAuditor =
       !!aud.auditor_id && (aud.auditor_id === user.id || aud.auditor_id === user.email);
 
-    const isManager = roleGte(role, "interno");
-    if (!isManager && !isOwnerAuditor) {
+    const isLinkedAuditor =
+      !aud.auditor_id ? await canAuditorAccessByVinculo(admin, user.id, aud.condominio_id) : false;
+
+    if (!isManager && !isOwnerAuditor && !isLinkedAuditor) {
       return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
     }
 
-    // carrega condomínio para a UI (best-effort)
     let condominio: CondoRow | null = null;
     try {
       const { data: c } = await (admin.from("condominios") as any)
@@ -159,19 +179,22 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       // best-effort
     }
 
-    return NextResponse.json({ auditoria: aud, condominio });
+    return NextResponse.json({
+      auditoria: aud,
+      condominio,
+      meta: { is_owner: isOwnerAuditor, is_linked: isLinkedAuditor, role },
+    });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
 }
 
 // ---------- PATCH ----------
-
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   try {
     const supabase = supabaseServer();
+    const admin = supabaseAdmin();
 
-    // auth
     const { data: auth, error: authErr } = await supabase.auth.getUser();
     if (authErr || !auth?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
@@ -180,8 +203,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     const id = params.id;
 
-    // carrega auditoria (aqui mantém como estava no seu arquivo)
-    const { data: audRaw, error: audErr } = await (supabase.from("auditorias") as any)
+    const { data: audRaw, error: audErr } = await (admin.from("auditorias") as any)
       .select(AUD_SELECT)
       .eq("id", id)
       .maybeSingle();
@@ -191,27 +213,30 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const aud = audRaw as AudRow;
     const prevStatus: Status = normalizeStatus(aud.status);
 
+    const isManager = roleGte(role, "interno");
+
     const isOwnerAuditor =
       !!aud.auditor_id && (aud.auditor_id === user.id || aud.auditor_id === user.email);
-    const isManager = roleGte(role, "interno"); // interno/gestor
-    const canEdit = isOwnerAuditor || isManager;
 
+    const isLinkedAuditor =
+      !aud.auditor_id ? await canAuditorAccessByVinculo(admin, user.id, aud.condominio_id) : false;
+
+    const canEdit = isManager || isOwnerAuditor || isLinkedAuditor;
     if (!canEdit) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
 
     const body = await req.json().catch(() => ({} as any));
-
     const nextStatus: Status | null = body?.status ? normalizeStatus(body.status) : null;
 
     if (prevStatus === "final" && !isManager) {
       return NextResponse.json({ error: "Auditoria finalizada: apenas interno/gestor pode reabrir." }, { status: 403 });
     }
-
     if (nextStatus === "final" && !isManager) {
       return NextResponse.json({ error: "Apenas interno/gestor pode finalizar." }, { status: 403 });
     }
 
     const patch: any = {};
 
+    // auditor pode editar leituras/fotos/observações
     if ("agua_leitura" in body) patch.agua_leitura = numOrNull(body.agua_leitura);
     if ("energia_leitura" in body) patch.energia_leitura = numOrNull(body.energia_leitura);
     if ("gas_leitura" in body) patch.gas_leitura = numOrNull(body.gas_leitura);
@@ -227,13 +252,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     if ("fechamento_obs" in body) patch.fechamento_obs = textOrNull(body.fechamento_obs);
 
+    // comprovante: só interno/gestor
     if ("comprovante_fechamento_url" in body && isManager) {
       patch.comprovante_fechamento_url = textOrNull(body.comprovante_fechamento_url);
     }
 
     if (nextStatus) patch.status = nextStatus;
 
-    const { data: updated, error: upErr } = await (supabase.from("auditorias") as any)
+    const { data: updated, error: upErr } = await (admin.from("auditorias") as any)
       .update(patch)
       .eq("id", id)
       .select(AUD_SELECT)
