@@ -1,169 +1,213 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { supabaseAdmin, getUserAndRole } from "@/lib/auth";
 
-type Role = "auditor" | "interno" | "gestor";
 type TipoPagamento = "direto" | "boleto";
 
-async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise<Role | null> {
-  const { data: auth, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !auth?.user) return null;
+type Row = {
+  mes_ref: string | null;
 
-  const { data: prof } = await supabase.from("profiles").select("role").eq("id", auth.user.id).maybeSingle();
-  return (prof?.role ?? null) as Role | null;
-}
+  condominio_id: string;
+  condominio_nome: string | null;
+  cidade: string | null;
+  uf: string | null;
 
-function parseMesRef(input: string | null): string {
-  if (!input) return "";
-  const s = String(input).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  if (/^\d{4}-\d{2}$/.test(s)) return `${s}-01`;
-  return s;
-}
+  valor_total_pagar: number | null;
+  valor_cashback: number | null;
+  valor_repasse_utilidades: number | null;
 
-function currentMonthISO(): string {
-  const d = new Date();
+  pct_valor_total_pagar?: number | null;
+  pct_valor_cashback?: number | null;
+  pct_valor_repasse_utilidades?: number | null;
+
+  banco_pix: string | null;
+  banco_nome: string | null;
+  banco_agencia: string | null;
+  banco_conta: string | null;
+
+  tipo_pagamento?: TipoPagamento | null;
+
+  status: string | null;
+  auditoria_id: string | null;
+};
+
+function monthISO(d = new Date()) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   return `${y}-${m}-01`;
 }
 
-function prevMonthISO(mesRef: string): string {
-  // mesRef: YYYY-MM-01
-  const [y, m] = mesRef.slice(0, 10).split("-").map((x) => Number(x));
-  const d = new Date(y, (m ?? 1) - 1, 1);
-  d.setMonth(d.getMonth() - 1);
-  const yy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${yy}-${mm}-01`;
+function addMonths(iso: string, delta: number) {
+  const [y, m] = iso.slice(0, 7).split("-").map(Number);
+  const d = new Date(y, m - 1, 1);
+  d.setMonth(d.getMonth() + delta);
+  return monthISO(d);
 }
 
-function num(v: any): number {
-  const n = typeof v === "number" ? v : Number(String(v ?? 0));
-  return Number.isFinite(n) ? n : 0;
+function n(v: any): number {
+  const x = Number(v ?? 0);
+  return Number.isFinite(x) ? x : 0;
 }
 
 function pct(now: number, prev: number): number | null {
-  if (!Number.isFinite(now) || !Number.isFinite(prev)) return null;
-  if (prev === 0) return null; // evita infinito; financeiro entende como "sem base"
+  if (!Number.isFinite(prev) || prev === 0) return null;
   return ((now - prev) / prev) * 100;
-}
-
-function normalizeTipoPagamento(v: any): TipoPagamento {
-  const s = String(v ?? "").trim().toLowerCase();
-  return s === "boleto" ? "boleto" : "direto";
 }
 
 export async function GET(req: Request) {
   try {
-    const supabase = supabaseServer();
-
-    // auth
-    const { data: auth, error: authErr } = await supabase.auth.getUser();
-    const user = auth?.user ?? null;
-    if (authErr || !user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-
-    const role = await getUserRole(supabase);
-    if (!role) return NextResponse.json({ error: "Sem role" }, { status: 403 });
-
-    // mais seguro: só interno/gestor
-    if (role !== "interno" && role !== "gestor") {
+    const ctx = await getUserAndRole();
+    if (!ctx.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+    if (!ctx.role || (ctx.role !== "interno" && ctx.role !== "gestor")) {
       return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
     }
 
-    // querystring
     const url = new URL(req.url);
-    const mes = parseMesRef(url.searchParams.get("mes")) || currentMonthISO();
-    const mesPrev = prevMonthISO(mes);
+    const mesParam = (url.searchParams.get("mes") || monthISO()).trim();
 
-    const selectCols = [
-      "mes_ref",
-      "condominio_id",
-      "condominio_nome",
-      "cidade",
-      "uf",
-      "valor_total_pagar",
-      "valor_cashback",
-      "valor_repasse_utilidades",
-      "valor_repasse_agua",
-      "valor_repasse_energia",
-      "valor_repasse_gas",
-      "favorecido_nome",
-      "banco_nome",
-      "banco_agencia",
-      "banco_conta",
-      "banco_pix",
-      "status",
-      "auditoria_id",
-    ].join(",");
-
-    // mês atual
-    const { data: rowsNow, error: errNow } = await supabase
-      .from("vw_relatorio_financeiro")
-      .select(selectCols)
-      .eq("mes_ref", mes)
-      .order("condominio_nome", { ascending: true });
-
-    if (errNow) return NextResponse.json({ error: errNow.message }, { status: 400 });
-
-    // mês anterior (pra %)
-    const { data: rowsPrev, error: errPrev } = await supabase
-      .from("vw_relatorio_financeiro")
-      .select("condominio_id,valor_total_pagar")
-      .eq("mes_ref", mesPrev);
-
-    if (errPrev) return NextResponse.json({ error: errPrev.message }, { status: 400 });
-
-    const prevMap = new Map<string, number>();
-    (rowsPrev ?? []).forEach((r: any) => {
-      prevMap.set(String(r.condominio_id), num(r.valor_total_pagar));
-    });
-
-    // traz tipo_pagamento do cadastro do condomínio (direto/boleto)
-    const condoIds = Array.from(new Set((rowsNow ?? []).map((r: any) => String(r.condominio_id))));
-    const tipoMap = new Map<string, TipoPagamento>();
-
-    if (condoIds.length > 0) {
-      const { data: condos, error: errCondo } = await (supabase.from("condominios") as any)
-        .select("id,tipo_pagamento")
-        .in("id", condoIds);
-
-      if (errCondo) return NextResponse.json({ error: errCondo.message }, { status: 400 });
-
-      (condos ?? []).forEach((c: any) => {
-        tipoMap.set(String(c.id), normalizeTipoPagamento(c?.tipo_pagamento));
-      });
+    if (!/^\d{4}-\d{2}-01$/.test(mesParam)) {
+      return NextResponse.json({ error: "Parâmetro mes inválido. Use YYYY-MM-01" }, { status: 400 });
     }
 
-    const out = (rowsNow ?? []).map((r: any) => {
-      const id = String(r.condominio_id);
-      const totalNow = num(r.valor_total_pagar);
-      const totalPrev = prevMap.get(id) ?? 0;
-      const p = pct(totalNow, totalPrev);
+    // REGRA DO NEGÓCIO:
+    // a tela mostra o "mês corrente" (ex: Jan/2026), mas o relatório financeiro é do MÊS ANTERIOR (ex: Dez/2025)
+    const competenciaMes = mesParam;
+    const mesRefRelatorio = addMonths(competenciaMes, -1);
+    const mesRefPrev = addMonths(competenciaMes, -2);
 
-      const tipo_pagamento: TipoPagamento = tipoMap.get(id) ?? "direto";
+    const admin = supabaseAdmin();
+
+    // 1) Busca principal pela view (quando existir)
+    const { data: rowsNowRaw, error: eNow } = await (admin.from("vw_relatorio_financeiro") as any)
+      .select(
+        [
+          "mes_ref",
+          "condominio_id",
+          "condominio_nome",
+          "cidade",
+          "uf",
+          "valor_total_pagar",
+          "valor_cashback",
+          "valor_repasse_utilidades",
+          "banco_pix",
+          "banco_nome",
+          "banco_agencia",
+          "banco_conta",
+          "tipo_pagamento",
+          "status",
+          "auditoria_id",
+        ].join(",")
+      )
+      .eq("mes_ref", mesRefRelatorio);
+
+    if (eNow) return NextResponse.json({ error: eNow.message }, { status: 400 });
+
+    let rowsNow: Row[] = (rowsNowRaw ?? []) as Row[];
+
+    // 1b) Fallback: se a view vier vazia, ainda assim mostramos os condomínios do mês (com zeros),
+    // para não ficar "tela vazia" enquanto ciclos ainda não foram lançados/fechados.
+    if (!rowsNow.length) {
+      const { data: auds, error: eAuds } = await (admin.from("auditorias") as any)
+        .select(
+          [
+            "id",
+            "status",
+            "condominio_id",
+            "mes_ref",
+            "condominios!inner(id,nome,cidade,uf,banco_pix,banco_nome,banco_agencia,banco_conta,tipo_pagamento)",
+          ].join(",")
+        )
+        .eq("mes_ref", mesRefRelatorio);
+
+      if (eAuds) return NextResponse.json({ error: eAuds.message }, { status: 400 });
+
+      rowsNow =
+        (auds ?? []).map((a: any) => ({
+          mes_ref: a.mes_ref ?? mesRefRelatorio,
+          condominio_id: a.condominio_id,
+          condominio_nome: a.condominios?.nome ?? null,
+          cidade: a.condominios?.cidade ?? null,
+          uf: a.condominios?.uf ?? null,
+          valor_total_pagar: 0,
+          valor_cashback: 0,
+          valor_repasse_utilidades: 0,
+          banco_pix: a.condominios?.banco_pix ?? null,
+          banco_nome: a.condominios?.banco_nome ?? null,
+          banco_agencia: a.condominios?.banco_agencia ?? null,
+          banco_conta: a.condominios?.banco_conta ?? null,
+          tipo_pagamento: (a.condominios?.tipo_pagamento ?? null) as any,
+          status: a.status ?? null,
+          auditoria_id: a.id ?? null,
+        })) as Row[];
+    }
+
+    // 2) Mês anterior (para %)
+    const { data: rowsPrevRaw, error: ePrev } = await (admin.from("vw_relatorio_financeiro") as any)
+      .select("condominio_id,valor_total_pagar,valor_cashback,valor_repasse_utilidades")
+      .eq("mes_ref", mesRefPrev);
+
+    if (ePrev) return NextResponse.json({ error: ePrev.message }, { status: 400 });
+
+    const prevByCondo = new Map<string, any>();
+    for (const r of (rowsPrevRaw ?? []) as any[]) prevByCondo.set(r.condominio_id, r);
+
+    // 3) Enriquecimento % por condomínio
+    rowsNow = rowsNow.map((r) => {
+      const prev = prevByCondo.get(r.condominio_id);
+      const nowTot = n(r.valor_total_pagar);
+      const nowCb = n(r.valor_cashback);
+      const nowRep = n(r.valor_repasse_utilidades);
+
+      const prevTot = n(prev?.valor_total_pagar);
+      const prevCb = n(prev?.valor_cashback);
+      const prevRep = n(prev?.valor_repasse_utilidades);
 
       return {
         ...r,
-        // NOVO (pro frontend)
-        tipo_pagamento, // "direto" | "boleto"
-
-        // compat (se algum lugar ainda usa isso)
-        pagamento_metodo: tipo_pagamento,
-
-        // mantém o que já existia aqui (não quebra)
-        variacao_total_pct: p,
-        variacao_total_delta: totalNow - (prevMap.get(id) ?? 0),
-        mes_ref_prev: mesPrev,
+        pct_valor_total_pagar: pct(nowTot, prevTot),
+        pct_valor_cashback: pct(nowCb, prevCb),
+        pct_valor_repasse_utilidades: pct(nowRep, prevRep),
       };
     });
 
+    // 4) Totais
+    const totalsNow = rowsNow.reduce(
+      (acc, r) => {
+        acc.valor_cashback += n(r.valor_cashback);
+        acc.valor_repasse_utilidades += n(r.valor_repasse_utilidades);
+        acc.valor_total_pagar += n(r.valor_total_pagar);
+        return acc;
+      },
+      { valor_cashback: 0, valor_repasse_utilidades: 0, valor_total_pagar: 0 }
+    );
+
+    const totalsPrev = ((rowsPrevRaw ?? []) as any[]).reduce(
+      (acc, r) => {
+        acc.valor_cashback += n(r.valor_cashback);
+        acc.valor_repasse_utilidades += n(r.valor_repasse_utilidades);
+        acc.valor_total_pagar += n(r.valor_total_pagar);
+        return acc;
+      },
+      { valor_cashback: 0, valor_repasse_utilidades: 0, valor_total_pagar: 0 }
+    );
+
+    const totals = {
+      now: totalsNow,
+      pct: {
+        valor_cashback: pct(totalsNow.valor_cashback, totalsPrev.valor_cashback),
+        valor_repasse_utilidades: pct(totalsNow.valor_repasse_utilidades, totalsPrev.valor_repasse_utilidades),
+        valor_total_pagar: pct(totalsNow.valor_total_pagar, totalsPrev.valor_total_pagar),
+      },
+    };
+
     return NextResponse.json({
       ok: true,
-      mes_ref: mes,
-      mes_ref_prev: mesPrev,
-      rows: out,
+      competencia_mes_ref: competenciaMes, // o mês que o usuário está "selecionando" na UI
+      mes_ref: mesRefRelatorio, // o mês REAL do relatório (mês anterior)
+      mes_ref_prev: mesRefPrev,
+      rows: rowsNow,
+      totals,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
