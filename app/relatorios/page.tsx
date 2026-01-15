@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { AppShell } from "@/app/components/AppShell";
+
+type TipoPagamento = "direto" | "boleto";
 
 type Row = {
   mes_ref: string | null;
@@ -23,6 +25,9 @@ type Row = {
   banco_nome: string | null;
   banco_agencia: string | null;
   banco_conta: string | null;
+
+  // NOVO (se vier do backend)
+  tipo_pagamento?: TipoPagamento | null;
 
   status: string | null;
   auditoria_id: string | null;
@@ -82,6 +87,50 @@ async function fetchJSON(url: string) {
   return json;
 }
 
+function normalizeTipoPagamento(v: any): TipoPagamento | null {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (!s) return null;
+  return s === "boleto" ? "boleto" : "direto";
+}
+
+function renderPagamento(r: Row) {
+  const tp = normalizeTipoPagamento((r as any).tipo_pagamento);
+
+  // Se o backend ainda não manda tipo_pagamento, mantém o comportamento antigo
+  if (!tp) {
+    return <span className="text-xs text-gray-500">{r.banco_pix ? "PIX" : r.banco_nome ?? "—"}</span>;
+  }
+
+  if (tp === "boleto") {
+    return <span className="text-xs font-semibold">Pagamento via boleto</span>;
+  }
+
+  // direto: mostrar dados bancários / PIX
+  if (r.banco_pix) {
+    return (
+      <div className="text-xs">
+        <div className="font-semibold">PIX</div>
+        <div className="text-gray-500 truncate" title={r.banco_pix}>
+          {r.banco_pix}
+        </div>
+      </div>
+    );
+  }
+
+  const banco = r.banco_nome ?? "Banco";
+  const ag = r.banco_agencia ? `Ag ${r.banco_agencia}` : "";
+  const cc = r.banco_conta ? `C/C ${r.banco_conta}` : "";
+
+  return (
+    <div className="text-xs">
+      <div className="font-semibold">{banco}</div>
+      <div className="text-gray-500">
+        {[ag, cc].filter(Boolean).join(" • ") || "—"}
+      </div>
+    </div>
+  );
+}
+
 export default function RelatoriosPage() {
   const [mes, setMes] = useState(() => monthISO());
   const [rows, setRows] = useState<Row[]>([]);
@@ -116,9 +165,15 @@ export default function RelatoriosPage() {
           </div>
 
           <div className="flex gap-2">
-            <button className="btn" onClick={() => setMes(addMonths(mes, -1))}>← {labelMes(addMonths(mes, -1))}</button>
-            <button className="btn" onClick={() => carregar(mes)}>Recarregar</button>
-            <button className="btn" onClick={() => setMes(addMonths(mes, 1))}>{labelMes(addMonths(mes, 1))} →</button>
+            <button className="btn" onClick={() => setMes(addMonths(mes, -1))}>
+              ← {labelMes(addMonths(mes, -1))}
+            </button>
+            <button className="btn" onClick={() => carregar(mes)}>
+              Recarregar
+            </button>
+            <button className="btn" onClick={() => setMes(addMonths(mes, 1))}>
+              {labelMes(addMonths(mes, 1))} →
+            </button>
           </div>
         </div>
 
@@ -152,7 +207,7 @@ export default function RelatoriosPage() {
             <div className="col-span-2">Cashback</div>
             <div className="col-span-2">Repasse</div>
             <div className="col-span-2">Total</div>
-            <div className="col-span-1">Banco</div>
+            <div className="col-span-1">Pagamento</div>
           </div>
 
           {rows.map((r, i) => (
@@ -179,9 +234,7 @@ export default function RelatoriosPage() {
                 {pctBadge(r.pct_valor_total_pagar)}
               </div>
 
-              <div className="col-span-1 text-xs text-gray-500">
-                {r.banco_pix ? "PIX" : r.banco_nome ?? "—"}
-              </div>
+              <div className="col-span-1">{renderPagamento(r)}</div>
             </div>
           ))}
         </div>

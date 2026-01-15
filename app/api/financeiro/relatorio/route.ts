@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 
 type Role = "auditor" | "interno" | "gestor";
+type TipoPagamento = "direto" | "boleto";
 
 async function getUserRole(supabase: ReturnType<typeof supabaseServer>): Promise<Role | null> {
   const { data: auth, error: authErr } = await supabase.auth.getUser();
@@ -47,6 +48,11 @@ function pct(now: number, prev: number): number | null {
   if (!Number.isFinite(now) || !Number.isFinite(prev)) return null;
   if (prev === 0) return null; // evita infinito; financeiro entende como "sem base"
   return ((now - prev) / prev) * 100;
+}
+
+function normalizeTipoPagamento(v: any): TipoPagamento {
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "boleto" ? "boleto" : "direto";
 }
 
 export async function GET(req: Request) {
@@ -114,16 +120,19 @@ export async function GET(req: Request) {
       prevMap.set(String(r.condominio_id), num(r.valor_total_pagar));
     });
 
-    // traz método de pagamento do cadastro do condomínio (direto/boleto)
+    // traz tipo_pagamento do cadastro do condomínio (direto/boleto)
     const condoIds = Array.from(new Set((rowsNow ?? []).map((r: any) => String(r.condominio_id))));
-    let metodoMap = new Map<string, string>();
+    const tipoMap = new Map<string, TipoPagamento>();
+
     if (condoIds.length > 0) {
-      const { data: condos } = await (supabase.from("condominios") as any)
-        .select("id,pagamento_metodo")
+      const { data: condos, error: errCondo } = await (supabase.from("condominios") as any)
+        .select("id,tipo_pagamento")
         .in("id", condoIds);
 
+      if (errCondo) return NextResponse.json({ error: errCondo.message }, { status: 400 });
+
       (condos ?? []).forEach((c: any) => {
-        metodoMap.set(String(c.id), String(c.pagamento_metodo ?? "direto").trim().toLowerCase() || "direto");
+        tipoMap.set(String(c.id), normalizeTipoPagamento(c?.tipo_pagamento));
       });
     }
 
@@ -133,13 +142,19 @@ export async function GET(req: Request) {
       const totalPrev = prevMap.get(id) ?? 0;
       const p = pct(totalNow, totalPrev);
 
-      const pagamento_metodo = metodoMap.get(id) ?? "direto";
+      const tipo_pagamento: TipoPagamento = tipoMap.get(id) ?? "direto";
 
       return {
         ...r,
-        pagamento_metodo,                 // "direto" | "boleto"
-        variacao_total_pct: p,            // número (ex: -12.34) ou null se sem base
-        variacao_total_delta: totalNow - (prevMap.get(id) ?? 0), // delta opcional (se quiser exibir)
+        // NOVO (pro frontend)
+        tipo_pagamento, // "direto" | "boleto"
+
+        // compat (se algum lugar ainda usa isso)
+        pagamento_metodo: tipo_pagamento,
+
+        // mantém o que já existia aqui (não quebra)
+        variacao_total_pct: p,
+        variacao_total_delta: totalNow - (prevMap.get(id) ?? 0),
         mes_ref_prev: mesPrev,
       };
     });
