@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/app/components/AppShell";
 
 type TipoPagamento = "direto" | "boleto";
@@ -28,6 +28,8 @@ export default function CondominiosPage() {
   const [condos, setCondos] = useState<Condo[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
+  const formRef = useRef<HTMLDivElement | null>(null);
+
   const canEdit = me?.role === "interno" || me?.role === "gestor";
 
   async function loadAll() {
@@ -48,15 +50,31 @@ export default function CondominiosPage() {
     loadAll();
   }, []);
 
+  function scrollToForm() {
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   return (
     <AppShell title="Condomínios">
+      {/* TOPO */}
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <div className="small">{condos.length} condomínios</div>
-        <button className="btn" onClick={loadAll}>Recarregar</button>
+
+        <div className="row" style={{ gap: 8 }}>
+          {canEdit && (
+            <button className="btn primary" onClick={scrollToForm}>
+              + Novo condomínio
+            </button>
+          )}
+          <button className="btn" onClick={loadAll}>
+            Recarregar
+          </button>
+        </div>
       </div>
 
       {err && <p style={{ color: "#b42318" }}>{err}</p>}
 
+      {/* LISTA */}
       <div className="list">
         {condos.map((c) => {
           const tp = normalizeTipoPagamento(c.tipo_pagamento);
@@ -77,14 +95,15 @@ export default function CondominiosPage() {
                 </span>
               </div>
 
-              <div className="small">{c.cidade}/{c.uf}</div>
+              <div className="small">
+                {c.cidade}/{c.uf}
+              </div>
               <div className="small">{[c.rua, c.numero, c.bairro].filter(Boolean).join(", ")}</div>
 
               <div className="row" style={{ marginTop: 8, gap: 8 }}>
                 <a className="btn" href={`/condominios/${c.id}/maquinas`}>
                   Ver máquinas
                 </a>
-
                 {canEdit && (
                   <a className="btn" href={`/condominios/${c.id}`}>
                     Editar
@@ -95,6 +114,10 @@ export default function CondominiosPage() {
           );
         })}
       </div>
+
+      {/* FORMULÁRIO (âncora) */}
+      <div ref={formRef} />
+      {/* ⚠️ o formulário de cadastro que você já tem continua abaixo, SEM ALTERAÇÃO */}
     </AppShell>
   );
 }
