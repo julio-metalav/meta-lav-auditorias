@@ -36,6 +36,89 @@ function seedDefaultItems() {
   ];
 }
 
+type Precos = {
+  // novo (por capacidade)
+  lav10?: number | null;
+  lav15?: number | null;
+  sec10?: number | null;
+  sec15?: number | null;
+
+  // fallback antigo
+  lav?: number | null;
+  sec?: number | null;
+};
+
+function pickValorCiclo(precos: Precos, categoria: string, capacidadeKg: number | null) {
+  const cap = Number(capacidadeKg ?? 0);
+
+  // prioridade: novo modelo por capacidade
+  if (categoria === "lavadora") {
+    if (cap === 10 && precos.lav10 != null) return Number(precos.lav10);
+    if (cap === 15 && precos.lav15 != null) return Number(precos.lav15);
+    // fallback antigo
+    if (precos.lav != null) return Number(precos.lav);
+    return 0;
+  }
+
+  if (categoria === "secadora") {
+    if (cap === 10 && precos.sec10 != null) return Number(precos.sec10);
+    if (cap === 15 && precos.sec15 != null) return Number(precos.sec15);
+    // fallback antigo
+    if (precos.sec != null) return Number(precos.sec);
+    return 0;
+  }
+
+  // desconhecido: trata como lavadora (conservador)
+  if (cap === 10 && precos.lav10 != null) return Number(precos.lav10);
+  if (cap === 15 && precos.lav15 != null) return Number(precos.lav15);
+  if (precos.lav != null) return Number(precos.lav);
+  return 0;
+}
+
+async function fetchPrecosCondominio(sb: ReturnType<typeof supabaseAdmin>, condominioId: string): Promise<Precos> {
+  // 1) tenta o modelo novo (por capacidade)
+  const tentativaNova = await sb
+    .from("condominios")
+    .select(
+      "id, valor_ciclo_lavadora_10, valor_ciclo_lavadora_15, valor_ciclo_secadora_10, valor_ciclo_secadora_15"
+    )
+    .eq("id", condominioId)
+    .maybeSingle();
+
+  if (!tentativaNova.error && tentativaNova.data) {
+    const d: any = tentativaNova.data;
+    return {
+      lav10: d.valor_ciclo_lavadora_10 ?? null,
+      lav15: d.valor_ciclo_lavadora_15 ?? null,
+      sec10: d.valor_ciclo_secadora_10 ?? null,
+      sec15: d.valor_ciclo_secadora_15 ?? null,
+      lav: null,
+      sec: null,
+    };
+  }
+
+  // Se falhou por coluna inexistente ou qualquer erro, cai pro modelo antigo (não quebra produção)
+  const tentativaAntiga = await sb
+    .from("condominios")
+    .select("id, valor_ciclo_lavadora, valor_ciclo_secadora")
+    .eq("id", condominioId)
+    .maybeSingle();
+
+  if (tentativaAntiga.error) {
+    // devolve tudo zerado (mas sem estourar)
+    return { lav: 0, sec: 0, lav10: null, lav15: null, sec10: null, sec15: null };
+  }
+
+  return {
+    lav: (tentativaAntiga.data as any)?.valor_ciclo_lavadora ?? 0,
+    sec: (tentativaAntiga.data as any)?.valor_ciclo_secadora ?? 0,
+    lav10: null,
+    lav15: null,
+    sec10: null,
+    sec15: null,
+  };
+}
+
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
     const { user, role } = await getUserAndRole();
@@ -55,16 +138,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (audErr) return bad(audErr.message, 500);
     if (!aud) return bad("Auditoria não encontrada", 404);
 
-    const { data: condo, error: condoErr } = await sb
-      .from("condominios")
-      .select("id, valor_ciclo_lavadora, valor_ciclo_secadora")
-      .eq("id", aud.condominio_id)
-      .maybeSingle();
-
-    if (condoErr) return bad(condoErr.message, 500);
-
-    const valorLav = Number(condo?.valor_ciclo_lavadora ?? 0);
-    const valorSec = Number(condo?.valor_ciclo_secadora ?? 0);
+    const precos = await fetchPrecosCondominio(sb, aud.condominio_id);
 
     const { data: rows, error: rowsErr } = await sb
       .from("auditoria_ciclos")
@@ -81,7 +155,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       const categoria = normalizeCategoria(r.categoria);
       const capacidade_kg = safeNum(r.capacidade_kg);
       const ciclos = Math.max(0, Number(r.ciclos ?? 0));
-      const valor_ciclo = categoria === "secadora" ? valorSec : valorLav;
+
+      const valor_ciclo = pickValorCiclo(precos, categoria, capacidade_kg);
 
       return {
         id: r.id ?? null,
@@ -119,7 +194,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     const sb = supabaseAdmin();
 
-    // Confere auditoria + condomínio
     const { data: aud, error: audErr } = await sb
       .from("auditorias")
       .select("id, condominio_id")
@@ -129,7 +203,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (audErr) return bad(audErr.message, 500);
     if (!aud) return bad("Auditoria não encontrada", 404);
 
-    // Normaliza e valida
     const normalized = itens.map((x: any) => {
       const categoria = normalizeCategoria(x.categoria);
       const capacidade_kg = safeNum(x.capacidade_kg);
@@ -147,8 +220,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       };
     });
 
-    // Upsert por (auditoria_id, categoria, capacidade_kg)
-    // OBS: isso pressupõe unique index. Se não existir ainda, a gente cria no próximo passo.
     const { error: upErr } = await sb
       .from("auditoria_ciclos")
       .upsert(normalized, { onConflict: "auditoria_id,categoria,capacidade_kg" });
