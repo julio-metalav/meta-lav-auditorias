@@ -48,7 +48,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     // 1) tenta carregar do fechamento (tabela correta pro financeiro)
     const { data: itens, error: errItens } = await (supabase.from("auditoria_fechamento_itens") as any)
-      .select("id,auditoria_id,condominio_maquina_id,ciclos,valor_total,observacao,created_at")
+      .select("id,auditoria_id,condominio_maquina_id,ciclos,valor_total,created_at")
       .eq("auditoria_id", auditoriaId)
       .order("created_at", { ascending: true });
 
@@ -58,7 +58,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ ok: true, source: "auditoria_fechamento_itens", itens });
     }
 
-    // 2) fallback: legado (não dá valor, mas evita tela vazia se tiver algo antigo)
+    // 2) fallback: legado
     const { data: ciclosLegado, error: errLeg } = await (supabase.from("auditoria_ciclos") as any)
       .select("id,auditoria_id,categoria,capacidade_kg,ciclos,created_at")
       .eq("auditoria_id", auditoriaId)
@@ -78,7 +78,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
  *
  * Espera receber algo como:
  * { itens: [{ condominio_maquina_id: "...", ciclos: 10 }, ...] }
- * (aceita também items/array direto)
  */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {
@@ -110,19 +109,15 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       const ciclos = Number(it?.ciclos ?? 0);
       const condominio_maquina_id = it?.condominio_maquina_id ?? it?.maquina_id ?? null;
 
-      // opcional (se existir no seu schema)
+      // opcional (se existir no schema)
       const valor_total =
         it?.valor_total === null || it?.valor_total === undefined ? null : Number(it.valor_total);
-
-      // opcional
-      const observacao = it?.observacao ?? it?.obs ?? null;
 
       return {
         auditoria_id: auditoriaId,
         condominio_maquina_id,
         ciclos: Number.isFinite(ciclos) ? ciclos : 0,
         valor_total: Number.isFinite(valor_total as any) ? valor_total : null,
-        observacao,
       };
     });
 
