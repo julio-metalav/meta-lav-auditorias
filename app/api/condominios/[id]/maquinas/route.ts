@@ -1,161 +1,176 @@
+// app/api/condominios/[id]/maquinas/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/auth-helpers-nextjs";
+import { getUserAndRole, roleGte } from "@/lib/auth";
 
 type Role = "auditor" | "interno" | "gestor";
 
-function supabaseServer() {
-  const cookieStore = cookies();
-
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-  if (!url || !anon) {
-    throw new Error("Faltam envs NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  }
-
-  return createServerClient(url, anon, {
-    cookies: {
-      get(name: string) {
-        return cookieStore.get(name)?.value;
-      },
-      set(name: string, value: string, options: any) {
-        cookieStore.set({ name, value, ...options });
-      },
-      remove(name: string, options: any) {
-        cookieStore.set({ name, value: "", ...options });
-      },
-    },
-  });
+function mustId(params: any) {
+  const id = String(params?.id ?? "").trim();
+  if (!id) throw new Error("ID do condomínio ausente.");
+  return id;
 }
 
-async function getUserRole(supabase: any): Promise<Role | null> {
-  const { data: auth, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !auth?.user) return null;
-
-  const { data: prof, error: profErr } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", auth.user.id)
-    .single();
-
-  if (profErr) return null;
-  return (prof?.role ?? null) as Role | null;
+function numOrNull(v: any): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
 }
 
-function roleGte(role: Role | null, min: Exclude<Role, "auditor">): boolean {
-  const w: Record<Role, number> = { auditor: 1, interno: 2, gestor: 3 };
-  if (!role) return false;
-  return (w[role] ?? 0) >= (w[min] ?? 0);
-}
-
-function parseMoneyAny(v: any): number {
-  if (v === null || v === undefined) return 0;
-  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
-
-  const s = String(v).trim();
-  if (!s) return 0;
-
-  // aceita "16,50" e "16.50" e "1.234,56"
-  const cleaned = s.replace(/\s/g, "").replace(/^R\$/i, "");
-  const normalized = cleaned.includes(",")
-    ? cleaned.replace(/\./g, "").replace(",", ".")
-    : cleaned;
-
-  const n = Number(normalized);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function parsePositiveInt(v: any, fallback: number) {
-  const n = Number(v);
+function intOr(v: any, fallback: number) {
+  const n = Number(String(v ?? "").replace(/[^\d-]/g, ""));
   if (!Number.isFinite(n)) return fallback;
-  const i = Math.trunc(n);
-  return i > 0 ? i : fallback;
+  return Math.max(0, Math.trunc(n));
 }
 
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  try {
-    const supabase = supabaseServer();
-    const condominioId = params.id;
+function normCategoria(v: any): "lavadora" | "secadora" {
+  const s = String(v ?? "lavadora").trim().toLowerCase();
+  return s === "secadora" ? "secadora" : "lavadora";
+}
 
-    const { data, error } = await supabase
+function makeTag(prefix: "LAV" | "SEC", n: number) {
+  return `${prefix}-${String(n).padStart(2, "0")}`;
+}
+
+function parseTagNumber(tag: string): number | null {
+  // aceita LAV-01, LAV-1, SEC-12
+  const m = String(tag ?? "").trim().match(/-(\d{1,4})$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * GET: lista máquinas do condomínio
+ */
+export async function GET(_req: Request, { params }: { params: { id: string } }) {
+  const ctx = await getUserAndRole();
+  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+
+ const role = ctx.role as Role | null;
+
+if (!role || !roleGte(role, "auditor")) {
+  return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+}
+
+
+  try {
+    const condominioId = mustId(params);
+
+    const { data, error } = await ctx.supabase
       .from("condominio_maquinas")
-      .select(
-        "id, condominio_id, categoria, capacidade_kg, quantidade, valor_ciclo, limpeza_quimica_ciclos, limpeza_mecanica_ciclos, created_at, updated_at"
-      )
+      .select("id,condominio_id,categoria,maquina_tag,capacidade_kg,valor_ciclo,limpeza_quimica_ciclos,limpeza_mecanica_ciclos,created_at")
       .eq("condominio_id", condominioId)
       .order("categoria", { ascending: true })
-      .order("capacidade_kg", { ascending: true });
+      .order("maquina_tag", { ascending: true });
 
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-    return NextResponse.json({ maquinas: data ?? [] });
+    return NextResponse.json({ ok: true, data: data ?? [] });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
 }
 
+/**
+ * POST: replace das máquinas do condomínio
+ *
+ * Aceita:
+ * - array de "tipos", com quantidade (tela atual manda assim)
+ *   [{categoria, capacidade_kg, quantidade, valor_ciclo, limpeza_quimica_ciclos, limpeza_mecanica_ciclos}]
+ *
+ * Regra:
+ * - se vier sem maquina_tag (normal no cadastro), o backend gera:
+ *   LAV-01.. e SEC-01.., respeitando quantidade
+ */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
+  const ctx = await getUserAndRole();
+  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+
+  const role = ctx.role as Role | null;
+
+if (!role || !roleGte(role, "auditor")) {
+  return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+}
+
+
   try {
-    const supabase = supabaseServer();
-    const role = await getUserRole(supabase);
+    const condominioId = mustId(params);
+    const body = await req.json().catch(() => null);
 
-    if (!roleGte(role, "interno")) {
-      return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+    if (!Array.isArray(body)) {
+      return NextResponse.json({ error: "Body deve ser um array de máquinas." }, { status: 400 });
     }
 
-    const condominioId = params.id;
-    const body = await req.json();
-    const items = Array.isArray(body) ? body : [body];
-
-    const payload = items.map((it: any) => ({
-      condominio_id: condominioId,
-      categoria: String(it.categoria ?? "").trim(),
-      capacidade_kg:
-        it.capacidade_kg === null || it.capacidade_kg === undefined
-          ? null
-          : Number(it.capacidade_kg),
-      quantidade:
-        it.quantidade === null || it.quantidade === undefined
-          ? 0
-          : Number(it.quantidade),
-      valor_ciclo: parseMoneyAny(it.valor_ciclo),
-
-      // ✅ novos campos (defaults se vier vazio)
-      limpeza_quimica_ciclos: parsePositiveInt(it.limpeza_quimica_ciclos, 500),
-      limpeza_mecanica_ciclos: parsePositiveInt(it.limpeza_mecanica_ciclos, 2000),
-    }));
-
-    for (const p of payload) {
-      if (!p.categoria) {
-        return NextResponse.json({ error: "categoria é obrigatória" }, { status: 400 });
-      }
-      if (p.capacidade_kg !== null && Number.isNaN(p.capacidade_kg)) {
-        return NextResponse.json({ error: "capacidade_kg inválida" }, { status: 400 });
-      }
-      if (Number.isNaN(p.quantidade) || p.quantidade < 0) {
-        return NextResponse.json({ error: "quantidade inválida" }, { status: 400 });
-      }
-      if (Number.isNaN(p.valor_ciclo) || p.valor_ciclo < 0) {
-        return NextResponse.json({ error: "valor_ciclo inválido" }, { status: 400 });
-      }
-      if (!Number.isFinite(p.limpeza_quimica_ciclos) || p.limpeza_quimica_ciclos <= 0) {
-        return NextResponse.json({ error: "limpeza_quimica_ciclos inválido" }, { status: 400 });
-      }
-      if (!Number.isFinite(p.limpeza_mecanica_ciclos) || p.limpeza_mecanica_ciclos <= 0) {
-        return NextResponse.json({ error: "limpeza_mecanica_ciclos inválido" }, { status: 400 });
-      }
-    }
-
-    const { data, error } = await supabase
+    // 1) busca o que já existe (pra gerar sequência estável)
+    const { data: existing, error: e1 } = await ctx.supabase
       .from("condominio_maquinas")
-      .upsert(payload, { onConflict: "condominio_id,categoria,capacidade_kg" })
-      .select(
-        "id, condominio_id, categoria, capacidade_kg, quantidade, valor_ciclo, limpeza_quimica_ciclos, limpeza_mecanica_ciclos"
-      );
+      .select("id,categoria,maquina_tag")
+      .eq("condominio_id", condominioId);
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (e1) return NextResponse.json({ error: e1.message }, { status: 400 });
 
-    return NextResponse.json({ ok: true, maquinas: data ?? [] });
+    let maxLav = 0;
+    let maxSec = 0;
+
+    (existing ?? []).forEach((r: any) => {
+      const cat = normCategoria(r?.categoria);
+      const n = parseTagNumber(String(r?.maquina_tag ?? ""));
+      if (!n) return;
+      if (cat === "lavadora") maxLav = Math.max(maxLav, n);
+      if (cat === "secadora") maxSec = Math.max(maxSec, n);
+    });
+
+    // 2) monta rows (expande quantidade)
+    const rows: any[] = [];
+    let nextLav = maxLav + 1;
+    let nextSec = maxSec + 1;
+
+    for (const item of body) {
+      const categoria = normCategoria(item?.categoria);
+      const qtd = Math.max(0, intOr(item?.quantidade, 0));
+      if (qtd <= 0) continue; // se usuário deixou 0, ignora
+
+      const capacidade_kg = numOrNull(item?.capacidade_kg);
+      const valor_ciclo = numOrNull(item?.valor_ciclo);
+      const limpeza_quimica_ciclos = Math.max(1, intOr(item?.limpeza_quimica_ciclos, 500));
+      const limpeza_mecanica_ciclos = Math.max(1, intOr(item?.limpeza_mecanica_ciclos, 2000));
+
+      for (let i = 0; i < qtd; i++) {
+        const tag =
+          categoria === "lavadora"
+            ? makeTag("LAV", nextLav++)
+            : makeTag("SEC", nextSec++);
+
+        rows.push({
+          condominio_id: condominioId,
+          categoria,
+          maquina_tag: tag,
+          capacidade_kg,
+          valor_ciclo,
+          limpeza_quimica_ciclos,
+          limpeza_mecanica_ciclos,
+        });
+      }
+    }
+
+    if (!rows.length) {
+      return NextResponse.json({ error: "Nenhuma máquina válida para salvar (quantidade > 0)." }, { status: 400 });
+    }
+
+    // 3) replace (delete + insert)
+    const { error: eDel } = await ctx.supabase.from("condominio_maquinas").delete().eq("condominio_id", condominioId);
+    if (eDel) return NextResponse.json({ error: eDel.message }, { status: 400 });
+
+    const { data: saved, error: eIns } = await ctx.supabase
+      .from("condominio_maquinas")
+      .insert(rows)
+      .select("id,condominio_id,categoria,maquina_tag,capacidade_kg,valor_ciclo,limpeza_quimica_ciclos,limpeza_mecanica_ciclos");
+
+    if (eIns) return NextResponse.json({ error: eIns.message }, { status: 400 });
+
+    return NextResponse.json({ ok: true, data: saved ?? [] });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
