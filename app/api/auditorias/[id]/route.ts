@@ -20,7 +20,6 @@ function normalizeMetodo(input: any): "direto" | "boleto" {
 }
 
 async function canAuditorAccessByVinculo(auditorId: string, condominioId: string) {
-  // supabaseAdmin é FUNÇÃO -> precisa chamar supabaseAdmin()
   const sb = supabaseAdmin();
 
   const { data, error } = await sb
@@ -50,7 +49,6 @@ async function fetchCondominioBasics(condominioId: string) {
 function withCompatAliases(aud: any, condominio: any) {
   const pagamento_metodo = normalizeMetodo(condominio?.tipo_pagamento);
 
-  // Compat com telas antigas que esperam base_agua/base_energia/base_gas
   const base_agua = aud?.agua_leitura_base ?? null;
   const base_energia = aud?.energia_leitura_base ?? null;
   const base_gas = aud?.gas_leitura_base ?? null;
@@ -105,21 +103,24 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (audErr) return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
     if (!aud) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
+    // ✅ TS FIX: força o shape como "any" para não cair em GenericStringError
+    const audRow: any = aud;
+
     const isManager = roleGte(role, "interno");
-    const isOwnerAuditor = !!aud.auditor_id && aud.auditor_id === user.id;
-    const isVinculado = await canAuditorAccessByVinculo(user.id, aud.condominio_id);
+    const isOwnerAuditor = !!audRow.auditor_id && audRow.auditor_id === user.id;
+    const isVinculado = await canAuditorAccessByVinculo(user.id, audRow.condominio_id);
 
     if (!isManager && !isOwnerAuditor && !isVinculado) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
-    const { condominio, error: condoErr } = await fetchCondominioBasics(aud.condominio_id);
+    const { condominio, error: condoErr } = await fetchCondominioBasics(audRow.condominio_id);
     if (condoErr) {
-      const payload = withCompatAliases(aud, null);
+      const payload = withCompatAliases(audRow, null);
       return NextResponse.json({ ok: true, data: payload, auditoria: payload }, { status: 200 });
     }
 
-    const payload = withCompatAliases(aud, condominio);
+    const payload = withCompatAliases(audRow, condominio);
     return NextResponse.json({ ok: true, data: payload, auditoria: payload }, { status: 200 });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? "server_error" }, { status: 500 });
@@ -144,9 +145,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (audErr) return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
     if (!aud) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
+    // ✅ TS FIX
+    const audRow: any = aud;
+
     const isManager = roleGte(role, "interno");
-    const isOwnerAuditor = !!aud.auditor_id && aud.auditor_id === user.id;
-    const isVinculado = await canAuditorAccessByVinculo(user.id, aud.condominio_id);
+    const isOwnerAuditor = !!audRow.auditor_id && audRow.auditor_id === user.id;
+    const isVinculado = await canAuditorAccessByVinculo(user.id, audRow.condominio_id);
 
     if (!isManager && !isOwnerAuditor && !isVinculado) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
@@ -178,10 +182,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       else patch.status = s;
     }
 
-    // Auditor não finaliza direto
     if (!isManager && patch.status === "final") delete patch.status;
-
-    // Auditor só pode mandar em_conferencia (ou não mandar status)
     if (!isManager && patch.status && patch.status !== "em_conferencia") delete patch.status;
 
     const { data: saved, error: saveErr } = await sb
@@ -217,8 +218,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     if (saveErr) return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
 
-    const { condominio } = await fetchCondominioBasics(saved!.condominio_id);
-    const payload = withCompatAliases(saved, condominio);
+    const { condominio } = await fetchCondominioBasics((saved as any)!.condominio_id);
+    const payload = withCompatAliases(saved as any, condominio);
 
     return NextResponse.json({ ok: true, data: payload, auditoria: payload }, { status: 200 });
   } catch (e: any) {
