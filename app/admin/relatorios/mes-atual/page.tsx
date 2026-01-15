@@ -48,7 +48,7 @@ export default function RelatoriosMesAtualPage() {
     try {
       const meRes = await fetch("/api/me", { cache: "no-store" }).then((r) => r.json());
       if (!meRes?.user) {
-        router.push("/login?next=/admin/relatorios");
+        router.push("/login?next=/admin/relatorios/mes-atual");
         return;
       }
       setMe(meRes);
@@ -93,16 +93,12 @@ export default function RelatoriosMesAtualPage() {
 
   return (
     <AppShell>
-  <div className="mx-auto max-w-5xl space-y-4">
-    <h1 className="text-2xl font-bold">Relatórios (mês atual)</h1>
-    ...
-
       <div className="mx-auto max-w-5xl space-y-4">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-semibold">Relatório do mês atual</h1>
+            <h1 className="text-xl font-semibold">Relatórios (mês atual)</h1>
             <p className="text-sm text-muted-foreground">
-              Visão gerencial rápida (Operação). Mês: <span className="font-mono">{rep?.mes_ref ?? "—"}</span>
+              Visão operacional. Mês: <span className="font-mono">{rep?.mes_ref ?? "—"}</span>
             </p>
           </div>
 
