@@ -14,33 +14,39 @@ function roleGte(role: Role | null, min: Role) {
 }
 
 function normalizePath(p: string) {
-  // remove trailing slash (exceto "/")
-  if (p.length > 1 && p.endsWith("/")) return p.slice(0, -1);
-  return p;
+  if (!p) return "/";
+  const clean = p.split("?")[0].split("#")[0];
+  if (clean === "") return "/";
+  // normaliza /auditor/auditoria/[id] como /auditor/auditoria
+  if (clean.startsWith("/auditor/auditoria/")) return "/auditor/auditoria";
+  // normaliza /condominios/[id]/maquinas como /condominios
+  if (clean.includes("/condominios/") && clean.endsWith("/maquinas")) return "/condominios";
+  return clean;
 }
 
-export function AppShell({ title, children }: { title: string; children: React.ReactNode }) {
-  const pathnameRaw = usePathname() ?? "/";
-  const pathname = normalizePath(pathnameRaw);
-
+export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [me, setMe] = useState<Me | null>(null);
-  const [meLoading, setMeLoading] = useState(true);
-
-  async function loadMe() {
-    setMeLoading(true);
-    try {
-      const r = await fetch("/api/me", { cache: "no-store" });
-      const j = await r.json().catch(() => null);
-      if (r.ok && j) setMe(j);
-    } catch {
-      // silencioso
-    } finally {
-      setMeLoading(false);
-    }
-  }
 
   useEffect(() => {
+    let alive = true;
+
+    async function loadMe() {
+      try {
+        const res = await fetch("/api/me", { cache: "no-store" });
+        if (!res.ok) return;
+        const j = await res.json();
+        if (!alive) return;
+        if (j?.user?.id) setMe(j as Me);
+      } catch {
+        // ignore
+      }
+    }
+
     loadMe();
+    return () => {
+      alive = false;
+    };
   }, []);
 
   async function sair() {
@@ -61,100 +67,124 @@ export function AppShell({ title, children }: { title: string; children: React.R
     const extras: { href: string; label: string; minRole: Role }[] = [
       { href: "/condominios", label: "Pontos", minRole: "interno" },
       { href: "/atribuicoes", label: "Atribuições", minRole: "interno" },
-      { href: "/relatorios", label: "Relatórios", minRole: "gestor" },
+
+      // ✅ RELATÓRIOS: interno também precisa (relatório financeiro do mês)
+      { href: "/relatorios", label: "Relatórios", minRole: "interno" },
+
+      // usuários continua só gestor
       { href: "/usuarios", label: "Usuários", minRole: "gestor" },
     ];
 
     if (!role) return base;
 
-    return [...base, ...extras.filter((it) => roleGte(role, it.minRole))];
+    return [...base, ...extras].filter((x) => roleGte(role, x.minRole));
   }, [role]);
 
-  function isActive(href: string) {
-    const h = normalizePath(href);
-    if (h === "/") return pathname === "/";
-    return pathname === h || pathname.startsWith(h + "/");
-  }
+  const active = normalizePath(pathname);
 
   return (
-    <div className="card">
-      <div className="topbar">
+    <div className="shell">
+      <header className="top">
         <div className="brand">
-          <img src="/logo.jpg" alt="Meta Lav" className="logo" />
-          <div>
-            <div className="brandTitle">Meta Lav Auditorias</div>
-            <div className="small">
-              {me?.user?.email ? (
-                <>
-                  <span>Logado como </span>
-                  <b>{me.user.email}</b>
-                  <span> • perfil: </span>
-                  <b>{me.role ?? "—"}</b>
-                </>
-              ) : meLoading ? (
-                "Carregando perfil..."
-              ) : (
-                "Sessão ativa"
-              )}
+          <img src="/logo.png" alt="Meta Lav" className="logo" />
+          <div className="meta">
+            <div className="title">Meta Lav Auditorias</div>
+            <div className="sub">
+              Logado como <b>{me?.user?.email ?? "—"}</b> · perfil: <b>{me?.role ?? "—"}</b>
             </div>
           </div>
         </div>
 
-        <div className="row" style={{ gap: 8 }}>
-          <button className="btn" onClick={sair}>
-            Sair
-          </button>
-        </div>
-      </div>
-
-      {/* NAV mobile-first: pílulas com scroll */}
-      <div className="navWrap">
-        <nav className="navPills" aria-label="Navegação">
+        <nav className="nav">
           {navItems.map((it) => {
-            const active = isActive(it.href);
+            const isActive = active === normalizePath(it.href);
             return (
-              <a key={it.href} className={`pill ${active ? "pillActive" : ""}`} href={it.href} aria-current={active ? "page" : undefined}>
+              <a key={it.href} className={`pill ${isActive ? "pillActive" : ""}`} href={it.href}>
                 {it.label}
               </a>
             );
           })}
         </nav>
-      </div>
 
-      <h1 className="title" style={{ marginTop: 14 }}>
-        {title}
-      </h1>
+        <div className="actions">
+          <button className="btn" onClick={sair}>
+            Sair
+          </button>
+        </div>
+      </header>
 
-      {children}
+      <main className="main">{children}</main>
 
       <style jsx>{`
-        .navWrap {
-          margin-top: 10px;
+        .shell {
+          min-height: 100vh;
+          background: #fafafa;
         }
-        .navPills {
+        .top {
+          display: flex;
+          gap: 16px;
+          align-items: center;
+          justify-content: space-between;
+          padding: 14px 18px;
+          border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+          background: white;
+          position: sticky;
+          top: 0;
+          z-index: 20;
+        }
+        .brand {
+          display: flex;
+          gap: 12px;
+          align-items: center;
+          min-width: 280px;
+        }
+        .logo {
+          width: 44px;
+          height: 44px;
+          object-fit: contain;
+        }
+        .title {
+          font-weight: 800;
+          line-height: 1.1;
+        }
+        .sub {
+          font-size: 12px;
+          color: rgba(0, 0, 0, 0.65);
+        }
+        .nav {
           display: flex;
           gap: 8px;
-          overflow-x: auto;
-          -webkit-overflow-scrolling: touch;
-          padding: 6px 2px;
-          scrollbar-width: none;
+          flex-wrap: wrap;
+          justify-content: center;
+          flex: 1;
         }
-        .navPills::-webkit-scrollbar {
-          display: none;
+        .actions {
+          min-width: 120px;
+          display: flex;
+          justify-content: flex-end;
+        }
+        .btn {
+          border: 1px solid rgba(0, 0, 0, 0.12);
+          background: white;
+          padding: 8px 12px;
+          border-radius: 10px;
+          cursor: pointer;
+        }
+        .main {
+          padding: 18px;
         }
         .pill {
           display: inline-flex;
           align-items: center;
-          white-space: nowrap;
+          gap: 8px;
           padding: 8px 12px;
           border-radius: 999px;
-          border: 1px solid rgba(0, 0, 0, 0.08);
-          background: #fbfcff;
+          border: 1px solid rgba(0, 0, 0, 0.12);
+          background: white;
           text-decoration: none;
-          color: inherit;
-          font-size: 14px;
-          line-height: 1;
-          transition: transform 0.05s ease, background 0.15s ease, border-color 0.15s ease;
+          color: black;
+          font-weight: 600;
+          transition: transform 0.05s ease;
         }
         .pill:active {
           transform: scale(0.98);
