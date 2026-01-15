@@ -92,7 +92,11 @@ export default function RelatoriosMesAtualPage() {
   }, [rep]);
 
   return (
-    <AppShell title="Relatórios (mês atual)">
+    <AppShell>
+  <div className="mx-auto max-w-5xl space-y-4">
+    <h1 className="text-2xl font-bold">Relatórios (mês atual)</h1>
+    ...
+
       <div className="mx-auto max-w-5xl space-y-4">
         <div className="flex items-center justify-between gap-3">
           <div>
