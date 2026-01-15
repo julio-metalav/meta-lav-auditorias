@@ -35,266 +35,194 @@ type Aud = {
   // pode vir junto do backend
   condominios?: { id?: string; nome?: string; cidade?: string; uf?: string } | null;
   condominio?: { id?: string; nome?: string; cidade?: string; uf?: string } | null;
-};
 
-type Condo = {
-  id: string;
-  nome: string;
-  cidade: string;
-  uf: string;
+  // (opcional) se o backend resolver mandar preços aqui no futuro, a UI já aproveita
+  valor_ciclo_lavadora_10?: number | null;
+  valor_ciclo_lavadora_15?: number | null;
+  valor_ciclo_secadora_10?: number | null;
+  valor_ciclo_secadora_15?: number | null;
 };
 
 type CicloItem = {
   id?: string | null;
-  maquina_tag: string;
+
+  // compat (não usamos mais como “máquina individual”)
+  maquina_tag?: string | null;
   tipo?: string | null;
+
   ciclos: number;
 
   categoria?: "lavadora" | "secadora" | string | null;
   capacidade_kg?: number | null;
+
+  // vindo do backend /ciclos (ideal)
   valor_ciclo?: number | null;
 };
 
-function money(n: number) {
-  return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+type RelPrev = {
+  receita_total: number | null; // null = não calculável (faltou preço)
+  lavadoras_ciclos: number;
+  secadoras_ciclos: number;
+  lavadoras_valor: number | null;
+  secadoras_valor: number | null;
+  consumo_agua: number;
+  consumo_energia: number;
+  consumo_gas: number;
+  faltou_preco: boolean;
+};
+
+function monthISO(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}-01`;
 }
 
-async function fetchJSON(url: string, init?: RequestInit) {
-  const res = await fetch(url, init);
-  const ct = res.headers.get("content-type") || "";
+function prevMonthISO(iso: string) {
+  const d = new Date(iso);
+  d.setMonth(d.getMonth() - 1);
+  return monthISO(d);
+}
 
-  if (!ct.includes("application/json")) {
-    const text = await res.text().catch(() => "");
-    const head = text.slice(0, 220).replace(/\s+/g, " ").trim();
-    throw new Error(`${url} retornou ${res.status} (não-JSON). Trecho: ${head || "(vazio)"}`);
+function toLower(x: any) {
+  return String(x ?? "").trim().toLowerCase();
+}
+
+function safeNumber(x: any, fallback = 0) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function cicloLabel(it: CicloItem) {
+  const cat = toLower(it.categoria ?? it.tipo);
+  const cap = it.capacidade_kg ?? null;
+
+  const nome = cat === "lavadora" ? "Lavadora" : cat === "secadora" ? "Secadora" : cat ? cat : "Máquina";
+
+  if (cap) return `${nome} • ${cap}kg`;
+  return nome;
+}
+
+function sameKey(a: CicloItem, b: CicloItem) {
+  return toLower(a.categoria) === toLower(b.categoria) && Number(a.capacidade_kg ?? 0) === Number(b.capacidade_kg ?? 0);
+}
+
+function ensureFourCombos(list: CicloItem[]) {
+  const base: CicloItem[] = [
+    { categoria: "lavadora", capacidade_kg: 10, ciclos: 0, valor_ciclo: null },
+    { categoria: "lavadora", capacidade_kg: 15, ciclos: 0, valor_ciclo: null },
+    { categoria: "secadora", capacidade_kg: 10, ciclos: 0, valor_ciclo: null },
+    { categoria: "secadora", capacidade_kg: 15, ciclos: 0, valor_ciclo: null },
+  ];
+
+  const out = [...base];
+
+  for (const it of list ?? []) {
+    const cat = toLower(it.categoria ?? it.tipo);
+    const cap = it.capacidade_kg ?? null;
+
+    if (!cat || !cap) continue;
+
+    const normalized: CicloItem = {
+      ...it,
+      categoria: cat as any,
+      capacidade_kg: Number(cap),
+      ciclos: safeNumber(it.ciclos, 0),
+      valor_ciclo: it.valor_ciclo !== null && it.valor_ciclo !== undefined ? Number(it.valor_ciclo) : null,
+    };
+
+    const idx = out.findIndex((x) => sameKey(x, normalized));
+    if (idx >= 0) out[idx] = { ...out[idx], ...normalized };
+    else out.push(normalized);
   }
 
-  const json = await res.json();
-  if (!res.ok) throw new Error(json?.error ?? `${url} falhou (${res.status})`);
-  return json;
+  return out;
 }
 
-function pickCondoFromAud(a: any): Condo | null {
-  const c = a?.condominios ?? a?.condominio ?? null;
-  if (!c) return null;
-
-  const id = String(c.id ?? a.condominio_id ?? "").trim();
-  const nome = String(c.nome ?? "").trim();
-  const cidade = String(c.cidade ?? "").trim();
-  const uf = String(c.uf ?? "").trim();
-
-  if (!nome) return null;
-
-  return {
-    id: id || String(a.condominio_id ?? ""),
-    nome,
-    cidade,
-    uf,
-  };
+async function fetchJSON(input: RequestInfo, init?: RequestInit) {
+  const res = await fetch(input, init);
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("application/json")) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${String(input)} retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 200)}`);
+  }
+  const json = await res.json();
+  if (!res.ok) throw new Error(json?.error ?? "Falha na requisição");
+  return json;
 }
 
 export default function InternoAuditoriaPage({ params }: { params: { id: string } }) {
   const id = params.id;
 
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
   const [me, setMe] = useState<Me | null>(null);
   const [aud, setAud] = useState<Aud | null>(null);
-  const [condo, setCondo] = useState<Condo | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
 
-  // base manual modal
+  // base manual
   const [needBase, setNeedBase] = useState(false);
+  const [baseEditMode, setBaseEditMode] = useState(false);
   const [baseAgua, setBaseAgua] = useState("");
   const [baseEnergia, setBaseEnergia] = useState("");
   const [baseGas, setBaseGas] = useState("");
   const [savingBase, setSavingBase] = useState(false);
 
-  // ciclos
+  // ciclos por categoria + capacidade
   const [ciclos, setCiclos] = useState<CicloItem[]>([]);
+  const [ciclosOrig, setCiclosOrig] = useState<CicloItem[]>([]);
+  const [ciclosEditMode, setCiclosEditMode] = useState(false);
   const [savingCiclos, setSavingCiclos] = useState(false);
 
-  // trava edição
-  const [baseEditMode, setBaseEditMode] = useState(false);
-  const [ciclosEditMode, setCiclosEditMode] = useState(false);
-
-  // snapshot para cancelar
-  const [ciclosOrig, setCiclosOrig] = useState<CicloItem[]>([]);
-
-  // comprovante
+  // comprovante + obs financeiro
   const [fechamentoObs, setFechamentoObs] = useState("");
   const [uploadingComprovante, setUploadingComprovante] = useState(false);
-
-  // finalizar
   const [finalizando, setFinalizando] = useState(false);
 
-  const isStaff = useMemo(() => {
-    const r = me?.role ?? null;
-    return r === "interno" || r === "gestor";
-  }, [me?.role]);
+  const role = me?.role ?? null;
+  const isStaff = role === "interno" || role === "gestor";
 
-  const titulo = useMemo(() => {
-    if (!condo) return "—";
-    return `${condo.nome} - ${condo.cidade}/${condo.uf}`;
-  }, [condo]);
+  const mesRef = aud?.mes_ref ?? monthISO(new Date());
+  const mesPrev = prevMonthISO(mesRef);
 
-  const mesRef = aud?.mes_ref ?? "";
-  const prevMes = useMemo(() => {
-    if (!mesRef || mesRef.length < 10) return "";
-    const [y, m] = mesRef.slice(0, 10).split("-").map((x) => Number(x));
-    if (!y || !m) return "";
-    const d = new Date(y, m - 1, 1);
-    d.setMonth(d.getMonth() - 1);
-    const yy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    return `${yy}-${mm}-01`;
-  }, [mesRef]);
-
-  const baseDefinida = useMemo(() => {
-    const ba = aud?.base_agua;
-    const be = aud?.base_energia;
-    return ba !== null && ba !== undefined && be !== null && be !== undefined;
-  }, [aud?.base_agua, aud?.base_energia]);
-
-  const ciclosJaSalvos = useMemo(() => {
-    return (ciclosOrig ?? []).some((x) => !!x?.id);
-  }, [ciclosOrig]);
-
-  const comprovanteOk = useMemo(() => {
-    const u = String(aud?.comprovante_fechamento_url ?? "").trim();
-    return !!u;
-  }, [aud?.comprovante_fechamento_url]);
-
-  const pagamentoMetodo: PagamentoMetodo = useMemo(() => {
-    const m = String(aud?.pagamento_metodo ?? "direto").toLowerCase().trim();
-    return m === "boleto" ? "boleto" : "direto";
-  }, [aud?.pagamento_metodo]);
-
-  const exigeComprovante = useMemo(() => pagamentoMetodo !== "boleto", [pagamentoMetodo]);
-
-  const consumo = useMemo(() => {
-    const a = Number(aud?.agua_leitura ?? 0);
-    const e = Number(aud?.energia_leitura ?? 0);
-    const g = Number(aud?.gas_leitura ?? 0);
-
-    const ba = aud?.base_agua;
-    const be = aud?.base_energia;
-    const bg = aud?.base_gas;
-
-    const hasBase = ba !== null && ba !== undefined && be !== null && be !== undefined;
-    const hasGasBase = bg !== null && bg !== undefined;
-
-    return {
-      hasBase,
-      agua: hasBase ? a - Number(ba ?? 0) : null,
-      energia: hasBase ? e - Number(be ?? 0) : null,
-      gas: hasGasBase ? g - Number(bg ?? 0) : null,
-    };
-  }, [aud?.agua_leitura, aud?.energia_leitura, aud?.gas_leitura, aud?.base_agua, aud?.base_energia, aud?.base_gas]);
-
-  const relatorio = useMemo(() => {
-    const toLower = (s: any) => String(s ?? "").toLowerCase();
-
-    const isLav = (it: CicloItem) => {
-      const c = toLower(it.categoria);
-      if (c) return c === "lavadora";
-      return toLower(it.tipo).includes("lavadora") || toLower(it.maquina_tag).startsWith("lav");
-    };
-
-    const isSec = (it: CicloItem) => {
-      const c = toLower(it.categoria);
-      if (c) return c === "secadora";
-      return toLower(it.tipo).includes("secadora") || toLower(it.maquina_tag).startsWith("sec");
-    };
-
-    const linhas = (ciclos ?? []).map((it) => {
-      const valor = Number(it.valor_ciclo ?? 0);
-      const receita = Number(it.ciclos ?? 0) * valor;
-      return {
-        ...it,
-        valor_ciclo: valor,
-        receita,
-        bucket: isLav(it) ? "lavadora" : isSec(it) ? "secadora" : "outro",
-      };
-    });
-
-    const sum = (arr: any[], key: string) => arr.reduce((acc, x) => acc + Number(x?.[key] ?? 0), 0);
-
-    const lav = linhas.filter((x) => x.bucket === "lavadora");
-    const sec = linhas.filter((x) => x.bucket === "secadora");
-    const out = linhas.filter((x) => x.bucket === "outro");
-
-    const lavCiclos = sum(lav, "ciclos");
-    const secCiclos = sum(sec, "ciclos");
-    const outCiclos = sum(out, "ciclos");
-
-    const lavRec = sum(lav, "receita");
-    const secRec = sum(sec, "receita");
-    const outRec = sum(out, "receita");
-
-    return {
-      linhas,
-      lav: { ciclos: lavCiclos, receita: lavRec },
-      sec: { ciclos: secCiclos, receita: secRec },
-      out: { ciclos: outCiclos, receita: outRec },
-      total: {
-        ciclos: lavCiclos + secCiclos + outCiclos,
-        receita: lavRec + secRec + outRec,
-      },
-    };
-  }, [ciclos]);
+  useEffect(() => {
+    carregar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   async function carregar() {
     setLoading(true);
     setErr(null);
 
     try {
-      const meJson = await fetchJSON("/api/me", { cache: "no-store" });
-      setMe(meJson as Me);
+      const meJson = await fetchJSON("/api/me");
+      setMe(meJson);
 
-      const aJson = await fetchJSON(`/api/auditorias/${id}`, { cache: "no-store" });
-      const root = (aJson?.data ?? aJson) as any;
-      const a = (root?.auditoria ?? root) as any;
-
-      const audRow: Aud = {
-        id: String(a?.id ?? root?.id ?? id),
-        condominio_id: String(a?.condominio_id ?? root?.condominio_id ?? ""),
-        mes_ref: (a?.mes_ref ?? a?.ano_mes ?? root?.mes_ref ?? root?.ano_mes ?? null) as any,
-        status: a?.status ?? root?.status ?? null,
-
-        agua_leitura: a?.agua_leitura ?? a?.leitura_agua ?? root?.agua_leitura ?? root?.leitura_agua ?? null,
-        energia_leitura: a?.energia_leitura ?? a?.leitura_energia ?? root?.energia_leitura ?? root?.leitura_energia ?? null,
-        gas_leitura: a?.gas_leitura ?? a?.leitura_gas ?? root?.gas_leitura ?? root?.leitura_gas ?? null,
-
-        base_agua: a?.agua_leitura_base ?? root?.agua_leitura_base ?? a?.base_agua ?? root?.base_agua ?? null,
-        base_energia: a?.energia_leitura_base ?? root?.energia_leitura_base ?? a?.base_energia ?? root?.base_energia ?? null,
-        base_gas: a?.gas_leitura_base ?? root?.gas_leitura_base ?? a?.base_gas ?? root?.base_gas ?? null,
-
-        comprovante_fechamento_url: a?.comprovante_fechamento_url ?? root?.comprovante_fechamento_url ?? null,
-        fechamento_obs: a?.fechamento_obs ?? root?.fechamento_obs ?? null,
-
-        pagamento_metodo: (a?.pagamento_metodo ?? root?.pagamento_metodo ?? "direto") as any,
-
-        condominios: root?.condominios ?? a?.condominios ?? null,
-        condominio: root?.condominio ?? a?.condominio ?? null,
-      };
+      const audJson = await fetchJSON(`/api/auditorias/${id}`);
+      const audRow: Aud = audJson?.data ?? audJson;
 
       setAud(audRow);
-      setCondo(pickCondoFromAud(audRow));
+      setFechamentoObs(String(audRow?.fechamento_obs ?? ""));
 
-      setFechamentoObs(String(audRow.fechamento_obs ?? ""));
+      const ciclosJson = await fetchJSON(`/api/auditorias/${id}/ciclos`);
+      const list: any[] = Array.isArray(ciclosJson?.itens)
+        ? ciclosJson.itens
+        : Array.isArray(ciclosJson?.data?.itens)
+        ? ciclosJson.data.itens
+        : Array.isArray(ciclosJson?.items)
+        ? ciclosJson.items
+        : [];
 
-      const ciclosJson = await fetchJSON(`/api/auditorias/${id}/ciclos`, { cache: "no-store" });
-      const list = (ciclosJson?.data?.itens ?? ciclosJson?.itens ?? ciclosJson?.data ?? []) as any[];
-
-      const normalized: CicloItem[] = (list ?? []).map((x: any) => ({
+      const normalizedRaw: CicloItem[] = (list ?? []).map((x: any) => ({
         id: x.id ?? null,
-        maquina_tag: String(x.maquina_tag ?? ""),
+        maquina_tag: x.maquina_tag ?? null,
         tipo: x.tipo ?? null,
         ciclos: Number(x.ciclos ?? 0),
         categoria: x.categoria ?? null,
         capacidade_kg: x.capacidade_kg ? Number(x.capacidade_kg) : null,
         valor_ciclo: x.valor_ciclo !== null && x.valor_ciclo !== undefined ? Number(x.valor_ciclo) : null,
       }));
+
+      const normalized = ensureFourCombos(normalizedRaw);
 
       setCiclos(normalized);
       setCiclosOrig(normalized);
@@ -356,38 +284,61 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   }
 
   async function salvarCiclos() {
-    const audId = String(aud?.id ?? id).trim();
-    if (!audId) return;
-
-    setSavingCiclos(true);
-    setErr(null);
-
     try {
-      const res = await fetch(`/api/auditorias/${audId}/ciclos`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          itens: ciclos.map((x) => ({
-            maquina_tag: x.maquina_tag,
-            tipo: x.tipo ?? null,
-            ciclos: Number(x.ciclos ?? 0),
-          })),
-        }),
+      setErr(null);
+      setSavingCiclos(true);
+
+      // Persistência oficial: (categoria + capacidade_kg)
+      const itens = (ciclos ?? []).map((it) => {
+        const categoria = String(it.categoria ?? it.tipo ?? "").toLowerCase().trim();
+        const capacidade_kg = it.capacidade_kg ?? null;
+        const ciclosInt = Number(it.ciclos ?? 0);
+        return {
+          categoria: categoria || null,
+          capacidade_kg,
+          ciclos: Number.isFinite(ciclosInt) ? ciclosInt : 0,
+        };
       });
 
-      const ct = res.headers.get("content-type") || "";
-      if (!ct.includes("application/json")) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`/api/auditorias/${audId}/ciclos retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 200)}`);
+      const faltando = itens.find((it) => !it.categoria || !it.capacidade_kg);
+      if (faltando) {
+        throw new Error("ciclos: categoria e capacidade_kg são obrigatórios.");
       }
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error ?? "Falha ao salvar ciclos");
+      await fetchJSON(`/api/auditorias/${id}/ciclos`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ itens }),
+      });
 
+      // recarrega
+      const ciclosJson = await fetchJSON(`/api/auditorias/${id}/ciclos`);
+      const list: any[] = Array.isArray(ciclosJson?.itens)
+        ? ciclosJson.itens
+        : Array.isArray(ciclosJson?.data?.itens)
+        ? ciclosJson.data.itens
+        : Array.isArray(ciclosJson?.items)
+        ? ciclosJson.items
+        : [];
+
+      const normalizedRaw: CicloItem[] = list.map((x: any) => ({
+        id: x.id ?? null,
+        categoria: x.categoria ?? null,
+        capacidade_kg: x.capacidade_kg ?? null,
+        ciclos: Number(x.ciclos ?? 0) || 0,
+        valor_ciclo: x.valor_ciclo ?? null,
+        // compat
+        maquina_tag: x.maquina_tag ?? null,
+        tipo: x.tipo ?? null,
+      }));
+
+      const normalized = ensureFourCombos(normalizedRaw);
+
+      setCiclos(normalized);
+      setCiclosOrig(normalized);
       setCiclosEditMode(false);
-      await carregar();
     } catch (e: any) {
-      setErr(e?.message ?? "Erro inesperado ao salvar ciclos");
+      setErr(e?.message ?? String(e));
     } finally {
       setSavingCiclos(false);
     }
@@ -425,449 +376,537 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("application/json")) {
         const text = await res.text().catch(() => "");
-        throw new Error(`/api/auditorias/${audId}/fotos retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 220)}`);
+        throw new Error(`/api/auditorias/${audId}/fotos retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 200)}`);
       }
-
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "Falha ao enviar comprovante");
 
       await carregar();
     } catch (e: any) {
-      setErr(e?.message ?? "Erro inesperado ao enviar comprovante");
+      setErr(e?.message ?? "Erro ao enviar comprovante");
     } finally {
       setUploadingComprovante(false);
     }
   }
 
+  async function salvarObsFinanceiro() {
+    const audId = String(aud?.id ?? id).trim();
+    if (!audId) return;
+    try {
+      setErr(null);
+      await fetchJSON(`/api/auditorias/${audId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ fechamento_obs: String(fechamentoObs ?? "") }),
+      });
+    } catch (e: any) {
+      setErr(e?.message ?? "Erro ao salvar observação");
+    }
+  }
+
+  const calculos = useMemo(() => {
+    const aguaAtual = safeNumber(aud?.agua_leitura, 0);
+    const energiaAtual = safeNumber(aud?.energia_leitura, 0);
+    const gasAtual = safeNumber(aud?.gas_leitura, 0);
+
+    const baseA = safeNumber(aud?.base_agua, safeNumber(baseAgua, 0));
+    const baseE = safeNumber(aud?.base_energia, safeNumber(baseEnergia, 0));
+    const baseG = safeNumber(aud?.base_gas, safeNumber(baseGas, 0));
+
+    const consumoAgua = Math.max(aguaAtual - baseA, 0);
+    const consumoEnergia = Math.max(energiaAtual - baseE, 0);
+    const consumoGas = Math.max(gasAtual - baseG, 0);
+
+    return { baseA, baseE, baseG, consumoAgua, consumoEnergia, consumoGas };
+  }, [aud, baseAgua, baseEnergia, baseGas]);
+
+  const relPrev: RelPrev = useMemo(() => {
+    const items = ciclos ?? [];
+
+    let lavC = 0;
+    let secC = 0;
+
+    let lavV = 0;
+    let secV = 0;
+
+    let faltouPreco = false;
+
+    for (const it of items) {
+      const cat = toLower(it.categoria ?? it.tipo ?? it.maquina_tag);
+      const c = safeNumber(it.ciclos, 0);
+
+      const isLav = cat === "lavadora" || cat.includes("lav");
+      const isSec = cat === "secadora" || cat.includes("sec");
+
+      // Se não veio valor_ciclo, não “zera” pra não confundir: marca como não calculável.
+      const temPreco = it.valor_ciclo !== null && it.valor_ciclo !== undefined && Number.isFinite(Number(it.valor_ciclo));
+      const v = temPreco ? Number(it.valor_ciclo) : null;
+
+      if (!temPreco) {
+        // só marca como faltando preço se o usuário lançou ciclos > 0
+        if (c > 0) faltouPreco = true;
+      }
+
+      if (isLav) {
+        lavC += c;
+        if (v !== null) lavV += c * v;
+      } else if (isSec) {
+        secC += c;
+        if (v !== null) secV += c * v;
+      } else {
+        // fallback conservador: considera como lavadora
+        lavC += c;
+        if (v !== null) lavV += c * v;
+      }
+    }
+
+    const lavCalc = faltouPreco ? null : lavV;
+    const secCalc = faltouPreco ? null : secV;
+    const receita = faltouPreco ? null : lavV + secV;
+
+    return {
+      receita_total: receita,
+      lavadoras_ciclos: lavC,
+      secadoras_ciclos: secC,
+      lavadoras_valor: lavCalc,
+      secadoras_valor: secCalc,
+      consumo_agua: calculos.consumoAgua,
+      consumo_energia: calculos.consumoEnergia,
+      consumo_gas: calculos.consumoGas,
+      faltou_preco: faltouPreco,
+    };
+  }, [ciclos, calculos]);
+
+  const exigeComprovante = useMemo(() => {
+    return (aud?.pagamento_metodo ?? null) === "direto";
+  }, [aud?.pagamento_metodo]);
+
   async function finalizarAuditoria() {
     const audId = String(aud?.id ?? id).trim();
     if (!audId) return;
 
-    // boleto: pode finalizar sem comprovante
-    if (exigeComprovante && !comprovanteOk) {
-      setErr("Anexe o comprovante de fechamento antes de finalizar (pagamento direto).");
-      return;
-    }
-
-    setFinalizando(true);
-    setErr(null);
-
     try {
-      const res = await fetch(`/api/auditorias/${audId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          status: "final",
-          note: String(fechamentoObs ?? "").trim() ? `Fechamento: ${String(fechamentoObs).trim()}` : null,
-        }),
-      });
+      setErr(null);
+      setFinalizando(true);
 
-      const ct = res.headers.get("content-type") || "";
-      if (!ct.includes("application/json")) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`/api/auditorias/${audId} retornou ${res.status} (não-JSON). Trecho: ${text.slice(0, 220)}`);
+      // salva obs antes
+      await salvarObsFinanceiro();
+
+      if (exigeComprovante && !aud?.comprovante_fechamento_url) {
+        throw new Error("Pagamento direto: anexe o comprovante para finalizar.");
       }
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error ?? "Falha ao finalizar auditoria");
-
+      await fetchJSON(`/api/auditorias/${audId}/finalizar`, { method: "POST" });
       await carregar();
     } catch (e: any) {
-      setErr(e?.message ?? "Erro inesperado ao finalizar");
+      setErr(e?.message ?? "Erro ao finalizar");
     } finally {
       setFinalizando(false);
     }
   }
 
-  useEffect(() => {
-    carregar();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  function statusLabel(s?: string | null) {
+    const x = toLower(s);
+    if (x === "aberta") return "aberta";
+    if (x === "em_andamento") return "em andamento";
+    if (x === "em_conferencia") return "em conferência";
+    if (x === "final") return "final";
+    return s ?? "-";
+  }
 
-  const ciclosTravados = ciclosJaSalvos && !ciclosEditMode;
+  const condNome = aud?.condominio?.nome ?? aud?.condominios?.nome ?? "—";
+  const condCidadeUf =
+    (aud?.condominio?.cidade ?? aud?.condominios?.cidade ?? "") && (aud?.condominio?.uf ?? aud?.condominios?.uf ?? "")
+      ? `${aud?.condominio?.cidade ?? aud?.condominios?.cidade}/${aud?.condominio?.uf ?? aud?.condominios?.uf}`
+      : "—";
 
-  const statusLabel = useMemo(() => {
-    const s = String(aud?.status ?? "").trim();
-    return s || "—";
-  }, [aud?.status]);
-
-  const isFinal = useMemo(() => String(aud?.status ?? "") === "final", [aud?.status]);
+  const bloqueadoCiclos = !isStaff || !ciclosEditMode || savingCiclos || loading;
 
   return (
     <AppShell title="Fechamento (Interno)">
-      <div className="mx-auto max-w-5xl px-6 py-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="mx-auto max-w-5xl px-4 py-6">
+        <div className="mb-6 flex items-center justify-between gap-3">
           <div>
-            <div className="text-2xl font-extrabold">Fechamento (Interno)</div>
-            <div className="text-xs text-gray-500">{titulo}</div>
-            <div className="mt-1 text-xs text-gray-500">
-              Mês: <b>{mesRef || "—"}</b> • Anterior: <b>{prevMes || "—"}</b> • Status: <b>{statusLabel}</b> • Pagamento:{" "}
-              <b>{pagamentoMetodo === "boleto" ? "Boleto" : "Direto"}</b> • ID: <b>{id}</b>
+            <h1 className="text-2xl font-bold text-gray-900">Fechamento (Interno)</h1>
+            <div className="mt-1 text-sm text-gray-600">
+              <div>
+                {condNome} - {condCidadeUf}
+              </div>
+              <div className="mt-0.5">
+                Mês: <span className="font-medium">{mesRef}</span> • Anterior: <span className="font-medium">{mesPrev}</span>{" "}
+                • Status: <span className="font-medium">{statusLabel(aud?.status)}</span> • Pagamento:{" "}
+                <span className="font-medium">{aud?.pagamento_metodo ?? "—"}</span> • ID:{" "}
+                <span className="font-mono text-xs">{id}</span>
+              </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
-              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50"
-              onClick={carregar}
+              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
+              onClick={() => carregar()}
               disabled={loading}
             >
-              {loading ? "Carregando..." : "Recarregar"}
+              Recarregar
             </button>
-            <a className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50" href="/auditorias">
+            <button
+              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
+              onClick={() => history.back()}
+            >
               Voltar
-            </a>
+            </button>
           </div>
         </div>
 
-        {err ? <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div> : null}
+        {err ? (
+          <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div>
+        ) : null}
 
-        {/* Comprovante + Finalizar */}
-        <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+        {/* Comprovante + obs */}
+        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div>
-              <div className="text-sm font-semibold">Comprovante de fechamento</div>
-              <div className="text-xs text-gray-500">
-                {pagamentoMetodo === "boleto"
-                  ? "Este condomínio é BOLETO: você pode finalizar sem comprovante agora (o pagamento vem depois)."
-                  : "Pagamento direto: anexe o comprovante (PDF ou imagem) para conseguir finalizar."}
-                {comprovanteOk ? (
-                  <span className="ml-2 inline-flex rounded-full bg-green-50 px-2 py-0.5 text-[11px] text-green-700">anexado</span>
+              <div className="text-base font-semibold text-gray-900">Comprovante de fechamento</div>
+              <div className="mt-1 text-sm text-gray-600">
+                {exigeComprovante ? (
+                  <>Pagamento direto: anexe o comprovante (PDF ou imagem) para conseguir finalizar.</>
                 ) : (
-                  <span className="ml-2 inline-flex rounded-full bg-yellow-50 px-2 py-0.5 text-[11px] text-yellow-700">pendente</span>
+                  <>Boleto: pode finalizar sem comprovante (pagamento será feito depois).</>
+                )}{" "}
+                {aud?.comprovante_fechamento_url ? (
+                  <span className="ml-2 inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">
+                    anexado
+                  </span>
+                ) : (
+                  <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                    pendente
+                  </span>
                 )}
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              {aud?.comprovante_fechamento_url ? (
-                <a
-                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50"
-                  href={aud.comprovante_fechamento_url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Abrir comprovante
-                </a>
-              ) : null}
-
-              <label className={`cursor-pointer rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 ${!isStaff ? "opacity-50 cursor-not-allowed" : ""}`}>
-                {uploadingComprovante ? "Enviando..." : comprovanteOk ? "Trocar comprovante" : "Anexar comprovante"}
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="cursor-pointer rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50">
+                {uploadingComprovante ? "Enviando..." : "Anexar comprovante"}
                 <input
                   type="file"
                   className="hidden"
-                  disabled={!isStaff || uploadingComprovante}
                   accept="image/*,application/pdf"
+                  disabled={uploadingComprovante}
                   onChange={(e) => {
-                    const f = e.target.files?.[0] ?? null;
+                    const f = e.target.files?.[0];
+                    if (f) uploadComprovante(f);
                     e.currentTarget.value = "";
-                    if (!f) return;
-                    uploadComprovante(f);
                   }}
                 />
               </label>
 
               <button
-                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                onClick={finalizarAuditoria}
-                disabled={!isStaff || finalizando || (exigeComprovante && !comprovanteOk) || isFinal}
-                title={exigeComprovante && !comprovanteOk ? "Pagamento direto: anexe comprovante antes de finalizar" : isFinal ? "Já está finalizada" : ""}
+                className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600 disabled:opacity-60"
+                onClick={() => finalizarAuditoria()}
+                disabled={finalizando || loading}
               >
-                {finalizando ? "Finalizando..." : isFinal ? "Finalizada" : "Finalizar auditoria"}
+                {finalizando ? "Finalizando..." : "Finalizar auditoria"}
               </button>
             </div>
           </div>
 
           <div className="mt-4">
-            <label className="mb-1 block text-xs text-gray-600">Obs do financeiro (opcional)</label>
+            <div className="text-sm font-semibold text-gray-700">Obs do financeiro (opcional)</div>
             <textarea
-              className="w-full rounded-2xl border border-gray-200 px-3 py-2 text-sm"
+              className="mt-2 w-full rounded-xl border border-gray-200 bg-white p-3 text-sm text-gray-900 shadow-sm outline-none focus:border-gray-300"
               rows={3}
+              placeholder="Ex: pago via PIX em 2 parcelas / ajuste de valor / observações..."
               value={fechamentoObs}
               onChange={(e) => setFechamentoObs(e.target.value)}
-              placeholder="Ex: pago via PIX em 2 parcelas / ajuste de valor / observações..."
-              disabled={!isStaff || uploadingComprovante || finalizando}
+              onBlur={() => salvarObsFinanceiro()}
             />
-            <div className="mt-1 text-[11px] text-gray-500">
-              Se você preencher isso e anexar o comprovante, a observação vai junto (sem criar mais tela).
-            </div>
+            <div className="mt-2 text-xs text-gray-500">Se você preencher isso e anexar o comprovante, a observação vai junto.</div>
           </div>
         </div>
 
-        {/* Consumo */}
-        <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+        {/* Consumo calculado */}
+        <div className="mt-6 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold">Consumo do mês (calculado)</div>
-              <div className="text-xs text-gray-500">
-                Base: {consumo.hasBase ? "informada manualmente" : "não definida"}{" "}
-                {baseDefinida ? <span className="ml-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">travada</span> : null}
+              <div className="text-base font-semibold text-gray-900">Consumo do mês (calculado)</div>
+              <div className="mt-1 text-sm text-gray-600">
+                Base: informada manualmente{" "}
+                <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-700">
+                  {needBase ? "pendente" : "travada"}
+                </span>
               </div>
             </div>
 
-            {!baseDefinida ? (
+            {isStaff ? (
               <button
-                className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-                onClick={() => {
-                  setBaseEditMode(false);
-                  setNeedBase(true);
-                }}
-                disabled={!isStaff}
-              >
-                Definir leitura base
-              </button>
-            ) : (
-              <button
-                className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-                onClick={abrirModalBaseParaEditar}
-                disabled={!isStaff}
+                className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
+                onClick={() => abrirModalBaseParaEditar()}
               >
                 Alterar/corrigir base
               </button>
-            )}
+            ) : null}
           </div>
 
-          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-            <div className="rounded-2xl border border-gray-100 p-4">
-              <div className="text-xs text-gray-500">Água</div>
-              <div className="mt-1 text-sm">
-                <div>Atual: <b>{aud?.agua_leitura ?? "—"}</b></div>
-                <div>Base: <b>{aud?.base_agua ?? "—"}</b></div>
-                <div>Consumo: <b>{consumo.agua ?? "—"}</b></div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border border-gray-100 bg-white p-4">
+              <div className="text-sm font-semibold text-gray-700">Água</div>
+              <div className="mt-2 text-sm text-gray-700">
+                Atual: <span className="font-semibold">{safeNumber(aud?.agua_leitura, 0)}</span>
+              </div>
+              <div className="text-sm text-gray-700">
+                Base: <span className="font-semibold">{calculos.baseA}</span>
+              </div>
+              <div className="text-sm text-gray-700">
+                Consumo: <span className="font-semibold">{calculos.consumoAgua}</span>
               </div>
             </div>
 
-            <div className="rounded-2xl border border-gray-100 p-4">
-              <div className="text-xs text-gray-500">Energia</div>
-              <div className="mt-1 text-sm">
-                <div>Atual: <b>{aud?.energia_leitura ?? "—"}</b></div>
-                <div>Base: <b>{aud?.base_energia ?? "—"}</b></div>
-                <div>Consumo: <b>{consumo.energia ?? "—"}</b></div>
+            <div className="rounded-2xl border border-gray-100 bg-white p-4">
+              <div className="text-sm font-semibold text-gray-700">Energia</div>
+              <div className="mt-2 text-sm text-gray-700">
+                Atual: <span className="font-semibold">{safeNumber(aud?.energia_leitura, 0)}</span>
+              </div>
+              <div className="text-sm text-gray-700">
+                Base: <span className="font-semibold">{calculos.baseE}</span>
+              </div>
+              <div className="text-sm text-gray-700">
+                Consumo: <span className="font-semibold">{calculos.consumoEnergia}</span>
               </div>
             </div>
 
-            <div className="rounded-2xl border border-gray-100 p-4">
-              <div className="text-xs text-gray-500">Gás</div>
-              <div className="mt-1 text-sm">
-                <div>Atual: <b>{aud?.gas_leitura ?? "—"}</b></div>
-                <div>Base: <b>{aud?.base_gas ?? "—"}</b></div>
-                <div>Consumo: <b>{consumo.gas ?? "—"}</b></div>
+            <div className="rounded-2xl border border-gray-100 bg-white p-4">
+              <div className="text-sm font-semibold text-gray-700">Gás</div>
+              <div className="mt-2 text-sm text-gray-700">
+                Atual: <span className="font-semibold">{safeNumber(aud?.gas_leitura, 0)}</span>
+              </div>
+              <div className="text-sm text-gray-700">
+                Base: <span className="font-semibold">{calculos.baseG}</span>
+              </div>
+              <div className="text-sm text-gray-700">
+                Consumo: <span className="font-semibold">{calculos.consumoGas}</span>
               </div>
             </div>
           </div>
+
+          {/* Editor de base */}
+          {baseEditMode ? (
+            <div className="mt-5 rounded-2xl border border-gray-100 bg-gray-50 p-4">
+              <div className="text-sm font-semibold text-gray-800">Editar base (manual)</div>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <div>
+                  <label className="text-xs font-semibold text-gray-700">Base água</label>
+                  <input
+                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm"
+                    value={baseAgua}
+                    onChange={(e) => setBaseAgua(e.target.value)}
+                    inputMode="decimal"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-gray-700">Base energia</label>
+                  <input
+                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm"
+                    value={baseEnergia}
+                    onChange={(e) => setBaseEnergia(e.target.value)}
+                    inputMode="decimal"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-gray-700">Base gás</label>
+                  <input
+                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm"
+                    value={baseGas}
+                    onChange={(e) => setBaseGas(e.target.value)}
+                    inputMode="decimal"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4 flex items-center gap-2">
+                <button
+                  className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
+                  onClick={() => salvarBaseManual()}
+                  disabled={savingBase}
+                >
+                  {savingBase ? "Salvando..." : "Salvar base"}
+                </button>
+
+                <button
+                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
+                  onClick={() => {
+                    setBaseEditMode(false);
+                    setNeedBase(false);
+                    carregar();
+                  }}
+                  disabled={savingBase}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {/* Ciclos */}
-        <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="mt-6 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold">Ciclos por máquina</div>
-              <div className="text-xs text-gray-500">
-                O Interno lança ciclos por máquina individual. A lista vem do cadastro do condomínio (condominio_maquinas).
-                {ciclosJaSalvos ? <span className="ml-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">travado</span> : null}
+              <div className="text-base font-semibold text-gray-900">Ciclos (categoria + capacidade)</div>
+              <div className="mt-1 text-sm text-gray-600">
+                O Interno lança ciclos por <span className="font-semibold">Lavadora/Secadora</span> e{" "}
+                <span className="font-semibold">10/15kg</span>.
+                <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-700">
+                  {ciclosEditMode ? "editando" : "travado"}
+                </span>
               </div>
             </div>
 
             <div className="flex items-center gap-2">
-              {ciclosJaSalvos && !ciclosEditMode ? (
+              {!ciclosEditMode ? (
                 <button
-                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50 disabled:opacity-60"
                   onClick={() => setCiclosEditMode(true)}
-                  disabled={!isStaff}
+                  disabled={!isStaff || loading}
                 >
-                  Alterar/corrigir
+                  Editar
                 </button>
-              ) : null}
+              ) : (
+                <>
+                  <button
+                    className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
+                    onClick={() => cancelarEdicaoCiclos()}
+                    disabled={savingCiclos}
+                  >
+                    Cancelar
+                  </button>
 
-              {ciclosJaSalvos && ciclosEditMode ? (
-                <button
-                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-                  onClick={cancelarEdicaoCiclos}
-                  disabled={savingCiclos}
-                >
-                  Cancelar
-                </button>
-              ) : null}
-
-              <button
-                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                onClick={salvarCiclos}
-                disabled={savingCiclos || (ciclosJaSalvos && !ciclosEditMode)}
-                title={ciclosJaSalvos && !ciclosEditMode ? "Clique em Alterar/corrigir para editar" : ""}
-              >
-                {savingCiclos ? "Salvando..." : "Salvar ciclos"}
-              </button>
+                  <button
+                    className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
+                    onClick={() => salvarCiclos()}
+                    disabled={savingCiclos}
+                  >
+                    {savingCiclos ? "Salvando..." : "Salvar ciclos"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
           <div className="mt-4 overflow-hidden rounded-2xl border border-gray-100">
             <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
-              <div className="col-span-6">Máquina</div>
-              <div className="col-span-3">Tipo</div>
+              <div className="col-span-6">Tipo</div>
+              <div className="col-span-3 text-right">Valor ciclo</div>
               <div className="col-span-3 text-right">Ciclos</div>
             </div>
 
-            {ciclos.map((it, idx) => (
-              <div key={it.maquina_tag} className="grid grid-cols-12 items-center px-4 py-3">
-                <div className="col-span-6 text-sm font-semibold">{it.maquina_tag}</div>
-                <div className="col-span-3 text-xs text-gray-600">{it.tipo ?? "—"}</div>
-                <div className="col-span-3 flex justify-end">
-                  <input
-                    className={`w-24 rounded-xl border border-gray-200 px-3 py-2 text-right text-sm ${ciclosTravados ? "bg-gray-50 text-gray-500" : ""}`}
-                    value={String(it.ciclos ?? 0)}
-                    inputMode="numeric"
-                    disabled={ciclosTravados}
-                    onChange={(e) => {
-                      const v = Number(e.target.value ?? 0);
-                      setCiclos((prev) => prev.map((x, i) => (i === idx ? { ...x, ciclos: Number.isNaN(v) ? 0 : v } : x)));
-                    }}
-                  />
-                </div>
-              </div>
-            ))}
+            <div className="divide-y divide-gray-100">
+              {(ciclos ?? []).length === 0 ? (
+                <div className="px-4 py-4 text-sm text-gray-600">Lista de ciclos vazia.</div>
+              ) : (
+                (ciclos ?? []).map((it, idx) => {
+                  const key = `${String(it.categoria ?? "x")}-${String(it.capacidade_kg ?? "x")}`;
+                  return (
+                    <div key={key} className="grid grid-cols-12 items-center px-4 py-3">
+                      <div className="col-span-6">
+                        <div className="text-sm font-semibold text-gray-900">{cicloLabel(it)}</div>
+                        <div className="text-xs text-gray-500">
+                          categoria: {String(it.categoria ?? "—")} • capacidade: {it.capacidade_kg ? `${it.capacidade_kg}kg` : "—"}
+                        </div>
+                      </div>
+
+                      <div className="col-span-3 text-right text-sm font-semibold text-gray-900">
+                        {it.valor_ciclo !== null && it.valor_ciclo !== undefined
+                          ? Number(it.valor_ciclo).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+                          : "—"}
+                      </div>
+
+                      <div className="col-span-3 flex justify-end">
+                        <input
+                          className="w-28 rounded-xl border border-gray-200 bg-white px-3 py-2 text-right text-sm shadow-sm outline-none focus:border-gray-300 disabled:bg-gray-50"
+                          value={String(it.ciclos ?? 0)}
+                          disabled={bloqueadoCiclos}
+                          inputMode="numeric"
+                          onChange={(e) => {
+                            const v = e.target.value.replace(/[^\d]/g, "");
+                            const n = v ? Number(v) : 0;
+                            setCiclos((prev) => prev.map((p, j) => (j === idx ? { ...p, ciclos: n } : p)));
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
 
-          <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* Prévia financeira */}
+          <div className="mt-6 rounded-2xl border border-gray-100 bg-white p-4">
+            <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold">Relatório financeiro (prévia)</div>
-                <div className="text-xs text-gray-500">
-                  Cálculo por máquina usando <b>condominio_maquinas.valor_ciclo</b>. Split: <b>Água = lavadoras</b>; <b>Gás = secadoras</b> (se houver gás).
+                <div className="text-sm font-semibold text-gray-900">Prévia financeira (simples)</div>
+                <div className="mt-1 text-xs text-gray-600">
+                  Calcula somente se o backend enviar <span className="font-semibold">valor_ciclo</span> por linha.
+                  Se faltar preço, mostra “—” para não confundir.
                 </div>
+                {relPrev.faltou_preco ? (
+                  <div className="mt-2 text-xs text-amber-700">
+                    Atenção: faltou <span className="font-semibold">valor_ciclo</span> em pelo menos um item com ciclos &gt; 0.
+                    A prévia não será calculada até o preço vir do backend.
+                  </div>
+                ) : null}
               </div>
 
               <div className="text-right">
-                <div className="text-xs text-gray-500">Receita total</div>
-                <div className="text-lg font-extrabold">R$ {money(relatorio.total.receita)}</div>
+                <div className="text-xs font-semibold text-gray-600">Receita total</div>
+                <div className="text-lg font-bold text-gray-900">
+                  {relPrev.receita_total === null ? "—" : relPrev.receita_total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                </div>
               </div>
             </div>
 
-            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
               <div className="rounded-2xl border border-gray-100 p-3">
-                <div className="text-xs text-gray-500">Lavadoras</div>
-                <div className="mt-1 flex items-baseline justify-between">
-                  <div className="text-sm font-semibold">{relatorio.lav.ciclos} ciclos</div>
-                  <div className="text-sm font-extrabold">R$ {money(relatorio.lav.receita)}</div>
+                <div className="text-xs font-semibold text-gray-600">Lavadoras</div>
+                <div className="mt-1 text-sm text-gray-800">
+                  <span className="font-semibold">{relPrev.lavadoras_ciclos}</span> ciclos
+                </div>
+                <div className="mt-1 text-sm font-semibold text-gray-900">
+                  {relPrev.lavadoras_valor === null ? "—" : relPrev.lavadoras_valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
                 </div>
               </div>
 
               <div className="rounded-2xl border border-gray-100 p-3">
-                <div className="text-xs text-gray-500">Secadoras</div>
-                <div className="mt-1 flex items-baseline justify-between">
-                  <div className="text-sm font-semibold">{relatorio.sec.ciclos} ciclos</div>
-                  <div className="text-sm font-extrabold">R$ {money(relatorio.sec.receita)}</div>
+                <div className="text-xs font-semibold text-gray-600">Secadoras</div>
+                <div className="mt-1 text-sm text-gray-800">
+                  <span className="font-semibold">{relPrev.secadoras_ciclos}</span> ciclos
+                </div>
+                <div className="mt-1 text-sm font-semibold text-gray-900">
+                  {relPrev.secadoras_valor === null ? "—" : relPrev.secadoras_valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
                 </div>
               </div>
 
               <div className="rounded-2xl border border-gray-100 p-3">
-                <div className="text-xs text-gray-500">Consumo do mês</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  Água: <b>{consumo.agua ?? "—"}</b> • Energia: <b>{consumo.energia ?? "—"}</b> • Gás: <b>{consumo.gas ?? "—"}</b>
+                <div className="text-xs font-semibold text-gray-600">Consumo do mês</div>
+                <div className="mt-1 text-xs text-gray-700">
+                  Água: <span className="font-semibold">{relPrev.consumo_agua}</span> • Energia:{" "}
+                  <span className="font-semibold">{relPrev.consumo_energia}</span> • Gás:{" "}
+                  <span className="font-semibold">{relPrev.consumo_gas}</span>
                 </div>
-                <div className="mt-1 text-[11px] text-gray-500">(Energia pode afetar lavadora e secadora; água só lavadora; gás só secadora onde existir.)</div>
+                <div className="mt-2 text-[11px] text-gray-500">(Água só lavadora; gás só secadora onde existir; energia pode afetar ambas.)</div>
               </div>
             </div>
-          </div>
 
-          <div className="mt-3 text-xs text-gray-500">
-            Fluxo simples: Interno lança ciclos + base (se precisar) → emite relatório → financeiro paga (ou aguarda boleto) → (se direto) anexa comprovante → finaliza.
+            <div className="mt-4 text-xs text-gray-500">
+              Fluxo: Interno lança ciclos + base (se precisar) → relatório → financeiro paga/anexa (se direto) → finaliza.
+            </div>
           </div>
         </div>
       </div>
-
-      {needBase && isStaff && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold">{baseDefinida ? "Alterar/corrigir leitura base" : "Leitura anterior não encontrada"}</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  {baseDefinida
-                    ? "Base já existe. Altere apenas se você tiver certeza (correção)."
-                    : "Condomínio novo ou histórico vazio. Informe a leitura anterior/base para o cálculo do consumo do mês."}
-                </div>
-                <div className="mt-1 text-xs text-gray-500">
-                  Condomínio: <b>{titulo}</b> • Mês: <b>{mesRef}</b> • Anterior: <b>{prevMes}</b>
-                </div>
-              </div>
-
-              <button
-                className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
-                onClick={() => {
-                  setNeedBase(false);
-                  setBaseEditMode(false);
-                }}
-                disabled={savingBase}
-              >
-                Fechar
-              </button>
-            </div>
-
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-              <div>
-                <label className="mb-1 block text-xs text-gray-600">Água (base)</label>
-                <input
-                  className="w-full rounded-xl border px-3 py-2"
-                  value={baseAgua}
-                  onChange={(e) => setBaseAgua(e.target.value)}
-                  inputMode="decimal"
-                  placeholder="ex: 12345"
-                  disabled={savingBase}
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-gray-600">Energia (base)</label>
-                <input
-                  className="w-full rounded-xl border px-3 py-2"
-                  value={baseEnergia}
-                  onChange={(e) => setBaseEnergia(e.target.value)}
-                  inputMode="decimal"
-                  placeholder="ex: 67890"
-                  disabled={savingBase}
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-gray-600">Gás (base)</label>
-                <input
-                  className="w-full rounded-xl border px-3 py-2"
-                  value={baseGas}
-                  onChange={(e) => setBaseGas(e.target.value)}
-                  inputMode="decimal"
-                  placeholder="se não tiver, vazio"
-                  disabled={savingBase}
-                />
-              </div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap justify-end gap-2">
-              <button
-                className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-                onClick={() => {
-                  setNeedBase(false);
-                  setBaseEditMode(false);
-                }}
-                disabled={savingBase}
-              >
-                Cancelar
-              </button>
-
-              <button
-                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                onClick={salvarBaseManual}
-                disabled={savingBase}
-              >
-                {savingBase ? "Salvando..." : baseDefinida ? "Salvar correção" : "Salvar base"}
-              </button>
-            </div>
-
-            <div className="mt-3 text-xs text-gray-500">
-              Depois que tiver histórico, isso some: o sistema usa automaticamente o mês anterior. (Aqui é só para condomínio novo / correção.)
-            </div>
-          </div>
-        </div>
-      )}
     </AppShell>
   );
 }
