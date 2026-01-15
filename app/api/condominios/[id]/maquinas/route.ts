@@ -30,7 +30,43 @@ function pad2(n: number) {
 }
 
 /* =========================
-   POST – salvar máquinas
+   GET – listar máquinas
+   (UI espera { maquinas: [...] })
+========================= */
+export async function GET(_req: Request, { params }: { params: { id: string } }) {
+  const ctx = await getUserAndRole();
+  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+
+  const role = ctx.role as Role | null;
+  if (!role || !roleGte(role, "auditor")) {
+    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  }
+
+  try {
+    const condominioId = String(params?.id ?? "").trim();
+    if (!condominioId) return NextResponse.json({ error: "ID do condomínio ausente." }, { status: 400 });
+
+    const admin = supabaseAdmin();
+
+    const { data, error } = await admin
+      .from("condominio_maquinas")
+      .select("*")
+      .eq("condominio_id", condominioId)
+      .order("categoria", { ascending: true })
+      .order("maquina_tag", { ascending: true });
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+    // ✅ compat UI: devolve "maquinas"
+    return NextResponse.json({ ok: true, maquinas: data ?? [], data: data ?? [] });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
+  }
+}
+
+/* =========================
+   POST – salvar máquinas (replace)
+   (UI manda array com categoria/quantidade/valores)
 ========================= */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const ctx = await getUserAndRole();
@@ -58,10 +94,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         const categoria = normCategoria(m?.categoria ?? m?.tipo);
         if (!categoria) return null;
 
-        const quantidade = Math.max(1, intOr(m?.quantidade, 1));
+        const quantidade = intOr(m?.quantidade, 0); // aqui a UI manda quantidade mesmo
+        if (quantidade <= 0) return null;
 
         const capacidade_kg = numOrNull(m?.capacidade_kg);
         const valor_ciclo = numOrNull(m?.valor_ciclo);
+
         const limpeza_quimica_ciclos = Math.max(1, intOr(m?.limpeza_quimica_ciclos, 500));
         const limpeza_mecanica_ciclos = Math.max(1, intOr(m?.limpeza_mecanica_ciclos, 2000));
 
@@ -91,52 +129,16 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: "Nenhuma máquina válida para salvar (quantidade > 0)." }, { status: 400 });
     }
 
-    // ✅ FIX: supabaseAdmin é FUNÇÃO -> precisa chamar
     const admin = supabaseAdmin();
 
-    const { error: delErr } = await admin
-      .from("condominio_maquinas")
-      .delete()
-      .eq("condominio_id", condominioId);
-
+    const { error: delErr } = await admin.from("condominio_maquinas").delete().eq("condominio_id", condominioId);
     if (delErr) return NextResponse.json({ error: delErr.message }, { status: 400 });
 
     const { data, error: insErr } = await admin.from("condominio_maquinas").insert(rows).select();
     if (insErr) return NextResponse.json({ error: insErr.message }, { status: 400 });
 
-    return NextResponse.json({ ok: true, data: data ?? [] });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
-  }
-}
-
-/* =========================
-   GET – listar máquinas
-========================= */
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const ctx = await getUserAndRole();
-  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-
-  const role = ctx.role as Role | null;
-  if (!role || !roleGte(role, "auditor")) {
-    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
-  }
-
-  try {
-    const condominioId = String(params?.id ?? "").trim();
-    if (!condominioId) return NextResponse.json({ error: "ID do condomínio ausente." }, { status: 400 });
-
-    const admin = supabaseAdmin();
-
-    const { data, error } = await admin
-      .from("condominio_maquinas")
-      .select("*")
-      .eq("condominio_id", condominioId)
-      .order("categoria", { ascending: true })
-      .order("maquina_tag", { ascending: true });
-
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-    return NextResponse.json({ ok: true, data: data ?? [] });
+    // ✅ compat UI: devolve "maquinas"
+    return NextResponse.json({ ok: true, maquinas: data ?? [], data: data ?? [] });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
