@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/app/components/AppShell";
 
 type TipoPagamento = "direto" | "boleto";
+type FiltroPagamento = "todos" | TipoPagamento;
 
 type Row = {
   mes_ref: string | null;
@@ -26,7 +27,7 @@ type Row = {
   banco_agencia: string | null;
   banco_conta: string | null;
 
-  // NOVO (se vier do backend)
+  // vem do backend agora (mas mantemos tolerante)
   tipo_pagamento?: TipoPagamento | null;
 
   status: string | null;
@@ -96,7 +97,7 @@ function normalizeTipoPagamento(v: any): TipoPagamento | null {
 function renderPagamento(r: Row) {
   const tp = normalizeTipoPagamento((r as any).tipo_pagamento);
 
-  // Se o backend ainda não manda tipo_pagamento, mantém o comportamento antigo
+  // se backend não mandar, não quebra
   if (!tp) {
     return <span className="text-xs text-gray-500">{r.banco_pix ? "PIX" : r.banco_nome ?? "—"}</span>;
   }
@@ -105,7 +106,6 @@ function renderPagamento(r: Row) {
     return <span className="text-xs font-semibold">Pagamento via boleto</span>;
   }
 
-  // direto: mostrar dados bancários / PIX
   if (r.banco_pix) {
     return (
       <div className="text-xs">
@@ -124,10 +124,31 @@ function renderPagamento(r: Row) {
   return (
     <div className="text-xs">
       <div className="font-semibold">{banco}</div>
-      <div className="text-gray-500">
-        {[ag, cc].filter(Boolean).join(" • ") || "—"}
-      </div>
+      <div className="text-gray-500">{[ag, cc].filter(Boolean).join(" • ") || "—"}</div>
     </div>
+  );
+}
+
+function Chip({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "rounded-full border px-3 py-1 text-xs font-semibold transition " +
+        (active ? "bg-black text-white border-black" : "bg-white text-gray-700 hover:bg-gray-50")
+      }
+    >
+      {label}
+    </button>
   );
 }
 
@@ -136,6 +157,8 @@ export default function RelatoriosPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  const [filtroPagamento, setFiltroPagamento] = useState<FiltroPagamento>("todos");
 
   async function carregar(m: string) {
     try {
@@ -152,6 +175,22 @@ export default function RelatoriosPage() {
   useEffect(() => {
     carregar(mes);
   }, [mes]);
+
+  const rowsFiltered = useMemo(() => {
+    if (filtroPagamento === "todos") return rows;
+    return rows.filter((r) => normalizeTipoPagamento((r as any).tipo_pagamento) === filtroPagamento);
+  }, [rows, filtroPagamento]);
+
+  const counts = useMemo(() => {
+    let direto = 0;
+    let boleto = 0;
+    for (const r of rows) {
+      const tp = normalizeTipoPagamento((r as any).tipo_pagamento);
+      if (tp === "boleto") boleto++;
+      else if (tp === "direto") direto++;
+    }
+    return { total: rows.length, direto, boleto };
+  }, [rows]);
 
   return (
     <AppShell title="Relatórios (Financeiro)">
@@ -200,8 +239,35 @@ export default function RelatoriosPage() {
           </div>
         </div>
 
+        {/* Filtro (chips) */}
+        <div className="mt-6 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Chip
+              active={filtroPagamento === "todos"}
+              label={`Todos (${counts.total})`}
+              onClick={() => setFiltroPagamento("todos")}
+            />
+            <Chip
+              active={filtroPagamento === "direto"}
+              label={`Direto (${counts.direto})`}
+              onClick={() => setFiltroPagamento("direto")}
+            />
+            <Chip
+              active={filtroPagamento === "boleto"}
+              label={`Boleto (${counts.boleto})`}
+              onClick={() => setFiltroPagamento("boleto")}
+            />
+          </div>
+
+          {filtroPagamento !== "todos" && (
+            <button className="text-xs text-gray-600 underline" onClick={() => setFiltroPagamento("todos")}>
+              limpar filtro
+            </button>
+          )}
+        </div>
+
         {/* Lista */}
-        <div className="mt-6 rounded border bg-white">
+        <div className="mt-4 rounded border bg-white">
           <div className="grid grid-cols-12 bg-gray-50 p-3 text-xs font-semibold">
             <div className="col-span-5">Condomínio</div>
             <div className="col-span-2">Cashback</div>
@@ -210,7 +276,7 @@ export default function RelatoriosPage() {
             <div className="col-span-1">Pagamento</div>
           </div>
 
-          {rows.map((r, i) => (
+          {rowsFiltered.map((r, i) => (
             <div key={i} className="grid grid-cols-12 border-t p-3 text-sm">
               <div className="col-span-5">
                 <b>{r.condominio_nome}</b>
@@ -237,6 +303,10 @@ export default function RelatoriosPage() {
               <div className="col-span-1">{renderPagamento(r)}</div>
             </div>
           ))}
+
+          {!rowsFiltered.length && (
+            <div className="p-6 text-sm text-gray-500">Nenhum condomínio neste filtro.</div>
+          )}
         </div>
       </div>
     </AppShell>
