@@ -17,14 +17,18 @@ function normalizePath(p: string) {
   if (!p) return "/";
   const clean = p.split("?")[0].split("#")[0];
   if (clean === "") return "/";
-  // normaliza /auditor/auditoria/[id] como /auditor/auditoria
   if (clean.startsWith("/auditor/auditoria/")) return "/auditor/auditoria";
-  // normaliza /condominios/[id]/maquinas como /condominios
   if (clean.includes("/condominios/") && clean.endsWith("/maquinas")) return "/condominios";
   return clean;
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  children,
+  title,
+}: {
+  children: React.ReactNode;
+  title?: string;
+}) {
   const pathname = usePathname();
   const [me, setMe] = useState<Me | null>(null);
 
@@ -57,26 +61,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const role = me?.role ?? null;
 
   const navItems = useMemo(() => {
-    // SEMPRE mostra o básico, mesmo sem /api/me
     const base: { href: string; label: string; minRole: Role }[] = [
       { href: "/", label: "Início", minRole: "auditor" },
       { href: "/auditorias", label: "Auditorias", minRole: "auditor" },
     ];
 
-    // Itens extras só quando já sabemos o role
     const extras: { href: string; label: string; minRole: Role }[] = [
       { href: "/condominios", label: "Pontos", minRole: "interno" },
       { href: "/atribuicoes", label: "Atribuições", minRole: "interno" },
 
-      // ✅ RELATÓRIOS: interno também precisa (relatório financeiro do mês)
+      // Relatório financeiro mensal (interno precisa)
       { href: "/relatorios", label: "Relatórios", minRole: "interno" },
 
-      // usuários continua só gestor
+      // Usuários continua só gestor
       { href: "/usuarios", label: "Usuários", minRole: "gestor" },
     ];
 
     if (!role) return base;
-
     return [...base, ...extras].filter((x) => roleGte(role, x.minRole));
   }, [role]);
 
@@ -112,6 +113,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </header>
+
+      {/* title é opcional: se páginas antigas passarem title, não quebra build */}
+      {title ? (
+        <div className="mx-auto w-full max-w-6xl px-5 pt-4">
+          <div className="pageTitle">{title}</div>
+        </div>
+      ) : null}
 
       <main className="main">{children}</main>
 
@@ -169,6 +177,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           padding: 8px 12px;
           border-radius: 10px;
           cursor: pointer;
+        }
+        .pageTitle {
+          font-size: 16px;
+          font-weight: 800;
+          color: rgba(0, 0, 0, 0.78);
         }
         .main {
           padding: 18px;
