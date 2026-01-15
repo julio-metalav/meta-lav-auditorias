@@ -26,72 +26,61 @@ function normalizeCategoria(v: any) {
   return s || "lavadora";
 }
 
-function pickValorCicloByCapacidade(opts: {
+type TipoPreco = {
   categoria: "lavadora" | "secadora";
-  capacidade_kg: number | null;
-  // novo
-  lav10?: number | null;
-  lav15?: number | null;
-  sec10?: number | null;
-  sec15?: number | null;
-  // legado
-  lavLegacy?: number | null;
-  secLegacy?: number | null;
-}) {
-  const { categoria, capacidade_kg } = opts;
-  const cap = capacidade_kg ?? null;
+  capacidade_kg: number;
+  valor_ciclo: number | null; // vem do cadastro das máquinas (por capacidade)
+};
 
-  if (categoria === "lavadora") {
-    if (cap === 15 && opts.lav15 != null) return Number(opts.lav15);
-    if (cap === 10 && opts.lav10 != null) return Number(opts.lav10);
-    // fallback novo: se só um existir, usa ele
-    if (cap === 15 && opts.lav10 != null && opts.lav15 == null) return Number(opts.lav10);
-    if (cap === 10 && opts.lav15 != null && opts.lav10 == null) return Number(opts.lav15);
-    // legado
-    return Number(opts.lavLegacy ?? 0);
-  }
-
-  // secadora
-  if (cap === 15 && opts.sec15 != null) return Number(opts.sec15);
-  if (cap === 10 && opts.sec10 != null) return Number(opts.sec10);
-  if (cap === 15 && opts.sec10 != null && opts.sec15 == null) return Number(opts.sec10);
-  if (cap === 10 && opts.sec15 != null && opts.sec10 == null) return Number(opts.sec15);
-  return Number(opts.secLegacy ?? 0);
-}
-
-async function getTiposDoCondominio(condominioId: string) {
-  // “O que aparece” vem do cadastro de máquinas do condomínio
-  // distinct categoria + capacidade_kg
+async function getTiposDoCondominioComPreco(condominioId: string, fallback: { lav: number; sec: number }) {
+  // ✅ Fonte da verdade do tipo e do preço por capacidade: condominio_maquinas
+  // distinct categoria + capacidade_kg, e preço vem do valor_ciclo cadastrado nas máquinas
   const { data, error } = await supabaseAdmin()
     .from("condominio_maquinas")
-    .select("categoria, capacidade_kg")
+    .select("categoria, capacidade_kg, valor_ciclo")
     .eq("condominio_id", condominioId);
 
   if (error) throw new Error(error.message);
 
-  const seen = new Set<string>();
-  const tipos: { categoria: "lavadora" | "secadora"; capacidade_kg: number }[] = [];
+  const map = new Map<string, TipoPreco>();
 
-  for (const r of data ?? []) {
+  for (const r of (data ?? []) as any[]) {
     const cat = normalizeCategoria(r.categoria) as "lavadora" | "secadora";
     const cap = safeNum(r.capacidade_kg);
     if (!cap) continue;
+
     const key = `${cat}-${cap}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    tipos.push({ categoria: cat, capacidade_kg: Number(cap) });
+    const val = r.valor_ciclo != null ? Number(r.valor_ciclo) : null;
+
+    if (!map.has(key)) {
+      map.set(key, { categoria: cat, capacidade_kg: Number(cap), valor_ciclo: val });
+    } else {
+      // se já existe, só preenche preço se estava null
+      const cur = map.get(key)!;
+      if ((cur.valor_ciclo == null || cur.valor_ciclo === 0) && val != null) {
+        cur.valor_ciclo = val;
+      }
+    }
   }
 
-  // se por algum motivo o condomínio ainda não cadastrou máquinas,
-  // devolve um default mínimo (lavadora 10) pra não quebrar a tela.
+  let tipos = Array.from(map.values());
+
+  // fallback mínimo pra não quebrar a tela se condomínio não tiver máquinas cadastradas
   if (tipos.length === 0) {
-    tipos.push({ categoria: "lavadora", capacidade_kg: 10 });
+    tipos = [{ categoria: "lavadora", capacidade_kg: 10, valor_ciclo: fallback.lav || 0 }];
   }
 
-  // ordena: lavadora antes, e 10 antes de 15
+  // ordena: lavadora antes; 10 antes de 15
   tipos.sort((a, b) => {
     if (a.categoria !== b.categoria) return a.categoria === "lavadora" ? -1 : 1;
     return a.capacidade_kg - b.capacidade_kg;
+  });
+
+  // se preço não vier das máquinas, usa legado do condomínio
+  tipos = tipos.map((t) => {
+    if (t.valor_ciclo != null && Number.isFinite(t.valor_ciclo)) return t;
+    const legacy = t.categoria === "secadora" ? fallback.sec : fallback.lav;
+    return { ...t, valor_ciclo: Number(legacy ?? 0) };
   });
 
   return tipos;
@@ -114,36 +103,24 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (audErr) return bad(audErr.message, 500);
     if (!aud) return bad("Auditoria não encontrada", 404);
 
+    // ✅ legado (fallback). NÃO pedir colunas novas que ainda não existem no banco.
     const { data: condo, error: condoErr } = await supabaseAdmin()
       .from("condominios")
-      .select(
-        [
-          "id",
-          // legado
-          "valor_ciclo_lavadora",
-          "valor_ciclo_secadora",
-          // novo
-          "valor_ciclo_lavadora_10",
-          "valor_ciclo_lavadora_15",
-          "valor_ciclo_secadora_10",
-          "valor_ciclo_secadora_15",
-        ].join(",")
-      )
+      .select("id, valor_ciclo_lavadora, valor_ciclo_secadora")
       .eq("id", aud.condominio_id)
       .maybeSingle();
 
     if (condoErr) return bad(condoErr.message, 500);
 
-    const precos = {
-      lavLegacy: condo?.valor_ciclo_lavadora != null ? Number(condo.valor_ciclo_lavadora) : 0,
-      secLegacy: condo?.valor_ciclo_secadora != null ? Number(condo.valor_ciclo_secadora) : 0,
-      lav10: condo?.valor_ciclo_lavadora_10 != null ? Number(condo.valor_ciclo_lavadora_10) : null,
-      lav15: condo?.valor_ciclo_lavadora_15 != null ? Number(condo.valor_ciclo_lavadora_15) : null,
-      sec10: condo?.valor_ciclo_secadora_10 != null ? Number(condo.valor_ciclo_secadora_10) : null,
-      sec15: condo?.valor_ciclo_secadora_15 != null ? Number(condo.valor_ciclo_secadora_15) : null,
+    // ✅ FIX build: tipagem segura
+    const condoAny: any = condo ?? {};
+    const fallback = {
+      lav: condoAny.valor_ciclo_lavadora != null ? Number(condoAny.valor_ciclo_lavadora) : 0,
+      sec: condoAny.valor_ciclo_secadora != null ? Number(condoAny.valor_ciclo_secadora) : 0,
     };
 
-    const tipos = await getTiposDoCondominio(String(aud.condominio_id));
+    // ✅ tipos + preço por capacidade vêm do cadastro de máquinas do condomínio
+    const tipos = await getTiposDoCondominioComPreco(String(aud.condominio_id), fallback);
 
     const { data: rows, error: rowsErr } = await supabaseAdmin()
       .from("auditoria_ciclos")
@@ -153,7 +130,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (rowsErr) return bad(rowsErr.message, 500);
 
     const byKey = new Map<string, any>();
-    for (const r of rows ?? []) {
+    for (const r of (rows ?? []) as any[]) {
       const cat = normalizeCategoria(r.categoria) as "lavadora" | "secadora";
       const cap = safeNum(r.capacidade_kg);
       if (!cap) continue;
@@ -164,24 +141,13 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       const key = `${t.categoria}-${t.capacidade_kg}`;
       const r = byKey.get(key);
 
-      const valor_ciclo = pickValorCicloByCapacidade({
-        categoria: t.categoria,
-        capacidade_kg: t.capacidade_kg,
-        lav10: precos.lav10,
-        lav15: precos.lav15,
-        sec10: precos.sec10,
-        sec15: precos.sec15,
-        lavLegacy: precos.lavLegacy,
-        secLegacy: precos.secLegacy,
-      });
-
       return {
         id: r?.id ?? null,
         auditoria_id: auditoriaId,
         categoria: t.categoria,
         capacidade_kg: t.capacidade_kg,
         ciclos: Math.max(0, Number(r?.ciclos ?? 0)),
-        valor_ciclo,
+        valor_ciclo: Number(t.valor_ciclo ?? 0),
       };
     });
 
@@ -209,58 +175,4 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const itens = Array.isArray(body?.itens) ? body.itens : null;
     if (!itens) return bad("Payload inválido. Esperado {itens:[...]}");
 
-    const { data: aud, error: audErr } = await supabaseAdmin()
-      .from("auditorias")
-      .select("id, condominio_id")
-      .eq("id", auditoriaId)
-      .maybeSingle();
-
-    if (audErr) return bad(audErr.message, 500);
-    if (!aud) return bad("Auditoria não encontrada", 404);
-
-    // opcional: valida contra tipos cadastrados no condomínio
-    const tipos = await getTiposDoCondominio(String(aud.condominio_id));
-    const allowed = new Set(tipos.map((t) => `${t.categoria}-${t.capacidade_kg}`));
-
-    const normalized = itens.map((x: any) => {
-      const categoria = normalizeCategoria(x.categoria) as "lavadora" | "secadora";
-      const capacidade_kg = safeNum(x.capacidade_kg);
-      const ciclos = safeNum(x.ciclos);
-
-      if (!categoria) throw new Error("categoria obrigatória");
-      if (capacidade_kg === null) throw new Error("capacidade_kg obrigatória");
-      if (ciclos === null) throw new Error("ciclos obrigatório");
-
-      const key = `${categoria}-${Number(capacidade_kg)}`;
-      if (!allowed.has(key)) {
-        throw new Error(`Tipo não cadastrado no condomínio: ${categoria} ${Number(capacidade_kg)}kg`);
-      }
-
-      return {
-        auditoria_id: auditoriaId,
-        categoria,
-        capacidade_kg: Number(capacidade_kg),
-        ciclos: Math.max(0, Math.trunc(Number(ciclos))),
-      };
-    });
-
-    const { error: upErr } = await supabaseAdmin()
-      .from("auditoria_ciclos")
-      .upsert(normalized, { onConflict: "auditoria_id,categoria,capacidade_kg" });
-
-    if (upErr) return bad(upErr.message, 500);
-
-    const { data: after, error: afterErr } = await supabaseAdmin()
-      .from("auditoria_ciclos")
-      .select("id, auditoria_id, categoria, capacidade_kg, ciclos")
-      .eq("auditoria_id", auditoriaId)
-      .order("categoria", { ascending: true })
-      .order("capacidade_kg", { ascending: true });
-
-    if (afterErr) return bad(afterErr.message, 500);
-
-    return NextResponse.json({ ok: true, data: { itens: after ?? [] } });
-  } catch (e: any) {
-    return bad(e?.message ?? "Erro inesperado", 500);
-  }
-}
+    const { data: aud, error: audErr } =
