@@ -64,10 +64,6 @@ function clampPosInt(n: number, fallback: number) {
   return i > 0 ? i : fallback;
 }
 
-function pad2(n: number) {
-  return String(n).padStart(2, "0");
-}
-
 function badgePagamento(tipo?: string | null) {
   const t = String(tipo ?? "direto").toLowerCase();
   const label = t === "boleto" ? "Boleto" : "Direto";
@@ -298,29 +294,23 @@ export default function CondominiosPage() {
         throw new Error("Condomínio salvo, mas não veio o ID na resposta da API (/api/condominios).");
 
       // 2) salva máquinas do condomínio
-      let lavN = 0;
-      let secN = 0;
+      // ✅ IMPORTANTE: backend espera ARRAY AGREGADO com {categoria, capacidade_kg, quantidade, valor_ciclo...}
+      // (o backend gera maquina_tag e faz replace)
+      const maquinasPayload = maquinas
+  .map((m) => {
+    const quantidadeRaw = Number(m.quantidade);
+    const quantidade = Number.isFinite(quantidadeRaw) && quantidadeRaw > 0 ? Math.trunc(quantidadeRaw) : 0;
 
-      const maquinasPayload = maquinas.flatMap((m) => {
-        const qtd = Math.max(0, Math.trunc(Number(m.quantidade) || 0));
-        const base = {
-          categoria: m.categoria,
-          capacidade_kg: m.capacidade_kg === null ? null : Number(m.capacidade_kg),
-          valor_ciclo: parseMoneyPtBr(m.valor_ciclo_text),
-          limpeza_quimica_ciclos: clampPosInt(Number(m.limpeza_quimica_ciclos), 500),
-          limpeza_mecanica_ciclos: clampPosInt(Number(m.limpeza_mecanica_ciclos), 2000),
-        };
-
-        const arr: any[] = [];
-        for (let i = 0; i < qtd; i++) {
-          if (m.categoria === "lavadora") lavN += 1;
-          else secN += 1;
-
-          const maquina_tag = m.categoria === "lavadora" ? `LAV-${pad2(lavN)}` : `SEC-${pad2(secN)}`;
-          arr.push({ ...base, maquina_tag });
-        }
-        return arr;
-      });
+    return {
+      categoria: m.categoria,
+      capacidade_kg: m.capacidade_kg !== null ? Number(m.capacidade_kg) : null,
+      quantidade, // 🔒 GARANTIDO
+      valor_ciclo: Number(parseMoneyPtBr(m.valor_ciclo_text) || 0),
+      limpeza_quimica_ciclos: clampPosInt(Number(m.limpeza_quimica_ciclos), 500),
+      limpeza_mecanica_ciclos: clampPosInt(Number(m.limpeza_mecanica_ciclos), 2000),
+    };
+  })
+  .filter((x) => Number(x.quantidade) > 0);
 
       if (!maquinasPayload.length) throw new Error("Informe quantidade de máquinas (mínimo 1).");
 
