@@ -16,13 +16,14 @@ function normalizeMetodo(input: any): "direto" | "boleto" {
   const s = String(input ?? "").trim().toLowerCase();
   if (s.includes("diret")) return "direto";
   if (s.includes("boleto")) return "boleto";
-  // fallback seguro
   return "boleto";
 }
 
 async function canAuditorAccessByVinculo(auditorId: string, condominioId: string) {
-  // FIX IMPORTANTE: vínculo é via auditor_condominios (não via auditoria)
-  const { data, error } = await supabaseAdmin
+  // supabaseAdmin é FUNÇÃO -> precisa chamar supabaseAdmin()
+  const sb = supabaseAdmin();
+
+  const { data, error } = await sb
     .from("auditor_condominios")
     .select("id")
     .eq("auditor_id", auditorId)
@@ -34,7 +35,9 @@ async function canAuditorAccessByVinculo(auditorId: string, condominioId: string
 }
 
 async function fetchCondominioBasics(condominioId: string) {
-  const { data, error } = await supabaseAdmin
+  const sb = supabaseAdmin();
+
+  const { data, error } = await sb
     .from("condominios")
     .select("id, tipo_pagamento, valor_ciclo_lavadora, valor_ciclo_secadora")
     .eq("id", condominioId)
@@ -66,11 +69,10 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     const { user, role } = await getUserAndRole();
     if (!user) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
 
+    const sb = supabaseAdmin();
     const id = params.id;
 
-    // 🔥 CORREÇÃO DO BUG: NÃO selecionar auditorias.base_agua (coluna não existe)
-    // Usar agua_leitura_base / energia_leitura_base / gas_leitura_base
-    const { data: aud, error: audErr } = await supabaseAdmin
+    const { data: aud, error: audErr } = await sb
       .from("auditorias")
       .select(
         [
@@ -100,14 +102,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       .eq("id", id)
       .maybeSingle();
 
-    if (audErr) {
-      return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
-    }
-    if (!aud) {
-      return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
-    }
+    if (audErr) return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
+    if (!aud) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
-    // Permissões
     const isManager = roleGte(role, "interno");
     const isOwnerAuditor = !!aud.auditor_id && aud.auditor_id === user.id;
     const isVinculado = await canAuditorAccessByVinculo(user.id, aud.condominio_id);
@@ -118,7 +115,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     const { condominio, error: condoErr } = await fetchCondominioBasics(aud.condominio_id);
     if (condoErr) {
-      // mesmo com erro do condominio, devolve auditoria (não quebrar UI)
       const payload = withCompatAliases(aud, null);
       return NextResponse.json({ ok: true, data: payload, auditoria: payload }, { status: 200 });
     }
@@ -135,11 +131,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const { user, role } = await getUserAndRole();
     if (!user) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
 
+    const sb = supabaseAdmin();
     const id = params.id;
     const body = await req.json().catch(() => ({}));
 
-    // Carrega auditoria para permissão + condominio_id
-    const { data: aud, error: audErr } = await supabaseAdmin
+    const { data: aud, error: audErr } = await sb
       .from("auditorias")
       .select("id, condominio_id, auditor_id, status")
       .eq("id", id)
@@ -156,10 +152,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
-    // Auditor pode salvar campo (leituras/fotos/obs) e concluir em_conferencia.
-    // Interno/Gestor podem tudo (sem ampliar escopo aqui).
     const patch: any = {};
-
     const allowed = [
       "agua_leitura",
       "energia_leitura",
@@ -178,7 +171,6 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       if (k in body) patch[k] = body[k];
     }
 
-    // Normalize status
     if (typeof patch.status === "string") {
       const s = String(patch.status).trim().toLowerCase();
       const okStatus: Status[] = ["aberta", "em_andamento", "em_conferencia", "final"];
@@ -186,19 +178,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       else patch.status = s;
     }
 
-    // Auditor não finaliza direto (regra do mapa): finaliza é Interno/Gestor
-    if (!isManager && patch.status === "final") {
-      delete patch.status;
-    }
+    // Auditor não finaliza direto
+    if (!isManager && patch.status === "final") delete patch.status;
 
-    // Se auditor concluiu campo, status deve virar em_conferencia
-    // (mantém seu fluxo)
-    if (!isManager && patch.status && patch.status !== "em_conferencia") {
-      // auditor só pode mandar em_conferencia (ou não mandar status)
-      delete patch.status;
-    }
+    // Auditor só pode mandar em_conferencia (ou não mandar status)
+    if (!isManager && patch.status && patch.status !== "em_conferencia") delete patch.status;
 
-    const { data: saved, error: saveErr } = await supabaseAdmin
+    const { data: saved, error: saveErr } = await sb
       .from("auditorias")
       .update(patch)
       .eq("id", id)
@@ -229,9 +215,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       )
       .maybeSingle();
 
-    if (saveErr) {
-      return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
-    }
+    if (saveErr) return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
 
     const { condominio } = await fetchCondominioBasics(saved!.condominio_id);
     const payload = withCompatAliases(saved, condominio);
