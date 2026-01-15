@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/app/components/AppShell";
 
+type TipoPagamento = "direto" | "boleto";
+
 type Condo = {
   id: string;
   nome: string;
@@ -13,6 +15,7 @@ type Condo = {
   numero?: string;
   bairro?: string;
   complemento?: string;
+  tipo_pagamento?: TipoPagamento | null;
 };
 
 type Me = { user: { id: string; email: string }; role: string };
@@ -43,9 +46,7 @@ function parseMoneyPtBr(input: string): number {
   const s = String(input ?? "").trim();
   if (!s) return 0;
   const cleaned = s.replace(/\s/g, "").replace(/^R\$/i, "");
-  const normalized = cleaned.includes(",")
-    ? cleaned.replace(/\./g, "").replace(",", ".")
-    : cleaned;
+  const normalized = cleaned.includes(",") ? cleaned.replace(/\./g, "").replace(",", ".") : cleaned;
   const n = Number(normalized);
   return Number.isFinite(n) ? n : 0;
 }
@@ -60,6 +61,11 @@ function clampPosInt(n: number, fallback: number) {
   if (!Number.isFinite(n)) return fallback;
   const i = Math.trunc(n);
   return i > 0 ? i : fallback;
+}
+
+function normalizeTipoPagamento(v: any): TipoPagamento {
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "boleto" ? "boleto" : "direto";
 }
 
 export default function CondominiosPage() {
@@ -91,6 +97,9 @@ export default function CondominiosPage() {
     tipo_conta: "",
     pix: "",
     favorecido_cnpj: "",
+
+    // ✅ NOVO
+    tipo_pagamento: "direto" as TipoPagamento,
   });
 
   // ✅ Parque de máquinas embutido no cadastro
@@ -111,10 +120,7 @@ export default function CondominiosPage() {
     setErr(null);
     setOk(null);
 
-    const [m, c] = await Promise.all([
-      fetch("/api/me").then((r) => r.json()),
-      fetch("/api/condominios").then((r) => r.json()),
-    ]);
+    const [m, c] = await Promise.all([fetch("/api/me").then((r) => r.json()), fetch("/api/condominios").then((r) => r.json())]);
 
     if (m?.error) {
       setErr(m.error);
@@ -181,6 +187,9 @@ export default function CondominiosPage() {
         throw new Error("Preencha Nome, Cidade e UF.");
       }
 
+      // Normaliza tipo_pagamento (robusto)
+      const tipo_pagamento: TipoPagamento = normalizeTipoPagamento(form.tipo_pagamento);
+
       // Validação básica das máquinas (pode ajustar depois se quiser permitir vazio)
       if (!maquinas.length) throw new Error("Cadastre pelo menos 1 tipo de máquina.");
       for (const m of maquinas) {
@@ -195,15 +204,11 @@ export default function CondominiosPage() {
           throw new Error("Limpeza mecânica (ciclos) inválida.");
       }
 
-      const payload = { ...form };
+      const payload: any = { ...form, tipo_pagamento };
 
       // ✅ aceitar vírgula também nesses campos (se quiser usar)
-      payload.valor_ciclo_lavadora = payload.valor_ciclo_lavadora
-        ? parseMoneyPtBr(String(payload.valor_ciclo_lavadora))
-        : null;
-      payload.valor_ciclo_secadora = payload.valor_ciclo_secadora
-        ? parseMoneyPtBr(String(payload.valor_ciclo_secadora))
-        : null;
+      payload.valor_ciclo_lavadora = payload.valor_ciclo_lavadora ? parseMoneyPtBr(String(payload.valor_ciclo_lavadora)) : null;
+      payload.valor_ciclo_secadora = payload.valor_ciclo_secadora ? parseMoneyPtBr(String(payload.valor_ciclo_secadora)) : null;
 
       // percent
       payload.cashback_percent = payload.cashback_percent ? Number(payload.cashback_percent) : null;
@@ -221,8 +226,7 @@ export default function CondominiosPage() {
       }
 
       // tenta achar o id retornado (robusto)
-      const condominioId: string | undefined =
-        j?.data?.id ?? j?.id ?? j?.condominio?.id ?? j?.data?.[0]?.id;
+      const condominioId: string | undefined = j?.data?.id ?? j?.id ?? j?.condominio?.id ?? j?.data?.[0]?.id;
 
       if (!condominioId) {
         throw new Error("Condomínio salvo, mas não veio o ID na resposta da API (/api/condominios).");
@@ -272,6 +276,8 @@ export default function CondominiosPage() {
         tipo_conta: "",
         pix: "",
         favorecido_cnpj: "",
+
+        tipo_pagamento: "direto" as TipoPagamento,
       });
 
       setMaquinas([
@@ -298,7 +304,9 @@ export default function CondominiosPage() {
     <AppShell title="Cadastro do ponto">
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <div className="small">{condos.length} condomínios</div>
-        <button className="btn" onClick={loadAll}>Recarregar</button>
+        <button className="btn" onClick={loadAll}>
+          Recarregar
+        </button>
       </div>
 
       {err && <p style={{ color: "#b42318" }}>{err}</p>}
@@ -306,7 +314,9 @@ export default function CondominiosPage() {
 
       {canEdit && (
         <div className="card" style={{ background: "#fbfcff", marginTop: 12 }}>
-          <div className="small" style={{ marginBottom: 8 }}>Novo condomínio</div>
+          <div className="small" style={{ marginBottom: 8 }}>
+            Novo condomínio
+          </div>
 
           <div className="grid2">
             <div>
@@ -321,6 +331,32 @@ export default function CondominiosPage() {
               <div style={{ width: 90 }}>
                 <div className="small">UF</div>
                 <input className="input" value={form.uf} onChange={(e) => setForm({ ...form, uf: e.target.value.toUpperCase() })} />
+              </div>
+            </div>
+          </div>
+
+          <div style={{ height: 10 }} />
+          <div className="small">Pagamento do condomínio</div>
+          <div className="grid2">
+            <div>
+              <div className="small">Tipo de pagamento</div>
+              <select
+                className="input"
+                value={form.tipo_pagamento}
+                onChange={(e) => setForm({ ...form, tipo_pagamento: normalizeTipoPagamento(e.target.value) })}
+              >
+                <option value="direto">Direto (PIX/depósito) — exige comprovante</option>
+                <option value="boleto">Boleto — pode fechar sem comprovante</option>
+              </select>
+              <div className="small" style={{ opacity: 0.75, marginTop: 4 }}>
+                Regra automática no fechamento da auditoria.
+              </div>
+            </div>
+
+            <div>
+              <div className="small">Observação</div>
+              <div className="small" style={{ opacity: 0.75 }}>
+                Se for <b>boleto</b>, os dados bancários podem ficar preenchidos ou não — o relatório vai mostrar “Pagamento via boleto”.
               </div>
             </div>
           </div>
@@ -350,7 +386,13 @@ export default function CondominiosPage() {
             </div>
             <div>
               <div className="small">Mapa</div>
-              {mapsUrl ? <a className="btn" href={mapsUrl} target="_blank">Abrir no Google Maps</a> : <div className="small">Preencha endereço</div>}
+              {mapsUrl ? (
+                <a className="btn" href={mapsUrl} target="_blank">
+                  Abrir no Google Maps
+                </a>
+              ) : (
+                <div className="small">Preencha endereço</div>
+              )}
             </div>
           </div>
 
@@ -380,11 +422,21 @@ export default function CondominiosPage() {
           <div className="grid2">
             <div>
               <div className="small">Valor ciclo lavadora (R$)</div>
-              <input className="input" placeholder="ex: 16,50" value={form.valor_ciclo_lavadora} onChange={(e) => setForm({ ...form, valor_ciclo_lavadora: e.target.value })} />
+              <input
+                className="input"
+                placeholder="ex: 16,50"
+                value={form.valor_ciclo_lavadora}
+                onChange={(e) => setForm({ ...form, valor_ciclo_lavadora: e.target.value })}
+              />
             </div>
             <div>
               <div className="small">Valor ciclo secadora (R$)</div>
-              <input className="input" placeholder="ex: 8,00" value={form.valor_ciclo_secadora} onChange={(e) => setForm({ ...form, valor_ciclo_secadora: e.target.value })} />
+              <input
+                className="input"
+                placeholder="ex: 8,00"
+                value={form.valor_ciclo_secadora}
+                onChange={(e) => setForm({ ...form, valor_ciclo_secadora: e.target.value })}
+              />
             </div>
             <div>
               <div className="small">Cashback %</div>
@@ -395,13 +447,18 @@ export default function CondominiosPage() {
           {/* ✅ PARQUE DE MÁQUINAS EMBUTIDO */}
           <div style={{ height: 14 }} />
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <div className="small" style={{ fontWeight: 700 }}>Parque de máquinas</div>
-            <button className="btn" onClick={addMaquina}>+ Adicionar tipo</button>
+            <div className="small" style={{ fontWeight: 700 }}>
+              Parque de máquinas
+            </div>
+            <button className="btn" onClick={addMaquina}>
+              + Adicionar tipo
+            </button>
           </div>
 
           <div className="card" style={{ marginTop: 10 }}>
             <div className="small" style={{ marginBottom: 8 }}>
-              Total máquinas: <b>{maquinasResumo.total}</b> &nbsp;|&nbsp; Lavadoras: <b>{maquinasResumo.lav}</b> &nbsp;|&nbsp; Secadoras: <b>{maquinasResumo.sec}</b>
+              Total máquinas: <b>{maquinasResumo.total}</b> &nbsp;|&nbsp; Lavadoras: <b>{maquinasResumo.lav}</b> &nbsp;|&nbsp; Secadoras:{" "}
+              <b>{maquinasResumo.sec}</b>
             </div>
 
             {maquinas.length === 0 ? (
@@ -413,11 +470,7 @@ export default function CondominiosPage() {
                     <div className="grid2" style={{ alignItems: "end" }}>
                       <div>
                         <div className="small">Categoria</div>
-                        <select
-                          className="input"
-                          value={m.categoria}
-                          onChange={(e) => updateMaquina(i, { categoria: e.target.value as any })}
-                        >
+                        <select className="input" value={m.categoria} onChange={(e) => updateMaquina(i, { categoria: e.target.value as any })}>
                           <option value="lavadora">Lavadora</option>
                           <option value="secadora">Secadora</option>
                         </select>
@@ -499,7 +552,9 @@ export default function CondominiosPage() {
                       </div>
 
                       <div className="row" style={{ justifyContent: "flex-end" }}>
-                        <button className="btn" onClick={() => removeMaquina(i)}>Remover</button>
+                        <button className="btn" onClick={() => removeMaquina(i)}>
+                          Remover
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -511,20 +566,34 @@ export default function CondominiosPage() {
           <div style={{ height: 10 }} />
           <div className="small">Dados bancários</div>
           <div className="grid2">
-            <div><div className="small">Banco</div><input className="input" value={form.banco} onChange={(e)=>setForm({...form,banco:e.target.value})}/></div>
-            <div><div className="small">Agência</div><input className="input" value={form.agencia} onChange={(e)=>setForm({...form,agencia:e.target.value})}/></div>
-            <div><div className="small">Conta</div><input className="input" value={form.conta} onChange={(e)=>setForm({...form,conta:e.target.value})}/></div>
-            <div><div className="small">Tipo conta</div><input className="input" value={form.tipo_conta} onChange={(e)=>setForm({...form,tipo_conta:e.target.value})}/></div>
-            <div><div className="small">PIX</div><input className="input" value={form.pix} onChange={(e)=>setForm({...form,pix:e.target.value})}/></div>
-            <div><div className="small">Favorecido/CNPJ</div><input className="input" value={form.favorecido_cnpj} onChange={(e)=>setForm({...form,favorecido_cnpj:e.target.value})}/></div>
+            <div>
+              <div className="small">Banco</div>
+              <input className="input" value={form.banco} onChange={(e) => setForm({ ...form, banco: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Agência</div>
+              <input className="input" value={form.agencia} onChange={(e) => setForm({ ...form, agencia: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Conta</div>
+              <input className="input" value={form.conta} onChange={(e) => setForm({ ...form, conta: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Tipo conta</div>
+              <input className="input" value={form.tipo_conta} onChange={(e) => setForm({ ...form, tipo_conta: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">PIX</div>
+              <input className="input" value={form.pix} onChange={(e) => setForm({ ...form, pix: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Favorecido/CNPJ</div>
+              <input className="input" value={form.favorecido_cnpj} onChange={(e) => setForm({ ...form, favorecido_cnpj: e.target.value })} />
+            </div>
           </div>
 
           <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
-            <button
-              className="btn primary"
-              onClick={criar}
-              disabled={saving || !form.nome || !form.cidade || !form.uf}
-            >
+            <button className="btn primary" onClick={criar} disabled={saving || !form.nome || !form.cidade || !form.uf}>
               {saving ? "Salvando..." : "Salvar (Condomínio + Máquinas)"}
             </button>
           </div>
@@ -534,16 +603,36 @@ export default function CondominiosPage() {
       <hr className="hr" />
 
       <div className="list">
-        {condos.map((c) => (
-          <div key={c.id} className="card">
-            <div style={{ fontWeight: 700 }}>{c.nome}</div>
-            <div className="small">{c.cidade}/{c.uf}</div>
-            <div className="small">{[c.rua, c.numero, c.bairro].filter(Boolean).join(", ")}</div>
-            <div className="row" style={{ marginTop: 8, gap: 8 }}>
-              <a className="btn" href={`/condominios/${c.id}/maquinas`}>Ver máquinas</a>
+        {condos.map((c) => {
+          const tp = normalizeTipoPagamento((c as any).tipo_pagamento);
+          return (
+            <div key={c.id} className="card">
+              <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+                <span>{c.nome}</span>
+                <span
+                  className="small"
+                  style={{
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    border: "1px solid #e5e7eb",
+                    background: tp === "boleto" ? "#fff7ed" : "#f0fdf4",
+                  }}
+                >
+                  {tp === "boleto" ? "Boleto" : "Direto"}
+                </span>
+              </div>
+              <div className="small">
+                {c.cidade}/{c.uf}
+              </div>
+              <div className="small">{[c.rua, c.numero, c.bairro].filter(Boolean).join(", ")}</div>
+              <div className="row" style={{ marginTop: 8, gap: 8 }}>
+                <a className="btn" href={`/condominios/${c.id}/maquinas`}>
+                  Ver máquinas
+                </a>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </AppShell>
   );
