@@ -13,6 +13,8 @@ type Condo = {
   numero?: string;
   bairro?: string;
   complemento?: string;
+
+  tipo_pagamento?: "direto" | "boleto" | null;
 };
 
 type Me = { user: { id: string; email: string }; role: string };
@@ -22,10 +24,10 @@ type MaquinaRow = {
   capacidade_kg: number | null;
   quantidade: number;
 
-  // ✅ input livre (16,50)
+  // input livre (16,50)
   valor_ciclo_text: string;
 
-  // ✅ regras limpeza
+  // regras limpeza
   limpeza_quimica_ciclos: number;
   limpeza_mecanica_ciclos: number;
 };
@@ -66,12 +68,33 @@ function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
 
+function badgePagamento(tipo?: string | null) {
+  const t = String(tipo ?? "direto").toLowerCase();
+  const label = t === "boleto" ? "Boleto" : "Direto";
+  return (
+    <span
+      style={{
+        marginLeft: 8,
+        fontSize: 12,
+        padding: "2px 8px",
+        borderRadius: 999,
+        border: "1px solid #d0d5dd",
+        background: "#f9fafb",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
 export default function CondominiosPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [condos, setCondos] = useState<Condo[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const [showForm, setShowForm] = useState(false);
 
   const [form, setForm] = useState<any>({
     nome: "",
@@ -95,9 +118,10 @@ export default function CondominiosPage() {
     tipo_conta: "",
     pix: "",
     favorecido_cnpj: "",
+    tipo_pagamento: "direto", // ✅ default
   });
 
-  // ✅ Parque de máquinas embutido no cadastro
+  // Parque de máquinas embutido no cadastro
   const [maquinas, setMaquinas] = useState<MaquinaRow[]>([
     {
       categoria: "lavadora",
@@ -174,18 +198,54 @@ export default function CondominiosPage() {
     return { total, lav, sec };
   }, [maquinas]);
 
+  function resetForm() {
+    setForm({
+      nome: "",
+      cidade: "",
+      uf: "",
+      cep: "",
+      rua: "",
+      numero: "",
+      bairro: "",
+      complemento: "",
+      sindico_nome: "",
+      sindico_telefone: "",
+      zelador_nome: "",
+      zelador_telefone: "",
+      valor_ciclo_lavadora: "",
+      valor_ciclo_secadora: "",
+      cashback_percent: "",
+      banco: "",
+      agencia: "",
+      conta: "",
+      tipo_conta: "",
+      pix: "",
+      favorecido_cnpj: "",
+      tipo_pagamento: "direto",
+    });
+
+    setMaquinas([
+      {
+        categoria: "lavadora",
+        capacidade_kg: 10,
+        quantidade: 1,
+        valor_ciclo_text: "0,00",
+        limpeza_quimica_ciclos: 500,
+        limpeza_mecanica_ciclos: 2000,
+      },
+    ]);
+  }
+
   async function criar() {
     setErr(null);
     setOk(null);
     setSaving(true);
 
     try {
-      // Validação básica do condomínio
       if (!form.nome || !form.cidade || !form.uf) {
         throw new Error("Preencha Nome, Cidade e UF.");
       }
 
-      // Validação básica das máquinas
       if (!maquinas.length) throw new Error("Cadastre pelo menos 1 tipo de máquina.");
       for (const m of maquinas) {
         if (!m.categoria) throw new Error("Categoria da máquina é obrigatória.");
@@ -199,16 +259,14 @@ export default function CondominiosPage() {
           throw new Error("Limpeza mecânica (ciclos) inválida.");
       }
 
-      const payload = { ...form };
+      const payload: any = { ...form };
 
-      payload.valor_ciclo_lavadora = payload.valor_ciclo_lavadora
-        ? parseMoneyPtBr(String(payload.valor_ciclo_lavadora))
-        : null;
-      payload.valor_ciclo_secadora = payload.valor_ciclo_secadora
-        ? parseMoneyPtBr(String(payload.valor_ciclo_secadora))
-        : null;
-
+      payload.valor_ciclo_lavadora = payload.valor_ciclo_lavadora ? parseMoneyPtBr(String(payload.valor_ciclo_lavadora)) : null;
+      payload.valor_ciclo_secadora = payload.valor_ciclo_secadora ? parseMoneyPtBr(String(payload.valor_ciclo_secadora)) : null;
       payload.cashback_percent = payload.cashback_percent ? Number(payload.cashback_percent) : null;
+
+      // garante enum
+      payload.tipo_pagamento = String(payload.tipo_pagamento ?? "direto").toLowerCase() === "boleto" ? "boleto" : "direto";
 
       // 1) salva condomínio
       const r = await fetch("/api/condominios", {
@@ -218,16 +276,12 @@ export default function CondominiosPage() {
       });
 
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        throw new Error(j?.error || "Erro ao salvar condomínio");
-      }
+      if (!r.ok) throw new Error(j?.error || "Erro ao salvar condomínio");
 
       const condominioId: string | undefined =
         j?.data?.id ?? j?.id ?? j?.condominio?.id ?? j?.data?.[0]?.id;
 
-      if (!condominioId) {
-        throw new Error("Condomínio salvo, mas não veio o ID na resposta da API (/api/condominios).");
-      }
+      if (!condominioId) throw new Error("Condomínio salvo, mas não veio o ID na resposta da API (/api/condominios).");
 
       // 2) salva máquinas do condomínio
       // ✅ FIX: gera maquina_tag e expande quantidade
@@ -258,9 +312,7 @@ export default function CondominiosPage() {
         return arr;
       });
 
-      if (!maquinasPayload.length) {
-        throw new Error("Informe quantidade de máquinas (mínimo 1).");
-      }
+      if (!maquinasPayload.length) throw new Error("Informe quantidade de máquinas (mínimo 1).");
 
       const r2 = await fetch(`/api/condominios/${condominioId}/maquinas`, {
         method: "POST",
@@ -269,45 +321,10 @@ export default function CondominiosPage() {
       });
 
       const j2 = await r2.json().catch(() => ({}));
-      if (!r2.ok) {
-        throw new Error(j2?.error || "Condomínio salvo, mas falhou ao salvar máquinas.");
-      }
+      if (!r2.ok) throw new Error(j2?.error || "Condomínio salvo, mas falhou ao salvar máquinas.");
 
-      // reset form
-      setForm({
-        nome: "",
-        cidade: "",
-        uf: "",
-        cep: "",
-        rua: "",
-        numero: "",
-        bairro: "",
-        complemento: "",
-        sindico_nome: "",
-        sindico_telefone: "",
-        zelador_nome: "",
-        zelador_telefone: "",
-        valor_ciclo_lavadora: "",
-        valor_ciclo_secadora: "",
-        cashback_percent: "",
-        banco: "",
-        agencia: "",
-        conta: "",
-        tipo_conta: "",
-        pix: "",
-        favorecido_cnpj: "",
-      });
-
-      setMaquinas([
-        {
-          categoria: "lavadora",
-          capacidade_kg: 10,
-          quantidade: 1,
-          valor_ciclo_text: "0,00",
-          limpeza_quimica_ciclos: 500,
-          limpeza_mecanica_ciclos: 2000,
-        },
-      ]);
+      resetForm();
+      setShowForm(false);
 
       setOk("Condomínio + máquinas salvos ✅");
       await loadAll();
@@ -322,21 +339,31 @@ export default function CondominiosPage() {
     <AppShell title="Cadastro do ponto">
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <div className="small">{condos.length} condomínios</div>
-        <button className="btn" onClick={loadAll}>Recarregar</button>
+
+        <div className="row" style={{ gap: 8 }}>
+          {canEdit && (
+            <button className="btn primary" onClick={() => setShowForm((v) => !v)}>
+              + Novo condomínio
+            </button>
+          )}
+          <button className="btn" onClick={loadAll}>Recarregar</button>
+        </div>
       </div>
 
       {err && <p style={{ color: "#b42318" }}>{err}</p>}
       {ok && <p style={{ color: "#027a48" }}>{ok}</p>}
 
-      {canEdit && (
+      {canEdit && showForm && (
         <div className="card" style={{ background: "#fbfcff", marginTop: 12 }}>
           <div className="small" style={{ marginBottom: 8 }}>Novo condomínio</div>
 
+          {/* Básico */}
           <div className="grid2">
             <div>
               <div className="small">Nome</div>
               <input className="input" value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} />
             </div>
+
             <div className="row">
               <div style={{ flex: 2 }}>
                 <div className="small">Cidade</div>
@@ -350,6 +377,26 @@ export default function CondominiosPage() {
           </div>
 
           <div style={{ height: 10 }} />
+
+          {/* Tipo pagamento */}
+          <div className="grid2">
+            <div>
+              <div className="small">Tipo de pagamento</div>
+              <select
+                className="input"
+                value={form.tipo_pagamento}
+                onChange={(e) => setForm({ ...form, tipo_pagamento: e.target.value })}
+              >
+                <option value="direto">Direto (PIX/depósito)</option>
+                <option value="boleto">Boleto</option>
+              </select>
+            </div>
+            <div />
+          </div>
+
+          <div style={{ height: 10 }} />
+
+          {/* Endereço */}
           <div className="small">Endereço</div>
           <div className="grid2">
             <div>
@@ -378,6 +425,49 @@ export default function CondominiosPage() {
             </div>
           </div>
 
+          <div style={{ height: 10 }} />
+
+          {/* Contatos */}
+          <div className="small">Contatos</div>
+          <div className="grid2">
+            <div>
+              <div className="small">Síndico (nome)</div>
+              <input className="input" value={form.sindico_nome} onChange={(e) => setForm({ ...form, sindico_nome: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Síndico (telefone)</div>
+              <input className="input" value={form.sindico_telefone} onChange={(e) => setForm({ ...form, sindico_telefone: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Zelador (nome)</div>
+              <input className="input" value={form.zelador_nome} onChange={(e) => setForm({ ...form, zelador_nome: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Zelador (telefone)</div>
+              <input className="input" value={form.zelador_telefone} onChange={(e) => setForm({ ...form, zelador_telefone: e.target.value })} />
+            </div>
+          </div>
+
+          <div style={{ height: 10 }} />
+
+          {/* Financeiro */}
+          <div className="small">Financeiro</div>
+          <div className="grid2">
+            <div>
+              <div className="small">Valor ciclo lavadora (R$)</div>
+              <input className="input" placeholder="ex: 16,50" value={form.valor_ciclo_lavadora} onChange={(e) => setForm({ ...form, valor_ciclo_lavadora: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Valor ciclo secadora (R$)</div>
+              <input className="input" placeholder="ex: 8,00" value={form.valor_ciclo_secadora} onChange={(e) => setForm({ ...form, valor_ciclo_secadora: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Cashback %</div>
+              <input className="input" value={form.cashback_percent} onChange={(e) => setForm({ ...form, cashback_percent: e.target.value })} />
+            </div>
+          </div>
+
+          {/* Parque máquinas */}
           <div style={{ height: 14 }} />
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
             <div className="small" style={{ fontWeight: 700 }}>Parque de máquinas</div>
@@ -493,7 +583,42 @@ export default function CondominiosPage() {
             )}
           </div>
 
-          <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
+          <div style={{ height: 10 }} />
+
+          {/* Bancário */}
+          <div className="small">Dados bancários</div>
+          <div className="grid2">
+            <div>
+              <div className="small">Banco</div>
+              <input className="input" value={form.banco} onChange={(e) => setForm({ ...form, banco: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Agência</div>
+              <input className="input" value={form.agencia} onChange={(e) => setForm({ ...form, agencia: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Conta</div>
+              <input className="input" value={form.conta} onChange={(e) => setForm({ ...form, conta: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Tipo conta</div>
+              <input className="input" value={form.tipo_conta} onChange={(e) => setForm({ ...form, tipo_conta: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">PIX</div>
+              <input className="input" value={form.pix} onChange={(e) => setForm({ ...form, pix: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Favorecido/CNPJ</div>
+              <input className="input" value={form.favorecido_cnpj} onChange={(e) => setForm({ ...form, favorecido_cnpj: e.target.value })} />
+            </div>
+          </div>
+
+          <div className="row" style={{ justifyContent: "flex-end", marginTop: 10, gap: 8 }}>
+            <button className="btn" onClick={() => { resetForm(); setShowForm(false); }}>
+              Cancelar
+            </button>
+
             <button
               className="btn primary"
               onClick={criar}
@@ -510,7 +635,10 @@ export default function CondominiosPage() {
       <div className="list">
         {condos.map((c) => (
           <div key={c.id} className="card">
-            <div style={{ fontWeight: 700 }}>{c.nome}</div>
+            <div style={{ fontWeight: 700 }}>
+              {c.nome}
+              {badgePagamento(c.tipo_pagamento)}
+            </div>
             <div className="small">{c.cidade}/{c.uf}</div>
             <div className="small">{[c.rua, c.numero, c.bairro].filter(Boolean).join(", ")}</div>
             <div className="row" style={{ marginTop: 8, gap: 8 }}>
