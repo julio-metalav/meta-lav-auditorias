@@ -118,7 +118,7 @@ export default function CondominiosPage() {
     tipo_conta: "",
     pix: "",
     favorecido_cnpj: "",
-    tipo_pagamento: "direto", // ✅ default
+    tipo_pagamento: "direto",
   });
 
   // Parque de máquinas embutido no cadastro
@@ -175,7 +175,7 @@ export default function CondominiosPage() {
       {
         categoria: "lavadora",
         capacidade_kg: 10,
-        quantidade: 1,
+        quantidade: 1, // ✅ default seguro
         valor_ciclo_text: "0,00",
         limpeza_quimica_ciclos: 500,
         limpeza_mecanica_ciclos: 2000,
@@ -251,18 +251,22 @@ export default function CondominiosPage() {
       }
 
       if (!maquinas.length) throw new Error("Cadastre pelo menos 1 tipo de máquina.");
-      for (const m of maquinas) {
-        if (!m.categoria) throw new Error("Categoria da máquina é obrigatória.");
+
+      // ✅ REGRA: precisa ter quantidade > 0
+      for (let idx = 0; idx < maquinas.length; idx++) {
+        const m = maquinas[idx];
+
+        if (!m.categoria) throw new Error(`Linha ${idx + 1}: Categoria da máquina é obrigatória.`);
         if (m.capacidade_kg !== null && !Number.isFinite(Number(m.capacidade_kg)))
-          throw new Error("Capacidade (kg) inválida.");
-        if (!Number.isFinite(Number(m.quantidade)) || Number(m.quantidade) < 0)
-          throw new Error("Quantidade inválida.");
+          throw new Error(`Linha ${idx + 1}: Capacidade (kg) inválida.`);
+        if (!Number.isFinite(Number(m.quantidade)) || Number(m.quantidade) <= 0)
+          throw new Error(`Linha ${idx + 1}: Quantidade deve ser maior que zero.`);
         const val = parseMoneyPtBr(m.valor_ciclo_text);
-        if (!Number.isFinite(val) || val < 0) throw new Error("Valor por ciclo inválido.");
+        if (!Number.isFinite(val) || val < 0) throw new Error(`Linha ${idx + 1}: Valor por ciclo inválido.`);
         if (!Number.isFinite(Number(m.limpeza_quimica_ciclos)) || Number(m.limpeza_quimica_ciclos) <= 0)
-          throw new Error("Limpeza química (ciclos) inválida.");
+          throw new Error(`Linha ${idx + 1}: Limpeza química (ciclos) inválida.`);
         if (!Number.isFinite(Number(m.limpeza_mecanica_ciclos)) || Number(m.limpeza_mecanica_ciclos) <= 0)
-          throw new Error("Limpeza mecânica (ciclos) inválida.");
+          throw new Error(`Linha ${idx + 1}: Limpeza mecânica (ciclos) inválida.`);
       }
 
       const payload: any = { ...form };
@@ -275,11 +279,9 @@ export default function CondominiosPage() {
         : null;
       payload.cashback_percent = payload.cashback_percent ? Number(payload.cashback_percent) : null;
 
-      // garante enum
       payload.tipo_pagamento =
         String(payload.tipo_pagamento ?? "direto").toLowerCase() === "boleto" ? "boleto" : "direto";
 
-      // 1) salva condomínio
       const r = await fetch("/api/condominios", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -296,7 +298,6 @@ export default function CondominiosPage() {
         throw new Error("Condomínio salvo, mas não veio o ID na resposta da API (/api/condominios).");
 
       // 2) salva máquinas do condomínio
-      // ✅ FIX: gera maquina_tag e expande quantidade
       let lavN = 0;
       let secN = 0;
 
@@ -316,7 +317,6 @@ export default function CondominiosPage() {
           else secN += 1;
 
           const maquina_tag = m.categoria === "lavadora" ? `LAV-${pad2(lavN)}` : `SEC-${pad2(secN)}`;
-
           arr.push({ ...base, maquina_tag });
         }
         return arr;
@@ -371,7 +371,6 @@ export default function CondominiosPage() {
             Novo condomínio
           </div>
 
-          {/* Básico */}
           <div className="grid2">
             <div>
               <div className="small">Nome</div>
@@ -392,7 +391,6 @@ export default function CondominiosPage() {
 
           <div style={{ height: 10 }} />
 
-          {/* Tipo pagamento */}
           <div className="grid2">
             <div>
               <div className="small">Tipo de pagamento</div>
@@ -406,7 +404,6 @@ export default function CondominiosPage() {
 
           <div style={{ height: 10 }} />
 
-          {/* Endereço */}
           <div className="small">Endereço</div>
           <div className="grid2">
             <div>
@@ -437,7 +434,6 @@ export default function CondominiosPage() {
 
           <div style={{ height: 10 }} />
 
-          {/* Contatos */}
           <div className="small">Contatos</div>
           <div className="grid2">
             <div>
@@ -460,7 +456,6 @@ export default function CondominiosPage() {
 
           <div style={{ height: 10 }} />
 
-          {/* Financeiro */}
           <div className="small">Financeiro</div>
           <div className="grid2">
             <div>
@@ -477,15 +472,10 @@ export default function CondominiosPage() {
             </div>
           </div>
 
-          {/* Parque máquinas */}
           <div style={{ height: 14 }} />
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <div className="small" style={{ fontWeight: 700 }}>
-              Parque de máquinas
-            </div>
-            <button className="btn" onClick={addMaquina}>
-              + Adicionar tipo
-            </button>
+            <div className="small" style={{ fontWeight: 700 }}>Parque de máquinas</div>
+            <button className="btn" onClick={addMaquina}>+ Adicionar tipo</button>
           </div>
 
           <div className="card" style={{ marginTop: 10 }}>
@@ -526,10 +516,15 @@ export default function CondominiosPage() {
                           <input
                             className="input"
                             inputMode="numeric"
-                            value={String(m.quantidade ?? 0)}
+                            value={String(m.quantidade ?? 1)}
                             onChange={(e) => {
                               const raw = e.target.value.replace(/[^\d]/g, "");
-                              updateMaquina(i, { quantidade: raw === "" ? 0 : Number(raw) });
+                              // ✅ se apagar, volta pra 1 (não deixa virar 0 e quebrar o save)
+                              updateMaquina(i, { quantidade: raw === "" ? 1 : Number(raw) });
+                            }}
+                            onBlur={() => {
+                              const n = Number(m.quantidade);
+                              if (!Number.isFinite(n) || n <= 0) updateMaquina(i, { quantidade: 1 });
                             }}
                           />
                         </div>
@@ -584,9 +579,7 @@ export default function CondominiosPage() {
                       </div>
 
                       <div className="row" style={{ justifyContent: "flex-end" }}>
-                        <button className="btn" onClick={() => removeMaquina(i)}>
-                          Remover
-                        </button>
+                        <button className="btn" onClick={() => removeMaquina(i)}>Remover</button>
                       </div>
                     </div>
                   </div>
@@ -597,7 +590,6 @@ export default function CondominiosPage() {
 
           <div style={{ height: 10 }} />
 
-          {/* Bancário */}
           <div className="small">Dados bancários</div>
           <div className="grid2">
             <div>
@@ -647,19 +639,15 @@ export default function CondominiosPage() {
               {c.nome}
               {badgePagamento(c.tipo_pagamento)}
             </div>
-            <div className="small">
-              {c.cidade}/{c.uf}
-            </div>
+            <div className="small">{c.cidade}/{c.uf}</div>
             <div className="small">{[c.rua, c.numero, c.bairro].filter(Boolean).join(", ")}</div>
 
             <div className="row" style={{ marginTop: 8, gap: 8 }}>
-              {/* ✅ NOVO: editar ponto */}
               {canEdit && (
                 <a className="btn primary" href={`/condominios/${c.id}`}>
                   Editar ponto
                 </a>
               )}
-
               <a className="btn" href={`/condominios/${c.id}/maquinas`}>
                 Ver máquinas
               </a>
