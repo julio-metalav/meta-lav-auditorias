@@ -2,6 +2,13 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { getUserAndRole, roleGte } from "@/lib/auth";
 
+type TipoPagamento = "direto" | "boleto";
+
+function normalizeTipoPagamento(input: any): TipoPagamento {
+  const s = String(input ?? "").trim().toLowerCase();
+  return s === "boleto" ? "boleto" : "direto";
+}
+
 export async function GET() {
   const { supabase, user, role } = await getUserAndRole();
   if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
@@ -9,7 +16,9 @@ export async function GET() {
   if (role === "auditor") {
     const { data, error } = await supabase
       .from("auditor_condominios")
-      .select("condominio_id, condominios(id,nome,cidade,uf,cep,rua,numero,bairro,complemento)")
+      .select(
+        "condominio_id, condominios(id,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento)"
+      )
       .eq("auditor_id", user.id)
       .order("condominios(nome)");
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
@@ -22,7 +31,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from("condominios")
     .select(
-      "id,nome,cidade,uf,cep,rua,numero,bairro,complemento,created_at"
+      "id,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,created_at"
     )
     .order("nome", { ascending: true });
 
@@ -62,6 +71,9 @@ export async function POST(req: Request) {
     tipo_conta: String(body?.tipo_conta || "").trim(),
     pix: String(body?.pix || "").trim(),
     maquinas: body?.maquinas ?? null,
+
+    // NOVO (regra de negócio): default direto
+    tipo_pagamento: normalizeTipoPagamento(body?.tipo_pagamento),
   };
 
   if (!payload.nome || !payload.cidade || !payload.uf) {
