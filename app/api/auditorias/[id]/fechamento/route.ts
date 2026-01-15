@@ -6,6 +6,7 @@ import { getUserAndRole, supabaseAdmin } from "@/lib/auth";
 
 type Role = "auditor" | "interno" | "gestor";
 type Status = "aberta" | "em_andamento" | "em_conferencia" | "final";
+type TipoPagamento = "direto" | "boleto";
 
 function roleGte(role: Role | null, min: Role) {
   const rank: Record<Role, number> = { auditor: 1, interno: 2, gestor: 3 };
@@ -19,6 +20,11 @@ function normalizeStatus(input: any): Status {
   if (s === "em andamento" || s === "em-andamento" || s === "em_andamento") return "em_andamento";
   if (s === "final") return "final";
   return "aberta";
+}
+
+function normalizeTipoPagamento(input: any): TipoPagamento {
+  const s = String(input ?? "").trim().toLowerCase();
+  return s === "boleto" ? "boleto" : "direto";
 }
 
 function numOr0(v: any): number {
@@ -64,6 +70,23 @@ async function loadItens(admin: ReturnType<typeof supabaseAdmin>, auditoriaId: s
 
   if (error) throw new Error(error.message);
   return (data ?? []) as any[];
+}
+
+async function loadTipoPagamentoCondominio(
+  admin: ReturnType<typeof supabaseAdmin>,
+  condominioId: string
+): Promise<TipoPagamento> {
+  if (!condominioId) return "direto"; // fallback seguro
+
+  const { data, error } = await admin
+    .from("condominios")
+    .select("id,tipo_pagamento")
+    .eq("id", condominioId)
+    .maybeSingle();
+
+  // Se der erro ou não achar, assume DIRETO (regra mais rígida, não quebra compliance)
+  if (error || !data) return "direto";
+  return normalizeTipoPagamento((data as any)?.tipo_pagamento);
 }
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
@@ -217,7 +240,7 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
  *
  * Regras:
  * - precisa ter pelo menos 1 item
- * - precisa ter comprovante_fechamento_url (já salvo no banco OU passado no body)
+ * - comprovante só é obrigatório se tipo_pagamento do condomínio = 'direto'
  * - se já estiver final, retorna ok sem refazer
  */
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
@@ -246,15 +269,25 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     // precisa ter itens
     const itens = await loadItens(admin, auditoriaId);
     if (!itens.length) {
-      return NextResponse.json({ error: "Não é possível finalizar sem itens de fechamento (máquinas)." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Não é possível finalizar sem itens de fechamento (máquinas)." },
+        { status: 400 }
+      );
     }
 
-    // comprovante obrigatório
-    const comprovanteBody = textOrNull(body?.comprovante_fechamento_url);
-    const comprovante = comprovanteBody ?? textOrNull(auditoria.comprovante_fechamento_url);
+    // regra nova: exige comprovante só se pagamento direto
+    const tipoPagamento = await loadTipoPagamentoCondominio(admin, String(auditoria.condominio_id ?? ""));
+    const exigeComprovante = tipoPagamento === "direto";
 
-    if (!comprovante) {
-      return NextResponse.json({ error: "Envie o comprovante de fechamento antes de finalizar." }, { status: 400 });
+    const comprovanteBody = textOrNull(body?.comprovante_fechamento_url);
+    const comprovanteSaved = textOrNull(auditoria.comprovante_fechamento_url);
+    const comprovante = comprovanteBody ?? comprovanteSaved;
+
+    if (exigeComprovante && !comprovante) {
+      return NextResponse.json(
+        { error: "Envie o comprovante de fechamento antes de finalizar (pagamento direto)." },
+        { status: 400 }
+      );
     }
 
     const fechamento_obs = textOrNull(body?.fechamento_obs);
@@ -263,7 +296,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       .from("auditorias")
       .update({
         fechamento_obs,
-        comprovante_fechamento_url: comprovante,
+        // se boleto e não tiver comprovante, salva null mesmo (pode finalizar sem)
+        comprovante_fechamento_url: comprovante ?? null,
         status: "final",
         fechado_por: ctx.user.id,
         fechado_em: new Date().toISOString(),
@@ -277,7 +311,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
     const itens2 = await loadItens(admin, auditoriaId);
-    return NextResponse.json({ ok: true, auditoria: updated, itens: itens2 });
+    return NextResponse.json({
+      ok: true,
+      auditoria: updated,
+      itens: itens2,
+      meta: { tipo_pagamento: tipoPagamento, exige_comprovante: exigeComprovante },
+    });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
