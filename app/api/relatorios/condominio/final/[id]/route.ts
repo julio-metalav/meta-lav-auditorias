@@ -21,11 +21,11 @@ function m(v: any): number {
 }
 
 function tipoPagamento(v: any): TipoPagamento {
-  return String(v).toLowerCase() === "boleto" ? "boleto" : "direto";
+  return String(v ?? "").toLowerCase() === "boleto" ? "boleto" : "direto";
 }
 
 function categoria(v: any) {
-  return String(v).toLowerCase() === "secadora" ? "Secadora" : "Lavadora";
+  return String(v ?? "").toLowerCase() === "secadora" ? "Secadora" : "Lavadora";
 }
 
 function maquinaLabel(cat: any, kg: any) {
@@ -38,17 +38,20 @@ function competencia(iso: any) {
   return `${s.slice(5, 7)}/${s.slice(0, 4)}`;
 }
 
-export async function GET(_: Request, { params }: { params: { id: string } }) {
+export async function GET(req: Request, { params }: { params: { id: string } }) {
   const { user, role } = await getUserAndRole();
   if (!user) return bad("Não autenticado", 401);
   if (!roleGte(role as Role, "interno")) return bad("Sem permissão", 403);
 
-  const auditoriaId = params.id;
+  const auditoriaId = String(params?.id ?? "").trim();
+  if (!auditoriaId) return bad("ID da auditoria ausente", 400);
+
   const admin = supabaseAdmin();
 
   const { data: aud, error } = await admin
     .from("auditorias")
-    .select(`
+    .select(
+      `
       id,
       condominio_id,
       mes_ref,
@@ -64,28 +67,40 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
       foto_energia_url,
       foto_gas_url,
       comprovante_fechamento_url
-    `)
+    `
+    )
     .eq("id", auditoriaId)
     .maybeSingle();
 
   if (error) return bad(error.message, 500);
   if (!aud) return bad("Auditoria não encontrada", 404);
-  if (aud.status !== "final") return bad("Auditoria não finalizada");
+  if (String(aud.status ?? "").toLowerCase() !== "final") return bad("Auditoria não finalizada");
 
   const { data: condo, error: condoErr } = await admin
-  .from("condominios")
-  .select("id,nome,cashback_percent,tipo_pagamento,agua_valor_m3,energia_valor_kwh,gas_valor_m3")
-  .eq("id", aud.condominio_id)
-  .maybeSingle();
+    .from("condominios")
+    .select("id,nome,cashback_percent,tipo_pagamento,agua_valor_m3,energia_valor_kwh,gas_valor_m3")
+    .eq("id", aud.condominio_id)
+    .maybeSingle();
 
-if (condoErr) return bad(condoErr.message, 500);
-if (!condo) return bad("Condomínio não encontrado", 404);
+  if (condoErr) return bad(condoErr.message, 500);
+  if (!condo) return bad("Condomínio não encontrado", 404);
 
+  // ✅ Busca ciclos pelo endpoint existente (sem duplicar cálculo)
+  const origin = new URL(req.url).origin;
+  const cookie = req.headers.get("cookie") ?? "";
 
-  const origin = new URL((globalThis as any).location?.href ?? "http://localhost").origin;
-// melhor: usar req.url, mas aqui não temos req; então vamos fazer do jeito certo:
+  const ciclosRes = await fetch(`${origin}/api/auditorias/${auditoriaId}/ciclos`, {
+    cache: "no-store",
+    headers: { cookie },
+  });
 
-  const { data: ciclos } = await ciclosRes.json();
+  const ciclosJson = await ciclosRes.json().catch(() => null);
+  if (!ciclosRes.ok) return bad(ciclosJson?.error ?? "Falha ao obter ciclos.", ciclosRes.status || 400);
+
+  const ciclos = ciclosJson?.data;
+  if (!ciclos) return bad("Resposta de ciclos vazia.", 500);
+  if (!Array.isArray(ciclos.itens)) return bad("Resposta de ciclos inválida (itens).", 500);
+  if (!ciclos.totais) return bad("Resposta de ciclos inválida (totais).", 500);
 
   const vendas = ciclos.itens.map((i: any) => ({
     maquina: maquinaLabel(i.categoria, i.capacidade_kg),
@@ -95,7 +110,7 @@ if (!condo) return bad("Condomínio não encontrado", 404);
     receita: m(i.ciclos) * m(i.valor_ciclo),
   }));
 
-  const consumo = [
+  const consumo: Array<any> = [
     {
       insumo: "Água",
       leitura_anterior: n(aud.agua_leitura_base),
@@ -112,13 +127,14 @@ if (!condo) return bad("Condomínio não encontrado", 404);
     },
   ];
 
-  if (m(ciclos.totais.consumo_gas) > 0) {
+  const consumoGas = m(ciclos.totais.consumo_gas);
+  if (consumoGas > 0) {
     consumo.push({
       insumo: "Gás",
       leitura_anterior: n(aud.gas_leitura_base),
       leitura_atual: n(aud.gas_leitura),
-      consumo: m(ciclos.totais.consumo_gas),
-      valor_total: m(ciclos.totais.consumo_gas) * m(condo.gas_valor_m3),
+      consumo: consumoGas,
+      valor_total: consumoGas * m(condo.gas_valor_m3),
     });
   }
 
@@ -152,9 +168,7 @@ if (!condo) return bad("Condomínio não encontrado", 404);
         foto_energia_url: aud.foto_energia_url,
         foto_gas_url: aud.foto_gas_url,
         comprovante_fechamento_url:
-          tipoPagamento(condo.tipo_pagamento) === "direto"
-            ? aud.comprovante_fechamento_url
-            : null,
+          tipoPagamento(condo.tipo_pagamento) === "direto" ? aud.comprovante_fechamento_url : null,
       },
     },
   });
