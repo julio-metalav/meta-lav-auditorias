@@ -72,16 +72,19 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   if (!aud) return bad("Auditoria não encontrada", 404);
   if (aud.status !== "final") return bad("Auditoria não finalizada");
 
-  const { data: condo } = await admin
-    .from("condominios")
-    .select("id,nome,cashback_percent,tipo_pagamento,agua_valor_m3,energia_valor_kwh,gas_valor_m3")
-    .eq("id", aud.condominio_id)
-    .maybeSingle();
+  const { data: condo, error: condoErr } = await admin
+  .from("condominios")
+  .select("id,nome,cashback_percent,tipo_pagamento,agua_valor_m3,energia_valor_kwh,gas_valor_m3")
+  .eq("id", aud.condominio_id)
+  .maybeSingle();
 
-  const ciclosRes = await fetch(
-    `${process.env.NEXT_PUBLIC_SITE_URL}/api/auditorias/${auditoriaId}/ciclos`,
-    { cache: "no-store", headers: { cookie: "" } }
-  );
+if (condoErr) return bad(condoErr.message, 500);
+if (!condo) return bad("Condomínio não encontrado", 404);
+
+
+  const origin = new URL((globalThis as any).location?.href ?? "http://localhost").origin;
+// melhor: usar req.url, mas aqui não temos req; então vamos fazer do jeito certo:
+
   const { data: ciclos } = await ciclosRes.json();
 
   const vendas = ciclos.itens.map((i: any) => ({
