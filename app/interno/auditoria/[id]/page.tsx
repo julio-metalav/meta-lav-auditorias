@@ -492,6 +492,9 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     return (aud?.pagamento_metodo ?? null) === "direto";
   }, [aud?.pagamento_metodo]);
 
+  // ✅ trava o botão quando já está final
+  const isFinal = useMemo(() => toLower(aud?.status) === "final", [aud?.status]);
+
   // ✅ PASSO 2: cálculo do financeiro correto
   const financeiro = useMemo(() => {
     const receita = relPrev.receita_total; // null se faltou preço
@@ -530,6 +533,9 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   async function finalizarAuditoria() {
     const audId = String(aud?.id ?? id).trim();
     if (!audId) return;
+
+    // ✅ já finalizada: não faz nada
+    if (toLower(aud?.status) === "final") return;
 
     try {
       setErr(null);
@@ -649,9 +655,9 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               <button
                 className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600 disabled:opacity-60"
                 onClick={() => finalizarAuditoria()}
-                disabled={finalizando || loading}
+                disabled={finalizando || loading || isFinal}
               >
-                {finalizando ? "Finalizando..." : "Finalizar auditoria"}
+                {isFinal ? "Auditoria finalizada" : finalizando ? "Finalizando..." : "Finalizar auditoria"}
               </button>
             </div>
           </div>
@@ -665,6 +671,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               value={fechamentoObs}
               onChange={(e) => setFechamentoObs(e.target.value)}
               onBlur={() => salvarObsFinanceiro()}
+              disabled={isFinal}
             />
             <div className="mt-2 text-xs text-gray-500">Se você preencher isso e anexar o comprovante, a observação vai junto.</div>
           </div>
@@ -685,8 +692,9 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
             {isStaff ? (
               <button
-                className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
+                className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50 disabled:opacity-60"
                 onClick={() => abrirModalBaseParaEditar()}
+                disabled={isFinal}
               >
                 Alterar/corrigir base
               </button>
@@ -747,6 +755,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                     value={baseAgua}
                     onChange={(e) => setBaseAgua(e.target.value)}
                     inputMode="decimal"
+                    disabled={isFinal}
                   />
                 </div>
 
@@ -757,6 +766,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                     value={baseEnergia}
                     onChange={(e) => setBaseEnergia(e.target.value)}
                     inputMode="decimal"
+                    disabled={isFinal}
                   />
                 </div>
 
@@ -767,6 +777,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                     value={baseGas}
                     onChange={(e) => setBaseGas(e.target.value)}
                     inputMode="decimal"
+                    disabled={isFinal}
                   />
                 </div>
               </div>
@@ -775,7 +786,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <button
                   className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
                   onClick={() => salvarBaseManual()}
-                  disabled={savingBase}
+                  disabled={savingBase || isFinal}
                 >
                   {savingBase ? "Salvando..." : "Salvar base"}
                 </button>
@@ -815,7 +826,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <button
                   className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50 disabled:opacity-60"
                   onClick={() => setCiclosEditMode(true)}
-                  disabled={!isStaff || loading}
+                  disabled={!isStaff || loading || isFinal}
                 >
                   Editar
                 </button>
@@ -832,7 +843,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                   <button
                     className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
                     onClick={() => salvarCiclos()}
-                    disabled={savingCiclos}
+                    disabled={savingCiclos || isFinal}
                   >
                     {savingCiclos ? "Salvando..." : "Salvar ciclos"}
                   </button>
@@ -871,7 +882,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                         <input
                           className="w-28 rounded-xl border border-gray-200 bg-white px-3 py-2 text-right text-sm shadow-sm outline-none focus:border-gray-300 disabled:bg-gray-50"
                           value={String(it.ciclos ?? 0)}
-                          disabled={bloqueadoCiclos}
+                          disabled={bloqueadoCiclos || isFinal}
                           inputMode="numeric"
                           onChange={(e) => {
                             const v = e.target.value.replace(/[^\d]/g, "");
@@ -905,18 +916,14 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
               <div className="text-right">
                 <div className="text-xs font-semibold text-gray-600">Total a pagar</div>
-                <div className="text-lg font-bold text-gray-900">
-                  {financeiro.totalPagar === null ? "—" : moneyBRL(financeiro.totalPagar)}
-                </div>
+                <div className="text-lg font-bold text-gray-900">{financeiro.totalPagar === null ? "—" : moneyBRL(financeiro.totalPagar)}</div>
               </div>
             </div>
 
             <div className="mt-4 grid gap-3 md:grid-cols-3">
               <div className="rounded-2xl border border-gray-100 p-3">
                 <div className="text-xs font-semibold text-gray-600">Receita bruta</div>
-                <div className="mt-1 text-sm font-semibold text-gray-900">
-                  {relPrev.receita_total === null ? "—" : moneyBRL(relPrev.receita_total)}
-                </div>
+                <div className="mt-1 text-sm font-semibold text-gray-900">{relPrev.receita_total === null ? "—" : moneyBRL(relPrev.receita_total)}</div>
                 <div className="mt-1 text-xs text-gray-500">
                   Lavadoras: {relPrev.lavadoras_ciclos} • Secadoras: {relPrev.secadoras_ciclos}
                 </div>
@@ -927,9 +934,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <div className="mt-1 text-sm text-gray-700">
                   %: <span className="font-semibold">{Number(financeiro.cashbackPct ?? 0).toFixed(2)}%</span>
                 </div>
-                <div className="mt-1 text-sm font-semibold text-gray-900">
-                  {financeiro.cashback === null ? "—" : moneyBRL(financeiro.cashback)}
-                </div>
+                <div className="mt-1 text-sm font-semibold text-gray-900">{financeiro.cashback === null ? "—" : moneyBRL(financeiro.cashback)}</div>
               </div>
 
               <div className="rounded-2xl border border-gray-100 p-3">
@@ -953,17 +958,13 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                   <span className="font-semibold">{moneyBRL(financeiro.repGas)}</span>
                 </div>
 
-                <div className="mt-2 text-sm font-semibold text-gray-900">
-                  Repasse total: {moneyBRL(financeiro.repasse)}
-                </div>
+                <div className="mt-2 text-sm font-semibold text-gray-900">Repasse total: {moneyBRL(financeiro.repasse)}</div>
               </div>
             </div>
 
             <div className="mt-4 text-xs text-gray-500">
               (Opcional) Líquido Meta-Lav = Receita − Cashback − Repasse:{" "}
-              <span className="font-semibold">
-                {financeiro.liquidoMetaLav === null ? "—" : moneyBRL(financeiro.liquidoMetaLav)}
-              </span>
+              <span className="font-semibold">{financeiro.liquidoMetaLav === null ? "—" : moneyBRL(financeiro.liquidoMetaLav)}</span>
             </div>
           </div>
         </div>
