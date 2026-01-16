@@ -20,34 +20,18 @@ function normalizeMetodo(input: any): "direto" | "boleto" {
 }
 
 async function canAuditorAccessByVinculo(auditorId: string, condominioId: string) {
-  // ✅ TS hard-fix: isola Supabase client como any só aqui
+  // ✅ auditor_condominios NÃO tem user_id (somente auditor_id + condominio_id)
   const sb: any = supabaseAdmin();
 
-  // Tentativa 1: auditor_id
-  {
-    const { data, error } = await sb
-      .from("auditor_condominios")
-      .select("id")
-      .eq("condominio_id", condominioId)
-      .eq("auditor_id", auditorId)
-      .maybeSingle();
+  const { data, error } = await sb
+    .from("auditor_condominios")
+    .select("condominio_id,auditor_id")
+    .eq("condominio_id", condominioId)
+    .eq("auditor_id", auditorId)
+    .maybeSingle();
 
-    if (!error && data?.id) return true;
-    // se erro OU não achou, tenta a alternativa
-  }
-
-  // Tentativa 2: user_id
-  {
-    const { data, error } = await sb
-      .from("auditor_condominios")
-      .select("id")
-      .eq("condominio_id", condominioId)
-      .eq("user_id", auditorId)
-      .maybeSingle();
-
-    if (error) return false;
-    return !!data?.id;
-  }
+  if (error) return false;
+  return !!data?.auditor_id;
 }
 
 async function fetchCondominioBasics(condominioId: string) {
@@ -62,7 +46,7 @@ async function fetchCondominioBasics(condominioId: string) {
         "valor_ciclo_lavadora",
         "valor_ciclo_secadora",
 
-        // ✅ PASSO 1: dados para relatório financeiro
+        // dados para relatório financeiro
         "cashback_percent",
         "agua_valor_m3",
         "energia_valor_kwh",
@@ -83,7 +67,6 @@ function withCompatAliases(aud: any, condominio: any) {
   const base_energia = aud?.energia_leitura_base ?? null;
   const base_gas = aud?.gas_leitura_base ?? null;
 
-  // ✅ PASSO 1: repassar para UI do fechamento
   const cashback_percent = condominio?.cashback_percent ?? null;
   const agua_valor_m3 = condominio?.agua_valor_m3 ?? null;
   const energia_valor_kwh = condominio?.energia_valor_kwh ?? null;
@@ -120,29 +103,20 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
           "auditor_id",
           "mes_ref",
           "status",
-
           "agua_leitura",
           "energia_leitura",
           "gas_leitura",
-
           "agua_leitura_base",
           "energia_leitura_base",
           "gas_leitura_base",
           "leitura_base_origem",
-
           "observacoes",
-
-          // ✅ IMPORTANTE pro Interno:
-          "comprovante_fechamento_url",
-          "fechamento_obs",
-
           "foto_agua_url",
           "foto_energia_url",
           "foto_gas_url",
           "foto_quimicos_url",
           "foto_bombonas_url",
           "foto_conector_bala_url",
-
           "created_at",
           "updated_at",
         ].join(",")
@@ -210,17 +184,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       "energia_leitura",
       "gas_leitura",
       "observacoes",
-
-      // ✅ Interno: observação do financeiro (precisa salvar)
-      "fechamento_obs",
-
       "foto_agua_url",
       "foto_energia_url",
       "foto_gas_url",
       "foto_quimicos_url",
       "foto_bombonas_url",
       "foto_conector_bala_url",
-
       "status",
     ];
 
@@ -249,29 +218,20 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
           "auditor_id",
           "mes_ref",
           "status",
-
           "agua_leitura",
           "energia_leitura",
           "gas_leitura",
-
           "agua_leitura_base",
           "energia_leitura_base",
           "gas_leitura_base",
           "leitura_base_origem",
-
           "observacoes",
-
-          // ✅ importante pra UI do interno refletir
-          "comprovante_fechamento_url",
-          "fechamento_obs",
-
           "foto_agua_url",
           "foto_energia_url",
           "foto_gas_url",
           "foto_quimicos_url",
           "foto_bombonas_url",
           "foto_conector_bala_url",
-
           "created_at",
           "updated_at",
         ].join(",")
