@@ -66,69 +66,27 @@ export async function GET() {
 
   let q = admin.from(sch.table).select("*").order(sch.monthCol, { ascending: false });
 
-  // Auditor: auditorias atribuídas a ele OU auditorias dos condomínios vinculados a ele
+  // ✅ REGRA NOVA (fila aberta):
+  // Auditor vê (auditor_id = user.id) OU (auditor_id IS NULL)
+  // e NÃO vê auditorias de outros auditores.
   if (isAuditor && !isStaff) {
-    const { data: ac, error: acErr } = await admin
-      .from("auditor_condominios")
-      .select("condominio_id")
-      .eq("auditor_id", ctx.user.id);
-
-    if (acErr) return NextResponse.json({ error: acErr.message }, { status: 400 });
-
-    const condoIds = Array.from(new Set((ac ?? []).map((r: any) => r.condominio_id).filter(Boolean)));
-
-    if (condoIds.length > 0) {
-      // ✅ IMPORTANTÍSSIMO:
-      // - não usar aspas dentro do filtro (PostgREST/Supabase)
-      // - uuid em in.(...) vai sem aspas
-      const inList = condoIds.join(",");
-      q = q.or(`${sch.auditorCol}.eq.${ctx.user.id},${sch.condoCol}.in.(${inList})`);
-    } else {
-      q = q.eq(sch.auditorCol, ctx.user.id);
-    }
+    q = q.or(`${sch.auditorCol}.eq.${ctx.user.id},${sch.auditorCol}.is.null`);
   }
 
   const { data: rows, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
   const list = rows ?? [];
-
   const condoIds = Array.from(new Set(list.map((r: any) => r[sch.condoCol]).filter(Boolean)));
 
-  // ✅ Enriquecimento: se auditor_id estiver null, pega do vínculo auditor_condominios (mais recente)
-  const condoToAssignedAuditor = new Map<string, string>();
-  if (condoIds.length) {
-    const { data: links, error: linkErr } = await admin
-      .from("auditor_condominios")
-      .select("condominio_id,auditor_id,created_at")
-      .in("condominio_id", condoIds)
-      .order("created_at", { ascending: false });
-
-    if (linkErr) return NextResponse.json({ error: linkErr.message }, { status: 400 });
-
-    for (const l of links ?? []) {
-      const cid = (l as any).condominio_id as string;
-      const aid = (l as any).auditor_id as string;
-      if (cid && aid && !condoToAssignedAuditor.has(cid)) {
-        condoToAssignedAuditor.set(cid, aid); // pega o mais recente
-      }
-    }
-  }
-
-  const effectiveAuditorIds = Array.from(
-    new Set(
-      list
-        .map((r: any) => r[sch.auditorCol] ?? condoToAssignedAuditor.get(r[sch.condoCol]) ?? null)
-        .filter(Boolean)
-    )
-  );
+  const auditorIds = Array.from(new Set(list.map((r: any) => r[sch.auditorCol]).filter(Boolean)));
 
   const [{ data: condos, error: condoErr }, { data: profs, error: profErr }] = await Promise.all([
     condoIds.length
       ? admin.from("condominios").select("id,nome,cidade,uf").in("id", condoIds)
       : Promise.resolve({ data: [] as any[], error: null as any }),
-    effectiveAuditorIds.length
-      ? admin.from("profiles").select("id,email,role").in("id", effectiveAuditorIds)
+    auditorIds.length
+      ? admin.from("profiles").select("id,email,role").in("id", auditorIds)
       : Promise.resolve({ data: [] as any[], error: null as any }),
   ]);
 
@@ -140,18 +98,16 @@ export async function GET() {
 
   const normalized = list.map((r: any) => {
     const condominio_id = r[sch.condoCol];
-    const auditor_id_db = r[sch.auditorCol] ?? null;
-    const auditor_id_eff = auditor_id_db ?? condoToAssignedAuditor.get(condominio_id) ?? null;
+    const auditor_id = r[sch.auditorCol] ?? null;
 
     return {
       ...r,
       condominio_id,
-      // ✅ auditor_id “de exibição” (não altera banco): usa vínculo se estiver null no registro
-      auditor_id: auditor_id_eff,
+      auditor_id, // ✅ aqui é o REAL do banco (null = fila aberta)
       mes_ref: pickMonthISO(r, sch),
       status: normalizeStatus(r[sch.statusCol]),
       condominios: condoMap.get(condominio_id) ?? null,
-      profiles: auditor_id_eff ? profMap.get(auditor_id_eff) ?? null : null,
+      profiles: auditor_id ? profMap.get(auditor_id) ?? null : null,
     };
   });
 
@@ -181,7 +137,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "mes_ref inválido. Use YYYY-MM-01" }, { status: 400 });
   }
 
-  // Opção A: auditor_id NÃO é obrigatório na criação.
+  // auditor_id NÃO é obrigatório na criação.
   const insertRow: any = {
     [sch.condoCol]: condominio_id,
     [sch.monthCol]: mes_ref,

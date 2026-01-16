@@ -153,22 +153,15 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const statusAtual = normalizeStatus(aud.status);
     const isStaff = role === "interno" || role === "gestor";
     const isOwnerAuditor = role === "auditor" && aud.auditor_id === user.id;
+    const isUnassigned = !aud.auditor_id; // ✅ fila aberta
 
-    // Auditor pode atuar se vinculado ao condomínio (auditoria pode nascer sem auditor_id)
-    let isAssignedAuditor = false;
-    if (role === "auditor" && !isStaff && !isOwnerAuditor) {
-      const { data: link, error: linkErr } = await admin
-        .from("auditor_condominios")
-        .select("auditor_id")
-        .eq("auditor_id", user.id)
-        .eq("condominio_id", aud.condominio_id)
-        .maybeSingle();
-      if (!linkErr && link) isAssignedAuditor = true;
-    }
-
-    // Permissão base
-    if (!isStaff && !isOwnerAuditor && !isAssignedAuditor) {
-      return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
+    // ✅ Permissão base (regra nova):
+    // - interno/gestor sempre
+    // - auditor: se for dono OU se estiver sem auditor (fila aberta)
+    // - se estiver atribuído a outro auditor => proibido
+    if (!isStaff) {
+      if (role !== "auditor") return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
+      if (!isOwnerAuditor && !isUnassigned) return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
     }
 
     // Regras por tipo:
@@ -181,7 +174,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
           { status: 403 }
         );
       }
-      // não bloqueia por status aqui; a trava real é no "Finalizar"
     } else {
       if (role === "auditor" && !isStaff && (statusAtual === "em_conferencia" || statusAtual === "final")) {
         return NextResponse.json(
@@ -209,25 +201,49 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const publicUrl = pub?.publicUrl ?? null;
     if (!publicUrl) return NextResponse.json({ error: "Falha ao obter public URL." }, { status: 500 });
 
-    // 7) Atualiza coluna na auditoria
+    // 7) Atualiza coluna na auditoria (com claim atômico quando fila aberta)
     const col = kindToColumn(kind);
     if (!col) return NextResponse.json({ error: "kind não mapeado para coluna." }, { status: 400 });
 
     const patch: any = { [col]: publicUrl };
 
-    // se for comprovante, pode salvar obs (opcional)
     if (isComprovante(kind) && fechamentoObs) {
       patch.fechamento_obs = fechamentoObs;
     }
 
-    const { data: updatedRow, error: updErr } = await admin
-      .from("auditorias")
-      .update(patch)
-      .eq("id", auditoriaId)
-      .select("*")
-      .single();
+    // ✅ CLAIM ATÔMICO NO PRIMEIRO ATO (UPLOAD):
+    // se auditor e auditoria está sem auditor_id, assume junto com o update,
+    // com condição auditor_id IS NULL para evitar corrida entre auditores.
+    let updatedRow: any = null;
 
-    if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
+    if (!isStaff && role === "auditor" && isUnassigned) {
+      const { data, error: updErr } = await admin
+        .from("auditorias")
+        .update({ ...patch, auditor_id: user.id })
+        .eq("id", auditoriaId)
+        .is("auditor_id", null)
+        .select("*")
+        .maybeSingle();
+
+      if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
+
+      if (!data) {
+        // alguém assumiu antes
+        return NextResponse.json({ error: "auditoria_ja_assumida" }, { status: 409 });
+      }
+
+      updatedRow = data;
+    } else {
+      const { data, error: updErr } = await admin
+        .from("auditorias")
+        .update(patch)
+        .eq("id", auditoriaId)
+        .select("*")
+        .single();
+
+      if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
+      updatedRow = data;
+    }
 
     return NextResponse.json({
       ok: true,

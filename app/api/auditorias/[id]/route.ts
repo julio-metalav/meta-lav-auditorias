@@ -19,21 +19,6 @@ function normalizeMetodo(input: any): "direto" | "boleto" {
   return "boleto";
 }
 
-async function canAuditorAccessByVinculo(auditorId: string, condominioId: string) {
-  // ✅ auditor_condominios: auditor_id + condominio_id
-  const sb: any = supabaseAdmin();
-
-  const { data, error } = await sb
-    .from("auditor_condominios")
-    .select("condominio_id,auditor_id")
-    .eq("condominio_id", condominioId)
-    .eq("auditor_id", auditorId)
-    .maybeSingle();
-
-  if (error) return false;
-  return !!data?.auditor_id;
-}
-
 async function fetchCondominioBasics(condominioId: string) {
   const sb = supabaseAdmin();
 
@@ -45,8 +30,6 @@ async function fetchCondominioBasics(condominioId: string) {
         "tipo_pagamento",
         "valor_ciclo_lavadora",
         "valor_ciclo_secadora",
-
-        // dados para relatório financeiro
         "cashback_percent",
         "agua_valor_m3",
         "energia_valor_kwh",
@@ -78,7 +61,6 @@ function withCompatAliases(aud: any, condominio: any) {
     base_agua,
     base_energia,
     base_gas,
-
     cashback_percent,
     agua_valor_m3,
     energia_valor_kwh,
@@ -131,9 +113,12 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     const isManager = roleGte(role, "interno");
     const isOwnerAuditor = !!audRow.auditor_id && audRow.auditor_id === user.id;
-    const isVinculado = await canAuditorAccessByVinculo(user.id, audRow.condominio_id);
+    const isUnassigned = !audRow.auditor_id; // ✅ fila aberta
 
-    if (!isManager && !isOwnerAuditor && !isVinculado) {
+    // ✅ Regra nova:
+    // - interno/gestor sempre
+    // - auditor pode abrir se for dele OU se estiver sem auditor
+    if (!isManager && !(isOwnerAuditor || isUnassigned)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
@@ -172,9 +157,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     const isManager = roleGte(role, "interno");
     const isOwnerAuditor = !!audRow.auditor_id && audRow.auditor_id === user.id;
-    const isVinculado = await canAuditorAccessByVinculo(user.id, audRow.condominio_id);
+    const isUnassigned = !audRow.auditor_id;
 
-    if (!isManager && !isOwnerAuditor && !isVinculado) {
+    // ✅ Regra nova:
+    // - interno/gestor pode sempre
+    // - auditor pode editar se for dele OU se estiver sem auditor (vai "claimar")
+    if (!isManager && !(isOwnerAuditor || isUnassigned)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
@@ -197,13 +185,6 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       if (k in body) patch[k] = body[k];
     }
 
-    // ✅ AUTO-CLAIM:
-    // Se auditor está vinculado ao condomínio e a auditoria ainda não tem auditor_id,
-    // no primeiro PATCH a gente amarra a auditoria ao auditor logado.
-    if (!isManager && role === "auditor" && isVinculado && !audRow.auditor_id) {
-      patch.auditor_id = user.id;
-    }
-
     if (typeof patch.status === "string") {
       const s = String(patch.status).trim().toLowerCase();
       const okStatus: Status[] = ["aberta", "em_andamento", "em_conferencia", "final"];
@@ -211,9 +192,65 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       else patch.status = s;
     }
 
+    // auditor não finaliza
     if (!isManager && patch.status === "final") delete patch.status;
+    // auditor só pode mandar para em_conferencia (se você quiser manter isso)
     if (!isManager && patch.status && patch.status !== "em_conferencia") delete patch.status;
 
+    // ✅ CLAIM atômico:
+    // se for auditor e estiver sem auditor_id, tenta "assumir" na hora do primeiro PATCH.
+    // Faz update condicionado em auditor_id IS NULL para evitar corrida.
+    if (!isManager && role === "auditor" && isUnassigned) {
+      // tenta claimar junto com o patch
+      const { data: claimed, error: claimErr } = await sb
+        .from("auditorias")
+        .update({ ...patch, auditor_id: user.id })
+        .eq("id", id)
+        .is("auditor_id", null) // ✅ condição atômica
+        .select(
+          [
+            "id",
+            "condominio_id",
+            "auditor_id",
+            "mes_ref",
+            "status",
+            "agua_leitura",
+            "energia_leitura",
+            "gas_leitura",
+            "agua_leitura_base",
+            "energia_leitura_base",
+            "gas_leitura_base",
+            "leitura_base_origem",
+            "observacoes",
+            "foto_agua_url",
+            "foto_energia_url",
+            "foto_gas_url",
+            "foto_quimicos_url",
+            "foto_bombonas_url",
+            "foto_conector_bala_url",
+            "created_at",
+            "updated_at",
+          ].join(",")
+        )
+        .maybeSingle();
+
+      if (claimErr) return NextResponse.json({ ok: false, error: claimErr.message }, { status: 400 });
+
+      // se não retornou nada, alguém assumiu antes
+      if (!claimed) {
+        return NextResponse.json(
+          { ok: false, error: "auditoria_ja_assumida" },
+          { status: 409 }
+        );
+      }
+
+      const { condominio } = await fetchCondominioBasics((claimed as any)!.condominio_id);
+      const payload = withCompatAliases(claimed as any, condominio);
+
+      return NextResponse.json({ ok: true, data: payload, auditoria: payload }, { status: 200 });
+    }
+
+    // caminho normal (interno/gestor ou auditor já dono)
     const { data: saved, error: saveErr } = await sb
       .from("auditorias")
       .update(patch)
