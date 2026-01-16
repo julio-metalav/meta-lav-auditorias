@@ -21,7 +21,6 @@ function num(v: any) {
 }
 
 function monthStart(s: string) {
-  // esperado YYYY-MM-01
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return null;
   const yyyy = d.getUTCFullYear();
@@ -98,7 +97,6 @@ function getBaseUrlFromReq(req: Request) {
     req.headers.get("x-forwarded-host") ??
     req.headers.get("host") ??
     req.headers.get(":authority");
-
   const proto = req.headers.get("x-forwarded-proto") ?? "https";
   if (!host) return null;
   return `${proto}://${host}`;
@@ -136,46 +134,47 @@ async function fetchTotaisForAuditoria(baseUrl: string, auditoriaId: string) {
   return { total_repasse: 0, total_cashback: 0, total_a_pagar: 0, receita_bruta: 0 };
 }
 
-async function listAuditoriasDoMes(mes_ref: string) {
-  // Tenta com mes_ref; se não existir/der vazio, tenta ano_mes.
+async function listAuditoriasDoMes(mesRef: string) {
   const admin = supabaseAdmin();
 
-  // 1) mes_ref
-  try {
-    const r1 = await admin
-      .from("auditorias")
-      .select("id, condominio_id, mes_ref, status")
-      .eq("mes_ref", mes_ref)
-      .in("status", ["em_conferencia", "final"]);
+  // ✅ 1) tenta MES_REF e só cai pro ANO_MES se MES_REF NÃO EXISTIR (erro de coluna)
+  const r1 = await admin
+    .from("auditorias")
+    .select("id, condominio_id, mes_ref, status")
+    .eq("mes_ref", mesRef)
+    .in("status", ["em_conferencia", "final"]);
 
-    if (!r1.error && (r1.data?.length ?? 0) > 0) return { data: r1.data ?? [], monthCol: "mes_ref" as const };
+  if (!r1.error) {
+    // ✅ se veio vazio, é vazio mesmo. NÃO tenta ano_mes.
+    return { data: r1.data ?? [] };
+  }
 
-    // se não deu erro mas veio vazio, pode ser schema com ano_mes
-    if (!r1.error && (r1.data?.length ?? 0) === 0) {
-      // cai pro fallback abaixo
-    }
+  const msg = String(r1.error?.message ?? "").toLowerCase();
+  const isMesRefMissing =
+    msg.includes("column") && msg.includes("mes_ref") && msg.includes("does not exist");
 
-    // se erro explícito de coluna inexistente, cai pro fallback
-  } catch {}
+  if (!isMesRefMissing) {
+    // outro erro real
+    throw new Error(r1.error.message);
+  }
 
-  // 2) ano_mes
+  // ✅ 2) fallback para schema antigo (se existir)
   const r2 = await admin
     .from("auditorias")
     .select("id, condominio_id, ano_mes, status")
-    .eq("ano_mes", mes_ref)
+    .eq("ano_mes", mesRef)
     .in("status", ["em_conferencia", "final"]);
 
   if (r2.error) throw new Error(r2.error.message);
 
-  // normaliza shape (pra não quebrar consumidores)
   const normalized = (r2.data ?? []).map((a: any) => ({
     id: a.id,
     condominio_id: a.condominio_id,
-    mes_ref: a.ano_mes ?? mes_ref,
+    mes_ref: a.ano_mes ?? mesRef,
     status: a.status,
   }));
 
-  return { data: normalized, monthCol: "ano_mes" as const };
+  return { data: normalized };
 }
 
 export async function GET(req: Request) {
@@ -196,7 +195,6 @@ export async function GET(req: Request) {
 
     const { data: auds } = await listAuditoriasDoMes(mes_ref);
 
-    // se não tiver auditorias, retorna vazio (export vai gerar só cabeçalho)
     if (!auds.length) {
       return NextResponse.json({ ok: true, mes_ref, rows: [] });
     }
@@ -212,7 +210,7 @@ export async function GET(req: Request) {
 
     const condoById = new Map<string, any>((condominios ?? []).map((c: any) => [c.id, c]));
 
-    // totais mês anterior (variação)
+    // mês anterior para variação
     let prevByCondo = new Map<string, number>();
     if (mes_prev) {
       const { data: prevAuds } = await listAuditoriasDoMes(mes_prev);
