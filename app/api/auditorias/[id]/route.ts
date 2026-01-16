@@ -20,31 +20,29 @@ function normalizeMetodo(input: any): "direto" | "boleto" {
 }
 
 async function canAuditorAccessByVinculo(auditorId: string, condominioId: string) {
-  const sb = supabaseAdmin();
+  // ✅ TS hard-fix: isola Supabase client como any só aqui
+  const sb: any = supabaseAdmin();
 
-  // Tentativa 1: coluna auditor_id (schema esperado)
+  // Tentativa 1: auditor_id
   {
     const { data, error } = await sb
       .from("auditor_condominios")
       .select("id")
       .eq("condominio_id", condominioId)
-      .eq("auditor_id" as any, auditorId) // any: tolerância TS
+      .eq("auditor_id", auditorId)
       .maybeSingle();
 
-    // Se não deu erro e achou, ok
     if (!error && data?.id) return true;
-
-    // Se deu erro, cai para tentativa 2 (coluna alternativa user_id)
-    // Se não deu erro mas não achou, ainda tenta user_id (caso o dado esteja salvo nessa coluna)
+    // se erro OU não achou, tenta a alternativa
   }
 
-  // Tentativa 2: coluna user_id (schema alternativo)
+  // Tentativa 2: user_id
   {
     const { data, error } = await sb
       .from("auditor_condominios")
       .select("id")
       .eq("condominio_id", condominioId)
-      .eq("user_id" as any, auditorId)
+      .eq("user_id", auditorId)
       .maybeSingle();
 
     if (error) return false;
@@ -122,7 +120,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (audErr) return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
     if (!aud) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
-    // TS FIX
     const audRow: any = aud;
 
     const isManager = roleGte(role, "interno");
@@ -164,7 +161,6 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (audErr) return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
     if (!aud) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
-    // TS FIX
     const audRow: any = aud;
 
     const isManager = roleGte(role, "interno");
