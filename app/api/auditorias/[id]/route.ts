@@ -20,7 +20,7 @@ function normalizeMetodo(input: any): "direto" | "boleto" {
 }
 
 async function canAuditorAccessByVinculo(auditorId: string, condominioId: string) {
-  // ✅ auditor_condominios NÃO tem user_id (somente auditor_id + condominio_id)
+  // ✅ auditor_condominios: auditor_id + condominio_id
   const sb: any = supabaseAdmin();
 
   const { data, error } = await sb
@@ -195,6 +195,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     for (const k of allowed) {
       if (k in body) patch[k] = body[k];
+    }
+
+    // ✅ AUTO-CLAIM:
+    // Se auditor está vinculado ao condomínio e a auditoria ainda não tem auditor_id,
+    // no primeiro PATCH a gente amarra a auditoria ao auditor logado.
+    if (!isManager && role === "auditor" && isVinculado && !audRow.auditor_id) {
+      patch.auditor_id = user.id;
     }
 
     if (typeof patch.status === "string") {
