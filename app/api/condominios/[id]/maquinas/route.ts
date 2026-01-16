@@ -1,145 +1,130 @@
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { getUserAndRole, roleGte, supabaseAdmin } from "@/lib/auth";
+import { getUserAndRole, supabaseAdmin } from "@/lib/auth";
 
 type Role = "auditor" | "interno" | "gestor";
 
-function numOrNull(v: any): number | null {
-  if (v === null || v === undefined || v === "") return null;
-  const n = Number(String(v).replace(",", "."));
-  return Number.isFinite(n) ? n : null;
+function roleGte(role: Role | null, min: Role) {
+  const rank: Record<Role, number> = { auditor: 1, interno: 2, gestor: 3 };
+  if (!role) return false;
+  return rank[role] >= rank[min];
 }
 
-function intOr(v: any, fallback: number) {
-  const n = Number(String(v ?? "").replace(/[^\d-]/g, ""));
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(0, Math.trunc(n));
+function normCategoria(x: any) {
+  const s = String(x ?? "").trim().toLowerCase();
+  if (s.includes("lav")) return "lavadora";
+  if (s.includes("sec")) return "secadora";
+  return s || null;
 }
 
-function normCategoria(v: any): "lavadora" | "secadora" | null {
-  const s = String(v ?? "").trim().toLowerCase();
-  if (s === "lavadora") return "lavadora";
-  if (s === "secadora") return "secadora";
-  return null;
+function normCapKg(x: any) {
+  const n = Number(x);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function pad2(n: number) {
-  return String(n).padStart(2, "0");
+function normQtd(x: any) {
+  const n = Number(x);
+  // se não existir quantidade na tabela, deixar como undefined (não envia)
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
 
-/* =========================
-   GET – listar máquinas
-   (UI espera { maquinas: [...] })
-========================= */
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const ctx = await getUserAndRole();
-  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-
-  const role = ctx.role as Role | null;
-  if (!role || !roleGte(role, "auditor")) {
-    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
-  }
-
-  try {
-    const condominioId = String(params?.id ?? "").trim();
-    if (!condominioId) return NextResponse.json({ error: "ID do condomínio ausente." }, { status: 400 });
-
-    const admin = supabaseAdmin();
-
-    const { data, error } = await admin
-      .from("condominio_maquinas")
-      .select("*")
-      .eq("condominio_id", condominioId)
-      .order("categoria", { ascending: true })
-      .order("maquina_tag", { ascending: true });
-
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-
-    // ✅ compat UI: devolve "maquinas"
-    return NextResponse.json({ ok: true, maquinas: data ?? [], data: data ?? [] });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
-  }
-}
-
-/* =========================
-   POST – salvar máquinas (replace)
-   (UI manda array com categoria/quantidade/valores)
-========================= */
+/**
+ * IMPORTANTE:
+ * A constraint no banco é UNIQUE(condominio_id, categoria, capacidade_kg).
+ * Então SEMPRE fazemos UPSERT com onConflict nesses 3 campos.
+ */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
-  const ctx = await getUserAndRole();
-  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-
-  const role = ctx.role as Role | null;
-  if (!role || !roleGte(role, "interno")) {
-    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
-  }
-
   try {
-    const condominioId = String(params?.id ?? "").trim();
-    if (!condominioId) return NextResponse.json({ error: "ID do condomínio ausente." }, { status: 400 });
+    const { user, role } = await getUserAndRole();
+    if (!user) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
 
-    const body = await req.json().catch(() => null);
-
-    // UI manda ARRAY direto (ou compat: {maquinas:[...]} )
-    const list = Array.isArray(body) ? body : Array.isArray(body?.maquinas) ? body.maquinas : [];
-
-    let lavN = 0;
-    let secN = 0;
-
-    const rows = list
-      .map((m: any) => {
-        const categoria = normCategoria(m?.categoria ?? m?.tipo);
-        if (!categoria) return null;
-
-        const quantidade = intOr(m?.quantidade, 0); // aqui a UI manda quantidade mesmo
-        if (quantidade <= 0) return null;
-
-        const capacidade_kg = numOrNull(m?.capacidade_kg);
-        const valor_ciclo = numOrNull(m?.valor_ciclo);
-
-        const limpeza_quimica_ciclos = Math.max(1, intOr(m?.limpeza_quimica_ciclos, 500));
-        const limpeza_mecanica_ciclos = Math.max(1, intOr(m?.limpeza_mecanica_ciclos, 2000));
-
-        let maquina_tag = String(m?.maquina_tag ?? "").trim();
-        if (!maquina_tag) {
-          if (categoria === "lavadora") lavN += 1;
-          else secN += 1;
-          maquina_tag = categoria === "lavadora" ? `LAV-${pad2(lavN)}` : `SEC-${pad2(secN)}`;
-        }
-
-        return {
-          condominio_id: condominioId,
-          categoria,
-          capacidade_kg,
-          quantidade,
-          valor_ciclo,
-          limpeza_quimica_ciclos,
-          limpeza_mecanica_ciclos,
-          maquina_tag, // NOT NULL no banco
-          ativo: m?.ativo === false ? false : true,
-        };
-      })
-      .filter(Boolean) as any[];
-
-    const totalQtd = rows.reduce((acc, r) => acc + (Number(r.quantidade) || 0), 0);
-    if (!rows.length || totalQtd <= 0) {
-      return NextResponse.json({ error: "Nenhuma máquina válida para salvar (quantidade > 0)." }, { status: 400 });
+    // só interno/gestor mexe no parque de máquinas
+    if (!roleGte(role, "interno")) {
+      return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
-    const admin = supabaseAdmin();
+    const condominioId = params.id;
 
-    const { error: delErr } = await admin.from("condominio_maquinas").delete().eq("condominio_id", condominioId);
-    if (delErr) return NextResponse.json({ error: delErr.message }, { status: 400 });
+    const body = await req.json().catch(() => ({}));
+    const itensRaw: any[] =
+      Array.isArray(body?.itens) ? body.itens : Array.isArray(body?.items) ? body.items : Array.isArray(body) ? body : [];
 
-    const { data, error: insErr } = await admin.from("condominio_maquinas").insert(rows).select();
-    if (insErr) return NextResponse.json({ error: insErr.message }, { status: 400 });
+    // normaliza + remove inválidos
+    const normalized = (itensRaw ?? [])
+      .map((it: any) => {
+        const categoria = normCategoria(it?.categoria ?? it?.tipo);
+        const capacidade_kg = normCapKg(it?.capacidade_kg ?? it?.capacidadeKg ?? it?.capacidade);
 
-    // ✅ compat UI: devolve "maquinas"
-    return NextResponse.json({ ok: true, maquinas: data ?? [], data: data ?? [] });
+        // quantidade é opcional (só manda se existir)
+        const quantidade = normQtd(it?.quantidade ?? it?.qtd);
+
+        return { categoria, capacidade_kg, quantidade };
+      })
+      .filter((x) => x.categoria && x.capacidade_kg);
+
+    // ✅ DEDUPE por (categoria+capacidade_kg) pra evitar payload duplicado
+    const seen = new Set<string>();
+    const deduped = [];
+    for (const it of normalized) {
+      const key = `${it.categoria}::${it.capacidade_kg}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(it);
+    }
+
+    // monta rows para upsert
+    const rows = deduped.map((it: any) => {
+      const row: any = {
+        condominio_id: condominioId,
+        categoria: it.categoria,
+        capacidade_kg: it.capacidade_kg,
+      };
+
+      // só envia quantidade se veio (pra não quebrar caso coluna não exista)
+      if (it.quantidade !== undefined) row.quantidade = it.quantidade;
+
+      return row;
+    });
+
+    const sb = supabaseAdmin();
+
+    // ✅ UPSERT (resolve "duplicate key" automaticamente)
+    const { data, error } = await sb
+      .from("condominio_maquinas")
+      .upsert(rows, {
+        onConflict: "condominio_id,categoria,capacidade_kg",
+        ignoreDuplicates: false,
+      })
+      .select("condominio_id,categoria,capacidade_kg,quantidade");
+
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+    }
+
+    return NextResponse.json({ ok: true, data: data ?? [] }, { status: 200 });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
+    return NextResponse.json({ ok: false, error: e?.message ?? "server_error" }, { status: 500 });
+  }
+}
+
+export async function GET(_req: Request, { params }: { params: { id: string } }) {
+  try {
+    const { user } = await getUserAndRole();
+    if (!user) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+
+    const condominioId = params.id;
+    const sb = supabaseAdmin();
+
+    const { data, error } = await sb
+      .from("condominio_maquinas")
+      .select("condominio_id,categoria,capacidade_kg,quantidade")
+      .eq("condominio_id", condominioId);
+
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+
+    return NextResponse.json({ ok: true, itens: data ?? [], data: { itens: data ?? [] } }, { status: 200 });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message ?? "server_error" }, { status: 500 });
   }
 }
