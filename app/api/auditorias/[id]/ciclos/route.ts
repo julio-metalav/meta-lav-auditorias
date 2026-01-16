@@ -41,17 +41,31 @@ function clampNonNeg(n: number) {
   return Number.isFinite(n) ? Math.max(0, n) : 0;
 }
 
+function cleanUuidParam(raw: any) {
+  // remove URL encoding e aspas
+  let s = String(raw ?? "").trim();
+  try {
+    s = decodeURIComponent(s);
+  } catch {}
+  // remove aspas e caracteres "embrulhando"
+  s = s.replace(/^[\s"'<>]+/, "").replace(/[\s"'<>]+$/, "");
+  // remove aspas internas comuns de %22...%22
+  s = s.replace(/^%22/, "").replace(/%22$/, "");
+  // se ainda vier com aspas no meio
+  s = s.replace(/^"+/, "").replace(/"+$/, "");
+  return s;
+}
+
 type TipoPreco = {
   categoria: "lavadora" | "secadora";
   capacidade_kg: number;
-  valor_ciclo: number | null; // vem do cadastro das máquinas (por capacidade)
+  valor_ciclo: number | null;
 };
 
 async function getTiposDoCondominioComPreco(
   condominioId: string,
   fallback: { lav: number; sec: number }
 ) {
-  // ✅ Fonte da verdade do tipo e do preço por capacidade: condominio_maquinas
   const { data, error } = await supabaseAdmin()
     .from("condominio_maquinas")
     .select("categoria, capacidade_kg, valor_ciclo")
@@ -72,7 +86,6 @@ async function getTiposDoCondominioComPreco(
     if (!map.has(key)) {
       map.set(key, { categoria: cat, capacidade_kg: Number(cap), valor_ciclo: val });
     } else {
-      // se já existe, só preenche preço se estava null/0
       const cur = map.get(key)!;
       if ((cur.valor_ciclo == null || cur.valor_ciclo === 0) && val != null) {
         cur.valor_ciclo = val;
@@ -82,18 +95,15 @@ async function getTiposDoCondominioComPreco(
 
   let tipos = Array.from(map.values());
 
-  // fallback mínimo pra não quebrar a tela se condomínio não tiver máquinas cadastradas
   if (tipos.length === 0) {
     tipos = [{ categoria: "lavadora", capacidade_kg: 10, valor_ciclo: fallback.lav || 0 }];
   }
 
-  // ordena: lavadora antes; 10 antes de 15
   tipos.sort((a, b) => {
     if (a.categoria !== b.categoria) return a.categoria === "lavadora" ? -1 : 1;
     return a.capacidade_kg - b.capacidade_kg;
   });
 
-  // se preço não vier das máquinas, usa legado do condomínio
   tipos = tipos.map((t) => {
     if (t.valor_ciclo != null && Number.isFinite(t.valor_ciclo)) return t;
     const legacy = t.categoria === "secadora" ? fallback.sec : fallback.lav;
@@ -104,18 +114,15 @@ async function getTiposDoCondominioComPreco(
 }
 
 function calcTotais(aud: any, condo: any, itens: any[]) {
-  // Receita bruta: soma ciclos * valor_ciclo
   const receita_bruta = itens.reduce((acc, it) => {
     const ciclos = safeMoney(it?.ciclos);
     const valor = safeMoney(it?.valor_ciclo);
     return acc + ciclos * valor;
   }, 0);
 
-  // Cashback
   const cashback_percent = safeMoney(condo?.cashback_percent);
   const total_cashback = receita_bruta * (cashback_percent / 100);
 
-  // Repasse = consumo * tarifa (consumo = leitura_atual - leitura_base)
   const agua_atual = safeNum(aud?.agua_leitura) ?? safeNum(aud?.leitura_agua);
   const energia_atual = safeNum(aud?.energia_leitura) ?? safeNum(aud?.leitura_energia);
   const gas_atual = safeNum(aud?.gas_leitura) ?? safeNum(aud?.leitura_gas);
@@ -161,9 +168,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (!user) return bad("Não autenticado", 401);
     if (!roleGte(role as any, "interno")) return bad("Sem permissão", 403);
 
-    const auditoriaId = params.id;
+    const auditoriaId = cleanUuidParam(params.id);
 
-    // ✅ Pega auditoria com campos suficientes pra calcular consumo (sem depender de colunas exatas)
     const { data: aud, error: audErr } = await supabaseAdmin()
       .from("auditorias")
       .select("*")
@@ -173,7 +179,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (audErr) return bad(audErr.message, 500);
     if (!aud) return bad("Auditoria não encontrada", 404);
 
-    // ✅ Condomínio: pega tudo pra não quebrar e pra ler tarifas/cashback
     const { data: condo, error: condoErr } = await supabaseAdmin()
       .from("condominios")
       .select("*")
@@ -182,14 +187,12 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     if (condoErr) return bad(condoErr.message, 500);
 
-    // ✅ legado (fallback) só pra preços (se faltar em condominio_maquinas)
     const condoAny: any = condo ?? {};
     const fallback = {
       lav: condoAny.valor_ciclo_lavadora != null ? Number(condoAny.valor_ciclo_lavadora) : 0,
       sec: condoAny.valor_ciclo_secadora != null ? Number(condoAny.valor_ciclo_secadora) : 0,
     };
 
-    // ✅ tipos + preço por capacidade
     const tipos = await getTiposDoCondominioComPreco(String((aud as any).condominio_id), fallback);
 
     const { data: rows, error: rowsErr } = await supabaseAdmin()
@@ -210,7 +213,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     const itens = tipos.map((t) => {
       const key = `${t.categoria}-${t.capacidade_kg}`;
       const r = byKey.get(key);
-
       return {
         id: r?.id ?? null,
         auditoria_id: auditoriaId,
@@ -221,7 +223,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       };
     });
 
-    // ✅ NOVO: totais (pra tela e principalmente pro relatório financeiro)
     const totais = calcTotais(aud, condoAny, itens);
 
     return NextResponse.json({
@@ -229,11 +230,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       data: {
         auditoria: aud,
         itens,
-
-        // ✅ adicionado (não quebra nada existente)
         totais,
-
-        // ✅ espelha campos “planos” pra facilitar consumo por outros endpoints
         receita_bruta: totais.receita_bruta,
         total_cashback: totais.total_cashback,
         total_repasse: totais.total_repasse,
@@ -249,17 +246,14 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   try {
     const { user, role } = await getUserAndRole();
     if (!user) return bad("Não autenticado", 401);
-
-    // ✅ Interno/Gestor podem lançar ciclos. Auditor NÃO.
     if (!roleGte(role as any, "interno")) return bad("Sem permissão", 403);
 
-    const auditoriaId = params.id;
+    const auditoriaId = cleanUuidParam(params.id);
 
     const body = await req.json().catch(() => null);
     const itensIn = Array.isArray(body?.itens) ? body.itens : null;
     if (!itensIn) return bad("Payload inválido. Esperado {itens:[...]}");
 
-    // 1) carrega auditoria (com campos suficientes)
     const { data: aud, error: audErr } = await supabaseAdmin()
       .from("auditorias")
       .select("*")
@@ -269,7 +263,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (audErr) return bad(audErr.message, 500);
     if (!aud) return bad("Auditoria não encontrada", 404);
 
-    // 2) condomínio completo (tarifas/cashback)
     const { data: condo, error: condoErr } = await supabaseAdmin()
       .from("condominios")
       .select("*")
@@ -284,12 +277,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       sec: condoAny.valor_ciclo_secadora != null ? Number(condoAny.valor_ciclo_secadora) : 0,
     };
 
-    // 3) tipos permitidos (fonte da verdade)
     const tipos = await getTiposDoCondominioComPreco(String((aud as any).condominio_id), fallback);
-
     const allowed = new Set<string>(tipos.map((t) => `${t.categoria}-${t.capacidade_kg}`));
 
-    // 4) valida e prepara upsert
     const rowsToUpsert: any[] = [];
     for (const raw of itensIn as any[]) {
       const cat = normalizeCategoria(raw?.categoria) as "lavadora" | "secadora";
@@ -297,9 +287,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       if (!cap) return bad("Item inválido: capacidade_kg ausente/inválida", 400);
 
       const key = `${cat}-${cap}`;
-      if (!allowed.has(key)) {
-        return bad(`Tipo não permitido para este condomínio: ${cat} ${cap}kg`, 400);
-      }
+      if (!allowed.has(key)) return bad(`Tipo não permitido para este condomínio: ${cat} ${cap}kg`, 400);
 
       rowsToUpsert.push({
         auditoria_id: auditoriaId,
@@ -309,14 +297,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       });
     }
 
-    // 5) upsert por chave natural (auditoria_id,categoria,capacidade_kg)
     const { error: upErr } = await supabaseAdmin()
       .from("auditoria_ciclos")
       .upsert(rowsToUpsert as any, { onConflict: "auditoria_id,categoria,capacidade_kg" });
 
     if (upErr) return bad(upErr.message, 500);
 
-    // 6) retorna a mesma estrutura do GET (itens completos + preço)
     const { data: rows, error: rowsErr } = await supabaseAdmin()
       .from("auditoria_ciclos")
       .select("id, auditoria_id, categoria, capacidade_kg, ciclos, created_at, updated_at")
@@ -335,7 +321,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const itens = tipos.map((t) => {
       const key = `${t.categoria}-${t.capacidade_kg}`;
       const r = byKey.get(key);
-
       return {
         id: r?.id ?? null,
         auditoria_id: auditoriaId,
@@ -353,9 +338,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       data: {
         auditoria: aud,
         itens,
-
         totais,
-
         receita_bruta: totais.receita_bruta,
         total_cashback: totais.total_cashback,
         total_repasse: totais.total_repasse,

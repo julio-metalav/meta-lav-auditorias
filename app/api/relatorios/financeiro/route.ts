@@ -11,206 +11,223 @@ function roleGte(role: Role | null, min: Role) {
   return rank[role] >= rank[min];
 }
 
-function normalizeStatus(input: any) {
-  const s = String(input ?? "aberta").trim().toLowerCase();
-  if (s === "em conferência" || s === "em conferencia") return "em_conferencia";
-  if (s === "em andamento") return "em_andamento";
-  if (s === "finalizado") return "final";
-  if (s === "aberto") return "aberta";
-  return s || "aberta";
+function bad(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
 }
 
-function prevMonthISO(iso: string) {
-  const [y, m] = iso.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1, 1));
-  d.setUTCMonth(d.getUTCMonth() - 1);
-  const yy = d.getUTCFullYear();
+function num(v: any) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function pct(v: any) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function monthStart(s: string) {
+  // esperado YYYY-MM-01
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  const yyyy = d.getUTCFullYear();
   const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  return `${yy}-${mm}-01`;
+  return `${yyyy}-${mm}-01`;
 }
 
-function pctChange(curr: number, prev: number | null) {
-  if (!prev || prev === 0) return null;
-  return ((curr - prev) / prev) * 100;
+function prevMonthStart(s: string) {
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  const prev = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1));
+  const yyyy = prev.getUTCFullYear();
+  const mm = String(prev.getUTCMonth() + 1).padStart(2, "0");
+  return `${yyyy}-${mm}-01`;
 }
 
-function firstNonEmpty(obj: any, keys: string[]) {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v == null) continue;
-    const s = String(v).trim();
-    if (s) return s;
-  }
-  return "";
+function pickAnyTotal(json: any, key: string) {
+  // aceita vários formatos possíveis
+  return (
+    json?.data?.totais?.[key] ??
+    json?.data?.[key] ??
+    json?.totais?.[key] ??
+    json?.[key] ??
+    0
+  );
 }
 
-function buildPagamentoString(cond: any) {
-  // tenta achar pix primeiro
-  const pix = firstNonEmpty(cond, ["pix", "pix_chave", "pix_key", "pix_chave_copia_cola"]);
-  const cpfCnpj = firstNonEmpty(cond, ["cpf_cnpj", "cnpj", "cnpj_cpf", "favorecido_cnpj", "cpf", "documento"]);
-  const bancoCod = firstNonEmpty(cond, ["banco", "banco_codigo", "banco_cod", "codigo_banco"]);
-  const bancoNome = firstNonEmpty(cond, ["banco_nome", "banco_name"]);
-  const agencia = firstNonEmpty(cond, ["agencia", "agência"]);
-  const conta = firstNonEmpty(cond, ["conta", "conta_numero", "numero_conta"]);
+function buildPagamentoTexto(condo: any) {
+  const pix =
+    condo?.pix ??
+    condo?.pix_chave ??
+    condo?.chave_pix ??
+    condo?.pix_key ??
+    condo?.pixKey ??
+    null;
+
+  const doc =
+    condo?.cnpj ??
+    condo?.cpf ??
+    condo?.documento ??
+    condo?.doc ??
+    condo?.cnpj_cpf ??
+    condo?.cpf_cnpj ??
+    null;
 
   if (pix) {
-    return `PIX: ${pix}${cpfCnpj ? ` • CNPJ/CPF: ${cpfCnpj}` : ""}`;
+    const docTxt = doc ? ` • CNPJ/CPF: ${doc}` : "";
+    return `PIX: ${String(pix)}${docTxt}`;
   }
 
-  const bancoLabel =
-    bancoCod && bancoNome ? `${bancoNome} (${bancoCod})` : (bancoCod ? `Banco (${bancoCod})` : (bancoNome ? bancoNome : "Banco"));
+  const bancoCodigo = condo?.banco_codigo ?? condo?.banco ?? condo?.codigo_banco ?? null;
+  const bancoNome = condo?.banco_nome ?? condo?.nome_banco ?? null;
 
-  const partes: string[] = [];
-  partes.push(`${bancoLabel}`);
-  if (agencia) partes.push(`Agência: ${agencia}`);
-  if (conta) partes.push(`Conta: ${conta}`);
-  if (cpfCnpj) partes.push(`CNPJ/CPF: ${cpfCnpj}`);
+  const agencia = condo?.agencia ?? condo?.agencia_numero ?? null;
+  const conta = condo?.conta ?? condo?.conta_numero ?? null;
 
-  // se não tiver nada mesmo, devolve vazio
-  const joined = partes.join(" • ").trim();
-  return joined === "Banco" ? "" : joined;
+  const bancoTxt =
+    bancoCodigo && bancoNome
+      ? `Banco (${bancoCodigo}): ${bancoNome}`
+      : bancoCodigo
+      ? `Banco (${bancoCodigo})`
+      : bancoNome
+      ? `Banco: ${bancoNome}`
+      : "Banco";
+
+  const agTxt = agencia ? ` • Agência: ${agencia}` : "";
+  const ccTxt = conta ? ` • Conta: ${conta}` : "";
+  const docTxt = doc ? ` • CNPJ/CPF: ${doc}` : "";
+
+  return `${bancoTxt}${agTxt}${ccTxt}${docTxt}`.trim();
 }
 
-/**
- * 🔎 Busca totais do financeiro da auditoria.
- * Preferência: /api/auditorias/[id]/ciclos (normalmente já tem resumo pronto).
- * Fallback: /api/auditorias/[id] (se algum ambiente não tiver ciclos).
- */
-async function fetchTotaisFinanceiros(origin: string, auditoriaId: string, cookieHeader: string) {
-  const tryUrls = [
-    `${origin}/api/auditorias/${auditoriaId}/ciclos`,
-    `${origin}/api/auditorias/${auditoriaId}`,
-  ];
+async function fetchTotaisForAuditoria(auditoriaId: string) {
+  // chama direto o endpoint interno (mesmo host)
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.VERCEL_URL
+    ? (process.env.NEXT_PUBLIC_SITE_URL
+        ? process.env.NEXT_PUBLIC_SITE_URL
+        : `https://${process.env.VERCEL_URL}`)
+    : null;
 
-  for (const u of tryUrls) {
-    const res = await fetch(u, {
-      headers: { cookie: cookieHeader },
-      cache: "no-store",
-    });
-    if (!res.ok) continue;
-
-    const j = await res.json().catch(() => null);
-    const data = j?.data ?? j?.auditoria ?? j ?? null;
-    if (!data) continue;
-
-    // Tentativas de nomes de campos (bem defensivo)
-    const repasse =
-      Number(
-        data?.total_repasse ??
-          data?.repasse_total ??
-          data?.repasse ??
-          data?.resumo_financeiro?.repasse_total ??
-          data?.resumo_financeiro?.total_repasse ??
-          0
-      ) || 0;
-
-    const cashback =
-      Number(
-        data?.total_cashback ??
-          data?.cashback_total ??
-          data?.cashback ??
-          data?.resumo_financeiro?.cashback_total ??
-          data?.resumo_financeiro?.total_cashback ??
-          0
-      ) || 0;
-
-    const total =
-      Number(
-        data?.total ??
-          data?.total_a_pagar ??
-          data?.resumo_financeiro?.total ??
-          data?.resumo_financeiro?.total_a_pagar ??
-          repasse + cashback
-      ) || (repasse + cashback);
-
-    // se vier tudo zerado, ainda assim aceita (não dá pra inferir mais aqui)
-    return { repasse, cashback, total };
+  if (!baseUrl) {
+    // fallback: tenta pelo próprio supabase (zera apenas se não tiver como)
+    return { total_repasse: 0, total_cashback: 0, total_a_pagar: 0, receita_bruta: 0 };
   }
 
-  return null;
+  // 1) tenta /ciclos
+  try {
+    const r = await fetch(`${baseUrl}/api/auditorias/${auditoriaId}/ciclos`, { cache: "no-store" });
+    if (r.ok) {
+      const j = await r.json();
+      const total_repasse = num(pickAnyTotal(j, "total_repasse"));
+      const total_cashback = num(pickAnyTotal(j, "total_cashback"));
+      const total_a_pagar = num(pickAnyTotal(j, "total_a_pagar"));
+      const receita_bruta = num(pickAnyTotal(j, "receita_bruta"));
+      return { total_repasse, total_cashback, total_a_pagar, receita_bruta };
+    }
+  } catch {}
+
+  // 2) fallback: /auditorias/[id]
+  try {
+    const r = await fetch(`${baseUrl}/api/auditorias/${auditoriaId}`, { cache: "no-store" });
+    if (r.ok) {
+      const j = await r.json();
+      const total_repasse = num(pickAnyTotal(j, "total_repasse"));
+      const total_cashback = num(pickAnyTotal(j, "total_cashback"));
+      const total_a_pagar = num(pickAnyTotal(j, "total_a_pagar"));
+      const receita_bruta = num(pickAnyTotal(j, "receita_bruta"));
+      return { total_repasse, total_cashback, total_a_pagar, receita_bruta };
+    }
+  } catch {}
+
+  return { total_repasse: 0, total_cashback: 0, total_a_pagar: 0, receita_bruta: 0 };
 }
 
 export async function GET(req: Request) {
-  const { user, role } = await getUserAndRole();
-  if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  if (!roleGte((role ?? null) as any, "interno")) {
-    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
-  }
+  try {
+    const { user, role } = await getUserAndRole();
+    if (!user) return bad("Não autenticado", 401);
+    if (!roleGte(role as any, "interno")) return bad("Sem permissão", 403);
 
-  const url = new URL(req.url);
-  const mes_ref = (url.searchParams.get("mes_ref") ?? "").trim();
-  if (!mes_ref) {
-    return NextResponse.json({ error: "Informe mes_ref no formato YYYY-MM-01" }, { status: 400 });
-  }
+    const url = new URL(req.url);
+    const mes_ref_raw = url.searchParams.get("mes_ref") || "";
+    const mes_ref = monthStart(mes_ref_raw);
+    if (!mes_ref) return bad("Parâmetro mes_ref inválido (use YYYY-MM-01)", 400);
 
-  const admin = supabaseAdmin();
-  const mesAnterior = prevMonthISO(mes_ref);
+    const mes_prev = prevMonthStart(mes_ref);
 
-  // 1) auditorias do mês
-  const { data: auds, error: audErr } = await admin
-    .from("auditorias")
-    .select("id,condominio_id,mes_ref,status")
-    .eq("mes_ref", mes_ref);
+    const { data: auds, error: audErr } = await supabaseAdmin()
+      .from("auditorias")
+      .select("id, condominio_id, mes_ref, status")
+      .eq("mes_ref", mes_ref)
+      .in("status", ["em_conferencia", "final"]);
 
-  if (audErr) return NextResponse.json({ error: audErr.message }, { status: 400 });
+    if (audErr) return bad(audErr.message, 500);
 
-  // só entra no relatório se estiver em conferência ou final (fechada pro financeiro)
-  const auditorias = (auds ?? []).filter((a: any) => {
-    const st = normalizeStatus(a?.status);
-    return st === "em_conferencia" || st === "final";
-  });
+    const condIds = Array.from(new Set((auds ?? []).map((a: any) => a.condominio_id).filter(Boolean)));
 
-  const condIds = Array.from(new Set(auditorias.map((a: any) => a.condominio_id).filter(Boolean)));
+    const { data: condominios, error: condoErr } = await supabaseAdmin()
+      .from("condominios")
+      .select("*")
+      .in("id", condIds.length ? condIds : ["00000000-0000-0000-0000-000000000000"]);
 
-  // 2) condomínios (pega tudo pra não quebrar por coluna inexistente)
-  const { data: condos, error: condoErr } = condIds.length
-    ? await admin.from("condominios").select("*").in("id", condIds)
-    : { data: [], error: null as any };
+    if (condoErr) return bad(condoErr.message, 500);
 
-  if (condoErr) return NextResponse.json({ error: condoErr.message }, { status: 400 });
+    const condoById = new Map<string, any>((condominios ?? []).map((c: any) => [c.id, c]));
 
-  const condoMap = new Map((condos ?? []).map((c: any) => [c.id, c]));
+    // totais do mês anterior (pra variação)
+    let prevByCondo = new Map<string, number>();
+    if (mes_prev) {
+      const { data: audPrev, error: prevErr } = await supabaseAdmin()
+        .from("auditorias")
+        .select("id, condominio_id, mes_ref, status")
+        .eq("mes_ref", mes_prev)
+        .in("status", ["em_conferencia", "final"]);
 
-  // 3) auditorias do mês anterior (pra variação)
-  const { data: audPrev } = await admin
-    .from("auditorias")
-    .select("id,condominio_id,mes_ref,status")
-    .eq("mes_ref", mesAnterior);
-
-  const prevByCondo = new Map<string, any>();
-  (audPrev ?? []).forEach((a: any) => prevByCondo.set(a.condominio_id, a));
-
-  // 4) calcular linhas
-  const origin = new URL(req.url).origin;
-  const cookieHeader = req.headers.get("cookie") ?? "";
-
-  const resultado: any[] = [];
-
-  for (const aud of auditorias) {
-    const cond = condoMap.get(aud.condominio_id) ?? null;
-
-    const tot = await fetchTotaisFinanceiros(origin, aud.id, cookieHeader);
-    if (!tot) continue;
-
-    let totalAnterior: number | null = null;
-    const prev = prevByCondo.get(aud.condominio_id);
-    if (prev) {
-      const totPrev = await fetchTotaisFinanceiros(origin, prev.id, cookieHeader);
-      if (totPrev) totalAnterior = Number(totPrev.total ?? 0) || 0;
+      if (!prevErr && audPrev?.length) {
+        const totals = await Promise.all(
+          audPrev.map(async (a: any) => {
+            const t = await fetchTotaisForAuditoria(a.id);
+            return { condominio_id: a.condominio_id, total: num(t.total_a_pagar) };
+          })
+        );
+        for (const row of totals) {
+          if (!row.condominio_id) continue;
+          prevByCondo.set(String(row.condominio_id), row.total);
+        }
+      }
     }
 
-    resultado.push({
-      condominio: cond?.nome ?? aud.condominio_id,
-      pagamento_texto: buildPagamentoString(cond),
-      repasse: Number(tot.repasse ?? 0) || 0,
-      cashback: Number(tot.cashback ?? 0) || 0,
-      total: Number(tot.total ?? 0) || 0,
-      variacao_percent: pctChange(Number(tot.total ?? 0) || 0, totalAnterior),
+    const rows = await Promise.all(
+      (auds ?? []).map(async (a: any) => {
+        const condo = condoById.get(String(a.condominio_id)) ?? {};
+        const pagamento_texto = buildPagamentoTexto(condo);
+
+        const t = await fetchTotaisForAuditoria(a.id);
+
+        const repasse = num(t.total_repasse);
+        const cashback = num(t.total_cashback);
+        const total = num(t.total_a_pagar);
+
+        const prevTotal = prevByCondo.get(String(a.condominio_id)) ?? 0;
+        const variacao_percent = prevTotal > 0 ? (total - prevTotal) / prevTotal : 0;
+
+        return {
+          condominio_id: String(a.condominio_id),
+          condominio_nome: String(condo?.nome ?? "Condomínio"),
+          pagamento_texto,
+          repasse,
+          cashback,
+          total,
+          variacao_percent,
+        };
+      })
+    );
+
+    return NextResponse.json({
+      ok: true,
+      mes_ref,
+      rows,
     });
+  } catch (e: any) {
+    return bad(e?.message ?? "Erro inesperado", 500);
   }
-
-  // ordena por nome do condomínio
-  resultado.sort((a, b) => String(a.condominio ?? "").localeCompare(String(b.condominio ?? "")));
-
-  return NextResponse.json({ mes_ref, data: resultado });
 }
