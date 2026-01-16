@@ -3,6 +3,8 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import PDFDocument from "pdfkit";
 import { PassThrough } from "stream";
+import path from "path";
+import fs from "fs";
 import { getUserAndRole } from "@/lib/auth";
 
 type Role = "auditor" | "interno" | "gestor";
@@ -43,6 +45,19 @@ function nodeStreamToWebReadable(nodeStream: NodeJS.ReadableStream) {
   });
 }
 
+function money(v: any) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "0,00";
+  // formato simples pt-BR sem Intl (pra evitar variação em runtime)
+  return n.toFixed(2).replace(".", ",");
+}
+
+function percent(v: any) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "0,00%";
+  return (n * 100).toFixed(2).replace(".", ",") + "%";
+}
+
 export async function GET(req: Request) {
   try {
     const { user, role } = await getUserAndRole();
@@ -61,10 +76,7 @@ export async function GET(req: Request) {
     // ✅ Fonte da verdade: JSON base
     const r = await fetch(
       `${baseUrl}/api/relatorios/financeiro?mes_ref=${encodeURIComponent(mes_ref)}`,
-      {
-        cache: "no-store",
-        headers: { cookie },
-      }
+      { cache: "no-store", headers: { cookie } }
     );
 
     if (!r.ok) {
@@ -75,30 +87,44 @@ export async function GET(req: Request) {
     const j: any = await r.json();
     const rows: any[] = Array.isArray(j?.rows) ? j.rows : [];
 
-    // ✅ PDF simples
+    // ✅ PDF com fontes TTF (evita Helvetica.afm)
     const doc = new PDFDocument({ size: "A4", margin: 36 });
     const passthrough = new PassThrough();
     doc.pipe(passthrough);
 
-    doc.fontSize(14).text(`Relatório Financeiro - ${mes_ref}`, { align: "center" });
+    // Caminhos das fontes dentro do bundle (public/ vai junto)
+    const fontRegular = path.join(process.cwd(), "public", "fonts", "Roboto-Regular.ttf");
+    const fontBold = path.join(process.cwd(), "public", "fonts", "Roboto-Bold.ttf");
+
+    // Se não achar fonte, falha com mensagem clara (pra você saber que faltou copiar)
+    if (!fs.existsSync(fontRegular) || !fs.existsSync(fontBold)) {
+      doc.end();
+      return bad(
+        "Fontes do PDF não encontradas. Adicione public/fonts/Roboto-Regular.ttf e public/fonts/Roboto-Bold.ttf",
+        500
+      );
+    }
+
+    doc.registerFont("R", fontRegular);
+    doc.registerFont("B", fontBold);
+
+    doc.font("B").fontSize(14).text(`Relatório Financeiro - ${mes_ref}`, { align: "center" });
     doc.moveDown();
 
-    doc.fontSize(10);
+    doc.font("R").fontSize(10);
 
     if (!rows.length) {
-      doc.text("Sem auditorias em conferência/final para este mês.");
+      doc.text("Sem auditorias em conferência para este mês.");
     } else {
       for (const row of rows) {
-        doc
-          .font("Helvetica-Bold")
-          .text(String(row?.condominio_nome ?? "Condomínio"), { continued: false });
-        doc.font("Helvetica").text(String(row?.pagamento_texto ?? ""));
-        doc.text(`Repasse: R$ ${Number(row?.repasse ?? 0).toFixed(2)}`);
-        doc.text(`Cashback: R$ ${Number(row?.cashback ?? 0).toFixed(2)}`);
-        doc.text(`Total: R$ ${Number(row?.total ?? 0).toFixed(2)}`);
-        doc.text(
-          `Variação vs mês anterior: ${(Number(row?.variacao_percent ?? 0) * 100).toFixed(2)}%`
-        );
+        doc.font("B").text(String(row?.condominio_nome ?? "Condomínio"));
+        doc.font("R").text(String(row?.pagamento_texto ?? ""));
+
+        doc.text(`Repasse: R$ ${money(row?.repasse)}`);
+        doc.text(`Cashback: R$ ${money(row?.cashback)}`);
+        doc.text(`Total: R$ ${money(row?.total)}`);
+        doc.text(`Variação vs mês anterior: ${percent(row?.variacao_percent)}`);
+
         doc.moveDown();
       }
     }

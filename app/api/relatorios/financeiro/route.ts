@@ -166,7 +166,8 @@ export async function GET(req: Request) {
       .from("auditorias")
       .select("id, condominio_id, mes_ref, status")
       .eq("mes_ref", mes_ref)
-      .in("status", ["em_conferencia", "final"]);
+      .eq("status", "em_conferencia");
+
 
     if (audErr) return bad(audErr.message, 500);
 
