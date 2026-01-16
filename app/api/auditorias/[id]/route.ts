@@ -61,7 +61,8 @@ async function fetchCondominioBasics(condominioId: string) {
         "tipo_pagamento",
         "valor_ciclo_lavadora",
         "valor_ciclo_secadora",
-        // ✅ NOVO: cashback + tarifas (para repasse)
+
+        // ✅ PASSO 1: dados para relatório financeiro
         "cashback_percent",
         "agua_valor_m3",
         "energia_valor_kwh",
@@ -82,7 +83,7 @@ function withCompatAliases(aud: any, condominio: any) {
   const base_energia = aud?.energia_leitura_base ?? null;
   const base_gas = aud?.gas_leitura_base ?? null;
 
-  // ✅ NOVO: passa dados do condomínio para a UI do fechamento
+  // ✅ PASSO 1: repassar para UI do fechamento
   const cashback_percent = condominio?.cashback_percent ?? null;
   const agua_valor_m3 = condominio?.agua_valor_m3 ?? null;
   const energia_valor_kwh = condominio?.energia_valor_kwh ?? null;
