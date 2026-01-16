@@ -28,22 +28,20 @@ function pctChange(curr: number, prev: number | null) {
 export async function GET(req: Request) {
   const { user, role } = await getUserAndRole();
   if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  if (!roleGte(role as any, "interno"))
+  if (!roleGte((role ?? null) as any, "interno")) {
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  }
 
   const url = new URL(req.url);
-  const mes = url.searchParams.get("mes_ref");
+  const mes = (url.searchParams.get("mes_ref") ?? "").trim();
   if (!mes) {
-    return NextResponse.json(
-      { error: "Informe mes_ref no formato YYYY-MM-01" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Informe mes_ref no formato YYYY-MM-01" }, { status: 400 });
   }
 
   const mesAnterior = prevMonthISO(mes);
   const admin = supabaseAdmin();
 
-  // 1️⃣ Auditorias do mês
+  // 1) Auditorias do mês
   const { data: auds, error: audErr } = await admin
     .from("auditorias")
     .select("id,condominio_id,mes_ref,status")
@@ -52,9 +50,10 @@ export async function GET(req: Request) {
   if (audErr) return NextResponse.json({ error: audErr.message }, { status: 400 });
 
   const auditorias = auds ?? [];
-  const condIds = Array.from(new Set(auditorias.map((a: any) => a.condominio_id)));
+  const condIds = Array.from(new Set(auditorias.map((a: any) => a.condominio_id).filter(Boolean)));
 
-  // 2️⃣ Dados dos condomínios (bancário / PIX)
+  // 2) Dados dos condomínios (bancário / PIX)
+  // ✅ CORREÇÃO: conta_tipo -> tipo_conta
   const { data: condos, error: condoErr } = await admin
     .from("condominios")
     .select(
@@ -66,7 +65,7 @@ export async function GET(req: Request) {
         "banco",
         "agencia",
         "conta",
-        "conta_tipo",
+        "tipo_conta", // ✅ era conta_tipo
         "titular",
         "cpf_cnpj",
         "pix_chave",
@@ -77,9 +76,9 @@ export async function GET(req: Request) {
 
   if (condoErr) return NextResponse.json({ error: condoErr.message }, { status: 400 });
 
-  const condoMap = new Map(condos.map((c: any) => [c.id, c]));
+  const condoMap = new Map((condos ?? []).map((c: any) => [c.id, c]));
 
-  // 3️⃣ Auditorias do mês anterior
+  // 3) Auditorias do mês anterior
   const { data: audPrev } = await admin
     .from("auditorias")
     .select("id,condominio_id,mes_ref")
@@ -88,15 +87,17 @@ export async function GET(req: Request) {
   const prevByCondo = new Map<string, any>();
   (audPrev ?? []).forEach((a: any) => prevByCondo.set(a.condominio_id, a));
 
-  // 4️⃣ Chama o backend de auditoria (fonte da verdade)
+  // 4) Busca o resumo financeiro da auditoria via endpoint (fonte da verdade)
+  const origin = new URL(req.url).origin;
+
   async function resumoFinanceiro(auditoriaId: string) {
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL}/api/auditorias/${auditoriaId}`,
-      { headers: { Cookie: req.headers.get("cookie") ?? "" } }
-    );
+    const res = await fetch(`${origin}/api/auditorias/${auditoriaId}`, {
+      headers: { cookie: req.headers.get("cookie") ?? "" },
+      cache: "no-store",
+    });
     if (!res.ok) return null;
-    const json = await res.json();
-    return json?.data ?? null;
+    const json = await res.json().catch(() => null);
+    return (json as any)?.data ?? null;
   }
 
   const resultado: any[] = [];
@@ -105,30 +106,27 @@ export async function GET(req: Request) {
     const resumo = await resumoFinanceiro(aud.id);
     if (!resumo) continue;
 
-    const totalAtual =
-      Number(resumo?.total_repasse ?? 0) +
-      Number(resumo?.total_cashback ?? 0);
+    const totalAtual = Number(resumo?.total_repasse ?? 0) + Number(resumo?.total_cashback ?? 0);
 
     let totalAnterior: number | null = null;
     const prev = prevByCondo.get(aud.condominio_id);
     if (prev) {
       const rPrev = await resumoFinanceiro(prev.id);
       if (rPrev) {
-        totalAnterior =
-          Number(rPrev?.total_repasse ?? 0) +
-          Number(rPrev?.total_cashback ?? 0);
+        totalAnterior = Number(rPrev?.total_repasse ?? 0) + Number(rPrev?.total_cashback ?? 0);
       }
     }
 
     const cond = condoMap.get(aud.condominio_id);
 
     resultado.push({
-      condominio: cond?.nome,
+      condominio: cond?.nome ?? aud.condominio_id,
       pagamento: {
-        tipo: cond?.tipo_pagamento,
+        tipo: cond?.tipo_pagamento ?? null,
         banco: cond?.banco_nome ?? cond?.banco ?? null,
         agencia: cond?.agencia ?? null,
         conta: cond?.conta ?? null,
+        tipo_conta: cond?.tipo_conta ?? null, // ✅ opcional, se quiser mostrar
         pix: cond?.pix_chave ?? null,
         titular: cond?.titular ?? null,
         cpf_cnpj: cond?.cpf_cnpj ?? null,
