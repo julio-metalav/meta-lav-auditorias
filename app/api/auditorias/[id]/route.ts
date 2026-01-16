@@ -22,15 +22,34 @@ function normalizeMetodo(input: any): "direto" | "boleto" {
 async function canAuditorAccessByVinculo(auditorId: string, condominioId: string) {
   const sb = supabaseAdmin();
 
-  const { data, error } = await sb
-    .from("auditor_condominios")
-    .select("id")
-    .eq("auditor_id", auditorId)
-    .eq("condominio_id", condominioId)
-    .maybeSingle();
+  // Tentativa 1: coluna auditor_id (schema esperado)
+  {
+    const { data, error } = await sb
+      .from("auditor_condominios")
+      .select("id")
+      .eq("condominio_id", condominioId)
+      .eq("auditor_id" as any, auditorId) // any: tolerância TS
+      .maybeSingle();
 
-  if (error) return false;
-  return !!data?.id;
+    // Se não deu erro e achou, ok
+    if (!error && data?.id) return true;
+
+    // Se deu erro, cai para tentativa 2 (coluna alternativa user_id)
+    // Se não deu erro mas não achou, ainda tenta user_id (caso o dado esteja salvo nessa coluna)
+  }
+
+  // Tentativa 2: coluna user_id (schema alternativo)
+  {
+    const { data, error } = await sb
+      .from("auditor_condominios")
+      .select("id")
+      .eq("condominio_id", condominioId)
+      .eq("user_id" as any, auditorId)
+      .maybeSingle();
+
+    if (error) return false;
+    return !!data?.id;
+  }
 }
 
 async function fetchCondominioBasics(condominioId: string) {
@@ -103,7 +122,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (audErr) return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
     if (!aud) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
-    // ✅ TS FIX: força o shape como "any" para não cair em GenericStringError
+    // TS FIX
     const audRow: any = aud;
 
     const isManager = roleGte(role, "interno");
@@ -145,7 +164,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (audErr) return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
     if (!aud) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
-    // ✅ TS FIX
+    // TS FIX
     const audRow: any = aud;
 
     const isManager = roleGte(role, "interno");
