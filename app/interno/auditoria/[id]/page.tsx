@@ -32,7 +32,7 @@ type Aud = {
   // vindo do backend (derivado do cadastro do condomínio)
   pagamento_metodo?: PagamentoMetodo | null;
 
-  // ✅ PASSO 2: vindo do backend (cadastro do condomínio)
+  // vindo do backend (cadastro do condomínio)
   cashback_percent?: number | null;
   agua_valor_m3?: number | null;
   energia_valor_kwh?: number | null;
@@ -117,7 +117,6 @@ function sameKey(a: CicloItem, b: CicloItem) {
 }
 
 /**
- * ✅ NOVO: não inventa combos 10/15.
  * Só renderiza o que o backend disse que existe (categoria+capacidade),
  * e elimina duplicados por chave.
  */
@@ -128,7 +127,6 @@ function normalizeCiclos(list: CicloItem[]) {
     const cat = toLower(it.categoria ?? it.tipo);
     const cap = it.capacidade_kg ?? null;
 
-    // Só entra se vier completo do backend (categoria + capacidade)
     if (!cat || cap === null || cap === undefined) continue;
 
     const normalized: CicloItem = {
@@ -144,7 +142,6 @@ function normalizeCiclos(list: CicloItem[]) {
     else out.push(normalized);
   }
 
-  // ordena: lavadora antes, menor kg antes
   out.sort((a, b) => {
     const ac = toLower(a.categoria);
     const bc = toLower(b.categoria);
@@ -418,6 +415,12 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
+  const exigeComprovante = useMemo(() => {
+    return (aud?.pagamento_metodo ?? null) === "direto";
+  }, [aud?.pagamento_metodo]);
+
+  const isFinal = useMemo(() => toLower(aud?.status) === "final", [aud?.status]);
+
   const calculos = useMemo(() => {
     const aguaAtual = safeNumber(aud?.agua_leitura, 0);
     const energiaAtual = safeNumber(aud?.energia_leitura, 0);
@@ -488,14 +491,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     };
   }, [ciclos, calculos]);
 
-  const exigeComprovante = useMemo(() => {
-    return (aud?.pagamento_metodo ?? null) === "direto";
-  }, [aud?.pagamento_metodo]);
-
-  // ✅ trava o botão quando já está final
-  const isFinal = useMemo(() => toLower(aud?.status) === "final", [aud?.status]);
-
-  // ✅ PASSO 2: cálculo do financeiro correto
   const financeiro = useMemo(() => {
     const receita = relPrev.receita_total; // null se faltou preço
     const cashbackPct = safeNumber(aud?.cashback_percent, 0);
@@ -534,8 +529,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     const audId = String(aud?.id ?? id).trim();
     if (!audId) return;
 
-    // ✅ já finalizada: não faz nada
-    if (toLower(aud?.status) === "final") return;
+    if (toLower(aud?.status) === "final") return; // 🔒 trava total
 
     try {
       setErr(null);
@@ -571,7 +565,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       ? `${aud?.condominio?.cidade ?? aud?.condominios?.cidade}/${aud?.condominio?.uf ?? aud?.condominios?.uf}`
       : "—";
 
-  const bloqueadoCiclos = !isStaff || !ciclosEditMode || savingCiclos || loading;
+  const bloqueadoCiclos = !isStaff || !ciclosEditMode || savingCiclos || loading || isFinal;
 
   return (
     <AppShell title="Fechamento (Interno)">
@@ -584,10 +578,9 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 {condNome} - {condCidadeUf}
               </div>
               <div className="mt-0.5">
-                Mês: <span className="font-medium">{mesRef}</span> • Anterior: <span className="font-medium">{mesPrev}</span>{" "}
-                • Status: <span className="font-medium">{statusLabel(aud?.status)}</span> • Pagamento:{" "}
-                <span className="font-medium">{aud?.pagamento_metodo ?? "—"}</span> • ID:{" "}
-                <span className="font-mono text-xs">{id}</span>
+                Mês: <span className="font-medium">{mesRef}</span> • Anterior: <span className="font-medium">{mesPrev}</span> • Status:{" "}
+                <span className="font-medium">{statusLabel(aud?.status)}</span> • Pagamento:{" "}
+                <span className="font-medium">{aud?.pagamento_metodo ?? "—"}</span> • ID: <span className="font-mono text-xs">{id}</span>
               </div>
             </div>
           </div>
@@ -609,9 +602,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           </div>
         </div>
 
-        {err ? (
-          <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div>
-        ) : null}
+        {err ? <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div> : null}
 
         {/* Comprovante + obs */}
         <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
@@ -637,13 +628,17 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <label className="cursor-pointer rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50">
+              <label
+                className={`cursor-pointer rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50 ${
+                  isFinal ? "opacity-60 pointer-events-none" : ""
+                }`}
+              >
                 {uploadingComprovante ? "Enviando..." : "Anexar comprovante"}
                 <input
                   type="file"
                   className="hidden"
                   accept="image/*,application/pdf"
-                  disabled={uploadingComprovante}
+                  disabled={uploadingComprovante || isFinal}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) uploadComprovante(f);
@@ -665,7 +660,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           <div className="mt-4">
             <div className="text-sm font-semibold text-gray-700">Obs do financeiro (opcional)</div>
             <textarea
-              className="mt-2 w-full rounded-xl border border-gray-200 bg-white p-3 text-sm text-gray-900 shadow-sm outline-none focus:border-gray-300"
+              className="mt-2 w-full rounded-xl border border-gray-200 bg-white p-3 text-sm text-gray-900 shadow-sm outline-none focus:border-gray-300 disabled:bg-gray-50"
               rows={3}
               placeholder="Ex: pago via PIX em 2 parcelas / ajuste de valor / observações..."
               value={fechamentoObs}
@@ -751,7 +746,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <div>
                   <label className="text-xs font-semibold text-gray-700">Base água</label>
                   <input
-                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm"
+                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm disabled:bg-gray-50"
                     value={baseAgua}
                     onChange={(e) => setBaseAgua(e.target.value)}
                     inputMode="decimal"
@@ -762,7 +757,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <div>
                   <label className="text-xs font-semibold text-gray-700">Base energia</label>
                   <input
-                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm"
+                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm disabled:bg-gray-50"
                     value={baseEnergia}
                     onChange={(e) => setBaseEnergia(e.target.value)}
                     inputMode="decimal"
@@ -773,7 +768,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <div>
                   <label className="text-xs font-semibold text-gray-700">Base gás</label>
                   <input
-                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm"
+                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm disabled:bg-gray-50"
                     value={baseGas}
                     onChange={(e) => setBaseGas(e.target.value)}
                     inputMode="decimal"
@@ -882,7 +877,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                         <input
                           className="w-28 rounded-xl border border-gray-200 bg-white px-3 py-2 text-right text-sm shadow-sm outline-none focus:border-gray-300 disabled:bg-gray-50"
                           value={String(it.ciclos ?? 0)}
-                          disabled={bloqueadoCiclos || isFinal}
+                          disabled={bloqueadoCiclos}
                           inputMode="numeric"
                           onChange={(e) => {
                             const v = e.target.value.replace(/[^\d]/g, "");
@@ -908,8 +903,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 </div>
                 {relPrev.faltou_preco ? (
                   <div className="mt-2 text-xs text-amber-700">
-                    Atenção: faltou <span className="font-semibold">valor_ciclo</span> em pelo menos um item com ciclos &gt; 0.
-                    A receita/cashback não será calculada até o preço vir do backend.
+                    Atenção: faltou <span className="font-semibold">valor_ciclo</span> em pelo menos um item com ciclos &gt; 0. A receita/cashback não
+                    será calculada até o preço vir do backend.
                   </div>
                 ) : null}
               </div>
@@ -941,9 +936,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <div className="text-xs font-semibold text-gray-600">Repasse (insumos)</div>
 
                 <div className="mt-1 text-xs text-gray-700">
-                  Água: <span className="font-semibold">{relPrev.consumo_agua}</span> ×{" "}
-                  <span className="font-semibold">{moneyBRL(financeiro.aguaV)}</span> ={" "}
-                  <span className="font-semibold">{moneyBRL(financeiro.repAgua)}</span>
+                  Água: <span className="font-semibold">{relPrev.consumo_agua}</span> × <span className="font-semibold">{moneyBRL(financeiro.aguaV)}</span>{" "}
+                  = <span className="font-semibold">{moneyBRL(financeiro.repAgua)}</span>
                 </div>
 
                 <div className="mt-1 text-xs text-gray-700">
@@ -953,8 +947,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 </div>
 
                 <div className="mt-1 text-xs text-gray-700">
-                  Gás: <span className="font-semibold">{relPrev.consumo_gas}</span> ×{" "}
-                  <span className="font-semibold">{moneyBRL(financeiro.gasV)}</span> ={" "}
+                  Gás: <span className="font-semibold">{relPrev.consumo_gas}</span> × <span className="font-semibold">{moneyBRL(financeiro.gasV)}</span> ={" "}
                   <span className="font-semibold">{moneyBRL(financeiro.repGas)}</span>
                 </div>
 
