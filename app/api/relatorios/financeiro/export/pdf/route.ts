@@ -34,7 +34,7 @@ function pagamentoLinha(p: any) {
 }
 
 // Converte stream do PDFKit (Node) em ReadableStream (Web) p/ NextResponse
-function pdfkitToReadableStream(doc: PDFDocument) {
+function pdfkitToReadableStream(doc: any) {
   return new ReadableStream({
     start(controller) {
       doc.on("data", (chunk: any) => {
