@@ -85,7 +85,11 @@ export async function GET(req: Request) {
       cashback: money(r.cashback),
       total: money(r.total),
       mes_anterior: r.mes_anterior == null ? null : money(r.mes_anterior),
-      variacao_percent: r.variacao_percent == null ? null : pct(r.variacao_percent) / 100, // excel usa 0.0398 = 3.98%
+      variacao_percent:
+  r.variacao_percent == null
+    ? null
+    : Number(r.variacao_percent) / 100,
+ // excel usa 0.0398 = 3.98%
     });
   }
 
