@@ -1,0 +1,72 @@
+Listagem de caminhos de pasta para o volume DATA
+O número de série do volume é BC2F-717D
+D:\META-LAV-AUDITORIAS\APP\API
+|   route.ts
+|   
++---admin
+|   +---criar-auditorias
+|   |       route.ts
+|   |       
+|   \---relatorios
+|       \---mes-atual
+|               route.ts
+|               
++---assignments
+|       route.ts
+|       
++---auditorias
+|   |   route.ts
+|   |   
+|   \---[id]
+|       |   route.ts
+|       |   
+|       +---base
+|       |       route.ts
+|       |       
+|       +---ciclos
+|       |       route.ts
+|       |       
+|       +---fechamento
+|       |       route.ts
+|       |       
+|       +---finalizar
+|       |       route.ts
+|       |       
+|       +---fotos
+|       |       route.ts
+|       |       
+|       +---historico
+|       |       route.ts
+|       |       
+|       \---reabrir
+|               route.ts
+|               
++---build
+|       route.ts
+|       
++---condominios
+|   |   route.ts
+|   |   
+|   \---[id]
+|       |   route.ts
+|       |   
+|       \---maquinas
+|               route.ts
+|               
++---cron
+|   \---gerar-auditorias-mensais
+|           route.ts
+|           
++---financeiro
+|   \---relatorio
+|           route.ts
+|           
++---me
+|       route.ts
+|       
++---users
+|       route.ts
+|       
+\---version
+        route.ts
+        

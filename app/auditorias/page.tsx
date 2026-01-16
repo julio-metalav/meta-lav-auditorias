@@ -53,8 +53,25 @@ function norm(s: any) {
 }
 
 function isConcluida(status: any) {
-  // regra simples: "final" = concluída
   return norm(status) === "final";
+}
+
+/** ===== Relatório financeiro (PDF/XLSX) ===== */
+function monthISOFromDateInput(v: string) {
+  const s = String(v ?? "").trim(); // "YYYY-MM"
+  if (!/^\d{4}-\d{2}$/.test(s)) return "";
+  return `${s}-01`;
+}
+
+function currentMonthISO() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}-01`;
+}
+
+function currentMonthInputValue() {
+  return currentMonthISO().slice(0, 7); // "YYYY-MM"
 }
 
 export default function AuditoriasPage() {
@@ -68,22 +85,22 @@ export default function AuditoriasPage() {
   const [q, setQ] = useState("");
   const [filtro, setFiltro] = useState<Filtro>("todas");
 
+  // ✅ mês do relatório (interno/gestor)
+  const [mesRelatorio, setMesRelatorio] = useState<string>(currentMonthInputValue());
+
   async function carregar() {
     setLoading(true);
     setErr(null);
     try {
       const meRes = await fetch("/api/me", { cache: "no-store" });
       const meJson = await safeJson(meRes);
-      if (!meRes.ok) throw new Error(meJson?.error ?? "Erro ao identificar usuário");
+      if (!meRes.ok) throw new Error((meJson as any)?.error ?? "Erro ao identificar usuário");
       setMe(meJson as Me);
 
       const res = await fetch("/api/auditorias", { cache: "no-store" });
       const json = await safeJson(res);
       if (!res.ok) throw new Error((json as any)?.error ?? "Erro ao carregar auditorias");
 
-      // ✅ aceita os 2 formatos:
-      // - array direto: [...]
-      // - envelopado: { data: [...] }
       const list: Aud[] = Array.isArray(json) ? (json as Aud[]) : ((json as any)?.data ?? []);
       setAuditorias(Array.isArray(list) ? list : []);
     } catch (e: any) {
@@ -102,14 +119,11 @@ export default function AuditoriasPage() {
 
   const auditoriasFiltradas = useMemo(() => {
     const qq = norm(q);
-
     let list = [...auditorias];
 
-    // filtro "a fazer" / "concluídas"
     if (filtro === "a_fazer") list = list.filter((a) => !isConcluida(a.status));
     if (filtro === "concluidas") list = list.filter((a) => isConcluida(a.status));
 
-    // busca
     if (qq) {
       list = list.filter((a) => {
         const condo = a.condominios ? `${a.condominios.nome} ${a.condominios.cidade} ${a.condominios.uf}` : "";
@@ -117,13 +131,11 @@ export default function AuditoriasPage() {
         const month = pickMonth(a);
         const id = a.id ?? "";
         const condId = a.condominio_id ?? "";
-
         const hay = norm(`${condo} ${auditor} ${month} ${id} ${condId} ${a.status ?? ""}`);
         return hay.includes(qq);
       });
     }
 
-    // ordena por mês desc, depois por condomínio
     list.sort((a, b) => {
       const am = pickMonth(a);
       const bm = pickMonth(b);
@@ -141,6 +153,10 @@ export default function AuditoriasPage() {
     return `/interno/auditoria/${a.id}`;
   }
 
+  const mesRefRelatorio = useMemo(() => {
+    return monthISOFromDateInput(mesRelatorio) || currentMonthISO();
+  }, [mesRelatorio]);
+
   return (
     <AppShell title="Auditorias">
       <div className="mx-auto max-w-6xl p-6">
@@ -157,14 +173,47 @@ export default function AuditoriasPage() {
 
           <div className="flex gap-2">
             {isStaff && (
-              <button
-                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50"
-                onClick={() => router.push("/auditorias/nova")}
-                disabled={loading}
-                title="Criar nova auditoria"
-              >
-                + Nova auditoria
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50"
+                  onClick={() => router.push("/auditorias/nova")}
+                  disabled={loading}
+                  title="Criar nova auditoria"
+                >
+                  + Nova auditoria
+                </button>
+
+                <div className="flex items-center gap-2 rounded-xl border bg-white px-3 py-2">
+                  <span className="text-xs text-gray-600">Relatório:</span>
+                  <input
+                    type="month"
+                    className="text-sm outline-none"
+                    value={mesRelatorio}
+                    onChange={(e) => setMesRelatorio(e.target.value)}
+                    title="Escolha o mês do relatório"
+                  />
+                </div>
+
+                <a
+                  className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+                  href={`/api/relatorios/financeiro/export/xlsx?mes_ref=${encodeURIComponent(mesRefRelatorio)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Baixar relatório financeiro em Excel"
+                >
+                  Baixar Excel
+                </a>
+
+                <a
+                  className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+                  href={`/api/relatorios/financeiro/export/pdf?mes_ref=${encodeURIComponent(mesRefRelatorio)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Baixar relatório financeiro em PDF"
+                >
+                  Baixar PDF
+                </a>
+              </div>
             )}
 
             <button
@@ -235,7 +284,9 @@ export default function AuditoriasPage() {
                     <span
                       className={[
                         "inline-flex rounded-full border px-2 py-1 text-xs",
-                        isConcluida(st) ? "border-green-200 bg-green-50 text-green-800" : "border-gray-200 bg-gray-50 text-gray-700",
+                        isConcluida(st)
+                          ? "border-green-200 bg-green-50 text-green-800"
+                          : "border-gray-200 bg-gray-50 text-gray-700",
                       ].join(" ")}
                     >
                       {st}
