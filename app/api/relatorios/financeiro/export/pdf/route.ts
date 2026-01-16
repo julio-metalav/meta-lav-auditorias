@@ -1,3 +1,9 @@
+function nowBrasil() {
+  // Brasil = UTC-3 (sem horário de verão)
+  const d = new Date();
+  d.setHours(d.getHours() - 3);
+  return d;
+}
 export const runtime = "nodejs";
 
 import { getUserAndRole } from "@/lib/auth";
@@ -182,14 +188,21 @@ function makePages(title: string, rows: any[]) {
     if (y - need < 80) flush();
   };
 
-  // header
-  ensureSpace(80);
-  text(left, y, title, 13);
-  y -= 20;
-  text(left, y, `Gerado em: ${new Date().toLocaleString("pt-BR")}`, 10);
-  y -= 18;
-  line(left, y, right, y);
-  y -= 18;
+  // HEADER
+ensureSpace(80);
+
+text(90, y, titleLine1, 13);
+y -= 18;
+
+text(90, y, titleLine2, 11);
+y -= 18;
+
+text(90, y, `Gerado em: ${nowBrasil().toLocaleString("pt-BR")}`, 9);
+y -= 14;
+
+line(left, y, right, y);
+y -= 18;
+
 
   if (!rows.length) {
     ensureSpace(30);
