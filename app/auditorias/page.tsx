@@ -56,7 +56,7 @@ function isConcluida(status: any) {
   return norm(status) === "final";
 }
 
-/** ===== Relatório financeiro (PDF/XLSX) ===== */
+// ===== Relatório financeiro (PDF/XLSX) =====
 function monthISOFromDateInput(v: string) {
   const s = String(v ?? "").trim(); // "YYYY-MM"
   if (!/^\d{4}-\d{2}$/.test(s)) return "";
@@ -85,7 +85,7 @@ export default function AuditoriasPage() {
   const [q, setQ] = useState("");
   const [filtro, setFiltro] = useState<Filtro>("todas");
 
-  // ✅ mês do relatório (interno/gestor)
+  // mês do relatório (apenas interno/gestor)
   const [mesRelatorio, setMesRelatorio] = useState<string>(currentMonthInputValue());
 
   async function carregar() {
@@ -116,6 +116,7 @@ export default function AuditoriasPage() {
   }, []);
 
   const isStaff = useMemo(() => me?.role === "interno" || me?.role === "gestor", [me?.role]);
+  const meLoaded = !!me?.role;
 
   const auditoriasFiltradas = useMemo(() => {
     const qq = norm(q);
@@ -172,7 +173,8 @@ export default function AuditoriasPage() {
           </div>
 
           <div className="flex gap-2">
-            {isStaff && (
+            {/* ✅ Botões e seletor APENAS para interno/gestor (e só depois do /api/me carregar) */}
+            {meLoaded && isStaff && (
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50"
