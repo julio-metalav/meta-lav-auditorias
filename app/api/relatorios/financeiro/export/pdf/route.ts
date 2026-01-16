@@ -1,10 +1,6 @@
 export const runtime = "nodejs";
 
 import { getUserAndRole } from "@/lib/auth";
-import PDFDocument from "pdfkit";
-import { PassThrough } from "stream";
-import path from "path";
-import fs from "fs";
 
 type Role = "auditor" | "interno" | "gestor";
 
@@ -31,27 +27,14 @@ function getBaseUrlFromReq(req: Request) {
   return `${proto}://${host}`;
 }
 
-function nodeStreamToWebReadable(nodeStream: NodeJS.ReadableStream) {
-  return new ReadableStream({
-    start(controller) {
-      nodeStream.on("data", (chunk) => controller.enqueue(chunk));
-      nodeStream.on("end", () => controller.close());
-      nodeStream.on("error", (err) => controller.error(err));
-    },
-    cancel() {
-      try {
-        // @ts-ignore
-        nodeStream.destroy?.();
-      } catch {}
-    },
-  });
-}
-
-// ✅ Correção 2 (blindagem de acento/Unicode)
-function safeText(v: any) {
+function safeAscii(v: any) {
+  // remove acentos/diacriticos para nao aparecer " " no PDF simples
   const s = String(v ?? "");
-  // NFC evita "acentos quebrados" por composição
-  return s.normalize("NFC").replace(/\s+/g, " ").trim();
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function money(v: any) {
@@ -67,7 +50,6 @@ function percent(v: any) {
 }
 
 function parseMesRef(mesRef: string) {
-  // espera YYYY-MM-01 (ou YYYY-MM-DD)
   const d = new Date(mesRef);
   if (Number.isNaN(d.getTime())) return null;
   return d;
@@ -75,16 +57,15 @@ function parseMesRef(mesRef: string) {
 
 function previousMonthDate(d: Date) {
   const y = d.getUTCFullYear();
-  const m = d.getUTCMonth(); // 0..11
-  const prev = new Date(Date.UTC(y, m - 1, 1));
-  return prev;
+  const m = d.getUTCMonth();
+  return new Date(Date.UTC(y, m - 1, 1));
 }
 
 function monthNamePtBr(m: number) {
   const names = [
     "janeiro",
     "fevereiro",
-    "março",
+    "marco",
     "abril",
     "maio",
     "junho",
@@ -104,6 +85,149 @@ function labelMes(d: Date) {
   return `${mes} de ${ano}`;
 }
 
+function pdfEscape(s: string) {
+  return String(s ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/[\u0000-\u001F\u007F]/g, " ");
+}
+
+/**
+ * PDF minimalista SEM PDFKit (evita Helvetica.afm no serverless).
+ * Fonte: Helvetica (Type1) built-in.
+ * Obs: por ser Type1, usamos ASCII para evitar caracter quebrado.
+ */
+function buildSimplePdf(pages: string[]) {
+  const objects: string[] = [];
+  const addObject = (content: string) => {
+    objects.push(content);
+    return objects.length;
+  };
+
+  const fontObjId = addObject(`<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>`);
+  const pagesObjId = addObject(`<< /Type /Pages /Kids [] /Count 0 >>`);
+  const catalogObjId = addObject(`<< /Type /Catalog /Pages ${pagesObjId} 0 R >>`);
+
+  const pageObjIds: number[] = [];
+
+  for (const pageStream of pages) {
+    const contentBytes = Buffer.from(pageStream, "utf8");
+    const contentObjId = addObject(
+      `<< /Length ${contentBytes.length} >>\nstream\n${pageStream}\nendstream`
+    );
+
+    const pageObjId = addObject(
+      `<< /Type /Page /Parent ${pagesObjId} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontObjId} 0 R >> >> /Contents ${contentObjId} 0 R >>`
+    );
+
+    pageObjIds.push(pageObjId);
+  }
+
+  const kids = pageObjIds.map((id) => `${id} 0 R`).join(" ");
+  objects[pagesObjId - 1] = `<< /Type /Pages /Kids [ ${kids} ] /Count ${pageObjIds.length} >>`;
+
+  let pdf = "%PDF-1.4\n";
+  const offsets: number[] = [0];
+
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(Buffer.byteLength(pdf, "utf8"));
+    pdf += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`;
+  }
+
+  const xrefOffset = Buffer.byteLength(pdf, "utf8");
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += `0000000000 65535 f \n`;
+  for (let i = 1; i < offsets.length; i++) {
+    const off = String(offsets[i]).padStart(10, "0");
+    pdf += `${off} 00000 n \n`;
+  }
+
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogObjId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, "utf8");
+}
+
+function makePages(title: string, rows: any[]) {
+  const left = 50;
+  const right = 545;
+  const top = 800;
+  const lineH = 14;
+  let y = top;
+
+  const pageStreams: string[] = [];
+  let ops: string[] = [];
+
+  const flush = () => {
+    const content = ops.join("\n") + "\n";
+    pageStreams.push(content);
+    ops = [];
+    y = top;
+  };
+
+  const text = (x: number, yy: number, s: string, fontSize: number) => {
+    const safe = pdfEscape(safeAscii(s));
+    ops.push("BT");
+    ops.push(`/F1 ${fontSize} Tf`);
+    ops.push(`${x} ${yy} Td`);
+    ops.push(`(${safe}) Tj`);
+    ops.push("ET");
+  };
+
+  const line = (x1: number, y1: number, x2: number, y2: number) => {
+    ops.push("0.7 w");
+    ops.push(`${x1} ${y1} m ${x2} ${y2} l S`);
+  };
+
+  const ensureSpace = (need: number) => {
+    if (y - need < 80) flush();
+  };
+
+  // header
+  ensureSpace(80);
+  text(left, y, title, 13);
+  y -= 20;
+  text(left, y, `Gerado em: ${new Date().toLocaleString("pt-BR")}`, 10);
+  y -= 18;
+  line(left, y, right, y);
+  y -= 18;
+
+  if (!rows.length) {
+    ensureSpace(30);
+    text(left, y, "SEM AUDITORIAS EM CONFERENCIA PARA ESTE MES.", 11);
+    y -= 20;
+    flush();
+    return pageStreams;
+  }
+
+  for (const r of rows) {
+    ensureSpace(120);
+
+    text(left, y, String(r?.condominio_nome ?? "CONDOMINIO"), 12);
+    y -= 16;
+
+    text(left, y, String(r?.pagamento_texto ?? ""), 10);
+    y -= 16;
+
+    text(left, y, `REPASSE: R$ ${money(r?.repasse)}`, 10);
+    y -= 14;
+
+    text(left, y, `CASHBACK: R$ ${money(r?.cashback)}`, 10);
+    y -= 14;
+
+    text(left, y, `TOTAL: R$ ${money(r?.total)}`, 10);
+    y -= 14;
+
+    text(left, y, `VARIACAO VS MES ANTERIOR: ${percent(r?.variacao_percent)}`, 10);
+    y -= 18;
+
+    line(left, y, right, y);
+    y -= 18;
+  }
+
+  flush();
+  return pageStreams;
+}
+
 export async function GET(req: Request) {
   try {
     const { user, role } = await getUserAndRole();
@@ -119,7 +243,6 @@ export async function GET(req: Request) {
 
     const cookie = req.headers.get("cookie") || "";
 
-    // ✅ Fonte da verdade: JSON base (que já filtra em_conferencia)
     const r = await fetch(
       `${baseUrl}/api/relatorios/financeiro?mes_ref=${encodeURIComponent(mes_ref)}`,
       { cache: "no-store", headers: cookie ? { cookie } : {} }
@@ -136,123 +259,17 @@ export async function GET(req: Request) {
     const d = parseMesRef(mes_ref);
     const dPrev = d ? previousMonthDate(d) : null;
 
-    const mesX = d ? labelMes(d) : safeText(mes_ref);
-    const mesY = dPrev ? labelMes(dPrev) : "mês anterior";
+    const mesX = d ? labelMes(d) : mes_ref;
+    const mesY = dPrev ? labelMes(dPrev) : "mes anterior";
 
-    // ✅ Título conforme pedido
-    const titulo = safeText(
-      `RELATORIO PAGAMENTOS CONDOMINIOS MES ${mesX.toUpperCase()}, REFERENTE MES ${String(mesY).toUpperCase()} (ANTERIOR)`
-    );
+    const title = `RELATORIO PAGAMENTOS CONDOMINIOS MES ${String(mesX).toUpperCase()}, REFERENTE MES ${String(
+      mesY
+    ).toUpperCase()} (ANTERIOR)`;
 
-    // --- PDFKit com fontes TTF (UTF-8 ok) ---
-    const doc = new PDFDocument({ size: "A4", margin: 36 });
-    const pass = new PassThrough();
-    doc.pipe(pass);
+    const pages = makePages(title, rows);
+    const pdfBytes = buildSimplePdf(pages);
 
-    const fontRegular = path.join(process.cwd(), "public", "fonts", "Roboto-Regular.ttf");
-    const fontBold = path.join(process.cwd(), "public", "fonts", "Roboto-Bold.ttf");
-
-    if (!fs.existsSync(fontRegular) || !fs.existsSync(fontBold)) {
-      doc.end();
-      return jsonError(
-        "Fontes não encontradas. Confirme: public/fonts/Roboto-Regular.ttf e public/fonts/Roboto-Bold.ttf no repositório.",
-        500
-      );
-    }
-
-    doc.registerFont("R", fontRegular);
-    doc.registerFont("B", fontBold);
-
-    // ✅ Correção 1 (evita PDFKit cair na Helvetica.afm): setar fonte TTF antes de qualquer texto
-    doc.font("B");
-
-    // Header
-    doc.fontSize(13).text(titulo, { align: "center" });
-    doc.moveDown(0.6);
-    doc.font("R").fontSize(9).fillColor("#333");
-    doc.text(safeText(`Gerado em: ${new Date().toLocaleString("pt-BR")}`), { align: "center" });
-    doc.moveDown(0.8);
-
-    // Linha separadora do cabeçalho
-    doc.moveTo(doc.page.margins.left, doc.y)
-      .lineTo(doc.page.width - doc.page.margins.right, doc.y)
-      .lineWidth(1)
-      .strokeColor("#cccccc")
-      .stroke();
-
-    doc.moveDown(0.8);
-
-    if (!rows.length) {
-      doc.font("R").fontSize(11).fillColor("#000");
-      doc.text("Sem auditorias em conferência para este mês.");
-      doc.end();
-      return new Response(nodeStreamToWebReadable(pass) as any, {
-        status: 200,
-        headers: {
-          "Content-Type": "application/pdf",
-          "Content-Disposition": `attachment; filename="relatorio_pagamentos_${mes_ref}.pdf"`,
-          "Cache-Control": "no-store",
-        },
-      });
-    }
-
-    // Conteúdo
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i] || {};
-
-      const nome = safeText(row.condominio_nome ?? "Condomínio");
-      const pagamento = safeText(row.pagamento_texto ?? "");
-      const repasse = money(row.repasse);
-      const cashback = money(row.cashback);
-      const total = money(row.total);
-      const variacao = percent(row.variacao_percent);
-
-      // Quebra de página preventiva
-      if (doc.y > 760) doc.addPage();
-
-      // Bloco do condomínio
-      doc.font("B").fontSize(12).fillColor("#000").text(nome);
-      doc.font("R").fontSize(10).fillColor("#111").text(pagamento);
-
-      doc.moveDown(0.3);
-
-      // Mini-tabela (3 colunas)
-      const x0 = doc.page.margins.left;
-      const x1 = x0 + 190;
-      const x2 = x0 + 340;
-
-      const yTable = doc.y;
-
-      doc.font("B").fontSize(9).fillColor("#333");
-      doc.text("Repasse (R$)", x0, yTable);
-      doc.text("Cashback (R$)", x1, yTable);
-      doc.text("Total (R$)", x2, yTable);
-
-      doc.font("R").fontSize(10).fillColor("#000");
-      doc.text(`R$ ${repasse}`, x0, yTable + 14);
-      doc.text(`R$ ${cashback}`, x1, yTable + 14);
-      doc.text(`R$ ${total}`, x2, yTable + 14);
-
-      doc.moveDown(2.2);
-
-      doc.font("R").fontSize(10).fillColor("#000");
-      doc.text(safeText(`Variação vs mês anterior: ${variacao}`));
-
-      doc.moveDown(0.6);
-
-      // Linha separadora entre condomínios
-      doc.moveTo(doc.page.margins.left, doc.y)
-        .lineTo(doc.page.width - doc.page.margins.right, doc.y)
-        .lineWidth(0.8)
-        .strokeColor("#e0e0e0")
-        .stroke();
-
-      doc.moveDown(0.8);
-    }
-
-    doc.end();
-
-    return new Response(nodeStreamToWebReadable(pass) as any, {
+    return new Response(pdfBytes, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
