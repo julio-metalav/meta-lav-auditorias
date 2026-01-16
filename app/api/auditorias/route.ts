@@ -66,7 +66,7 @@ export async function GET() {
 
   let q = admin.from(sch.table).select("*").order(sch.monthCol, { ascending: false });
 
-  // Auditor: auditorias atribuídas a ele OU auditorias dos condomínios atribuídos a ele
+  // Auditor: auditorias atribuídas a ele OU auditorias dos condomínios vinculados a ele
   if (isAuditor && !isStaff) {
     const { data: ac, error: acErr } = await admin
       .from("auditor_condominios")
@@ -78,8 +78,11 @@ export async function GET() {
     const condoIds = Array.from(new Set((ac ?? []).map((r: any) => r.condominio_id).filter(Boolean)));
 
     if (condoIds.length > 0) {
-      const inList = condoIds.map((id) => `"${id}"`).join(",");
-      q = q.or(`${sch.auditorCol}.eq."${ctx.user.id}",${sch.condoCol}.in.(${inList})`);
+      // ✅ IMPORTANTÍSSIMO:
+      // - não usar aspas dentro do filtro (PostgREST/Supabase)
+      // - uuid em in.(...) vai sem aspas
+      const inList = condoIds.join(",");
+      q = q.or(`${sch.auditorCol}.eq.${ctx.user.id},${sch.condoCol}.in.(${inList})`);
     } else {
       q = q.eq(sch.auditorCol, ctx.user.id);
     }
