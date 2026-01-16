@@ -33,16 +33,38 @@ function pagamentoLinha(p: any) {
   return `Banco: ${p.banco ?? ""} | Ag: ${p.agencia ?? ""} | Cc: ${p.conta ?? ""} | Titular: ${p.titular ?? ""}`;
 }
 
+// Converte stream do PDFKit (Node) em ReadableStream (Web) p/ NextResponse
+function pdfkitToReadableStream(doc: PDFDocument) {
+  return new ReadableStream({
+    start(controller) {
+      doc.on("data", (chunk: any) => {
+        const u8 = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+        controller.enqueue(u8);
+      });
+      doc.on("end", () => controller.close());
+      doc.on("error", (err: any) => controller.error(err));
+      doc.end();
+    },
+    cancel() {
+      try {
+        doc.destroy();
+      } catch {}
+    },
+  });
+}
+
 export async function GET(req: Request) {
   const { user, role } = await getUserAndRole();
   if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  if (!roleGte((role ?? null) as any, "interno"))
+  if (!roleGte((role ?? null) as any, "interno")) {
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  }
 
   const url = new URL(req.url);
   const mes_ref = (url.searchParams.get("mes_ref") ?? "").trim();
   if (!mes_ref) return NextResponse.json({ error: "Informe mes_ref=YYYY-MM-01" }, { status: 400 });
 
+  // chama o JSON base (já logado, repassa cookie)
   const origin = new URL(req.url).origin;
   const relRes = await fetch(`${origin}/api/relatorios/financeiro?mes_ref=${encodeURIComponent(mes_ref)}`, {
     headers: { cookie: req.headers.get("cookie") ?? "" },
@@ -57,25 +79,8 @@ export async function GET(req: Request) {
   const relJson = await relRes.json();
   const rows = Array.isArray((relJson as any)?.data) ? (relJson as any).data : [];
 
+  // monta PDF
   const doc = new PDFDocument({ size: "A4", margin: 36 });
-
-  const chunks: Uint8Array[] = [];
-  doc.on("data", (c: Uint8Array) => chunks.push(c));
-
-  const done = new Promise<Uint8Array>((resolve, reject) => {
-    doc.on("end", () => {
-      // concat de Uint8Array
-      const total = chunks.reduce((sum, c) => sum + c.length, 0);
-      const merged = new Uint8Array(total);
-      let offset = 0;
-      for (const c of chunks) {
-        merged.set(c, offset);
-        offset += c.length;
-      }
-      resolve(merged);
-    });
-    doc.on("error", (err) => reject(err));
-  });
 
   doc.fontSize(16).text(`Relatório Financeiro - ${mes_ref}`, { align: "left" });
   doc.moveDown(0.5);
@@ -89,7 +94,10 @@ export async function GET(req: Request) {
     doc.fontSize(9).fillColor("#444").text(pagamentoLinha(r?.pagamento));
     doc.fillColor("#000");
 
-    doc.fontSize(10).text(`Repasse: ${brl(r?.repasse)}   |   Cashback: ${brl(r?.cashback)}   |   Total: ${brl(r?.total)}`);
+    doc
+      .fontSize(10)
+      .text(`Repasse: ${brl(r?.repasse)}   |   Cashback: ${brl(r?.cashback)}   |   Total: ${brl(r?.total)}`);
+
     const ant = r?.mes_anterior == null ? "—" : brl(r?.mes_anterior);
     doc.fontSize(10).text(`Mês anterior: ${ant}   |   Variação: ${pct(r?.variacao_percent)}`);
 
@@ -100,13 +108,10 @@ export async function GET(req: Request) {
     if (doc.y > 740) doc.addPage();
   }
 
-  doc.end();
-
-  const pdfBytes = await done;
-
+  const stream = pdfkitToReadableStream(doc);
   const filename = `relatorio_financeiro_${mes_ref}.pdf`;
 
-  return new NextResponse(pdfBytes, {
+  return new NextResponse(stream, {
     status: 200,
     headers: {
       "Content-Type": "application/pdf",
