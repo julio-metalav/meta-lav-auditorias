@@ -68,6 +68,35 @@ function withCompatAliases(aud: any, condominio: any) {
   };
 }
 
+const AUDITORIA_SELECT = [
+  "id",
+  "condominio_id",
+  "auditor_id",
+  "mes_ref",
+  "status",
+  "agua_leitura",
+  "energia_leitura",
+  "gas_leitura",
+  "agua_leitura_base",
+  "energia_leitura_base",
+  "gas_leitura_base",
+  "leitura_base_origem",
+  "observacoes",
+
+  // ✅ FECHAMENTO (IMPORTANTE PRO INTERNO)
+  "comprovante_fechamento_url",
+  "fechamento_obs",
+
+  "foto_agua_url",
+  "foto_energia_url",
+  "foto_gas_url",
+  "foto_quimicos_url",
+  "foto_bombonas_url",
+  "foto_conector_bala_url",
+  "created_at",
+  "updated_at",
+].join(",");
+
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
     const { user, role } = await getUserAndRole();
@@ -78,31 +107,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     const { data: aud, error: audErr } = await sb
       .from("auditorias")
-      .select(
-        [
-          "id",
-          "condominio_id",
-          "auditor_id",
-          "mes_ref",
-          "status",
-          "agua_leitura",
-          "energia_leitura",
-          "gas_leitura",
-          "agua_leitura_base",
-          "energia_leitura_base",
-          "gas_leitura_base",
-          "leitura_base_origem",
-          "observacoes",
-          "foto_agua_url",
-          "foto_energia_url",
-          "foto_gas_url",
-          "foto_quimicos_url",
-          "foto_bombonas_url",
-          "foto_conector_bala_url",
-          "created_at",
-          "updated_at",
-        ].join(",")
-      )
+      .select(AUDITORIA_SELECT)
       .eq("id", id)
       .maybeSingle();
 
@@ -172,6 +177,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       "energia_leitura",
       "gas_leitura",
       "observacoes",
+
+      // ✅ permite salvar obs do financeiro pelo interno
+      "fechamento_obs",
+
       "foto_agua_url",
       "foto_energia_url",
       "foto_gas_url",
@@ -201,47 +210,18 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     // se for auditor e estiver sem auditor_id, tenta "assumir" na hora do primeiro PATCH.
     // Faz update condicionado em auditor_id IS NULL para evitar corrida.
     if (!isManager && role === "auditor" && isUnassigned) {
-      // tenta claimar junto com o patch
       const { data: claimed, error: claimErr } = await sb
         .from("auditorias")
         .update({ ...patch, auditor_id: user.id })
         .eq("id", id)
-        .is("auditor_id", null) // ✅ condição atômica
-        .select(
-          [
-            "id",
-            "condominio_id",
-            "auditor_id",
-            "mes_ref",
-            "status",
-            "agua_leitura",
-            "energia_leitura",
-            "gas_leitura",
-            "agua_leitura_base",
-            "energia_leitura_base",
-            "gas_leitura_base",
-            "leitura_base_origem",
-            "observacoes",
-            "foto_agua_url",
-            "foto_energia_url",
-            "foto_gas_url",
-            "foto_quimicos_url",
-            "foto_bombonas_url",
-            "foto_conector_bala_url",
-            "created_at",
-            "updated_at",
-          ].join(",")
-        )
+        .is("auditor_id", null)
+        .select(AUDITORIA_SELECT)
         .maybeSingle();
 
       if (claimErr) return NextResponse.json({ ok: false, error: claimErr.message }, { status: 400 });
 
-      // se não retornou nada, alguém assumiu antes
       if (!claimed) {
-        return NextResponse.json(
-          { ok: false, error: "auditoria_ja_assumida" },
-          { status: 409 }
-        );
+        return NextResponse.json({ ok: false, error: "auditoria_ja_assumida" }, { status: 409 });
       }
 
       const { condominio } = await fetchCondominioBasics((claimed as any)!.condominio_id);
@@ -255,31 +235,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       .from("auditorias")
       .update(patch)
       .eq("id", id)
-      .select(
-        [
-          "id",
-          "condominio_id",
-          "auditor_id",
-          "mes_ref",
-          "status",
-          "agua_leitura",
-          "energia_leitura",
-          "gas_leitura",
-          "agua_leitura_base",
-          "energia_leitura_base",
-          "gas_leitura_base",
-          "leitura_base_origem",
-          "observacoes",
-          "foto_agua_url",
-          "foto_energia_url",
-          "foto_gas_url",
-          "foto_quimicos_url",
-          "foto_bombonas_url",
-          "foto_conector_bala_url",
-          "created_at",
-          "updated_at",
-        ].join(",")
-      )
+      .select(AUDITORIA_SELECT)
       .maybeSingle();
 
     if (saveErr) return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
