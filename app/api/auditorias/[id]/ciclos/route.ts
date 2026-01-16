@@ -20,6 +20,11 @@ function safeNum(v: any) {
   return Number.isFinite(n) ? n : null;
 }
 
+function safeMoney(v: any) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function normalizeCategoria(v: any) {
   const s = String(v ?? "").trim().toLowerCase();
   if (s === "lavadora" || s === "secadora") return s;
@@ -30,6 +35,10 @@ function safeIntNonNeg(v: any) {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.trunc(n));
+}
+
+function clampNonNeg(n: number) {
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
 }
 
 type TipoPreco = {
@@ -43,7 +52,6 @@ async function getTiposDoCondominioComPreco(
   fallback: { lav: number; sec: number }
 ) {
   // ✅ Fonte da verdade do tipo e do preço por capacidade: condominio_maquinas
-  // distinct categoria + capacidade_kg, e preço vem do valor_ciclo cadastrado nas máquinas
   const { data, error } = await supabaseAdmin()
     .from("condominio_maquinas")
     .select("categoria, capacidade_kg, valor_ciclo")
@@ -95,6 +103,58 @@ async function getTiposDoCondominioComPreco(
   return tipos;
 }
 
+function calcTotais(aud: any, condo: any, itens: any[]) {
+  // Receita bruta: soma ciclos * valor_ciclo
+  const receita_bruta = itens.reduce((acc, it) => {
+    const ciclos = safeMoney(it?.ciclos);
+    const valor = safeMoney(it?.valor_ciclo);
+    return acc + ciclos * valor;
+  }, 0);
+
+  // Cashback
+  const cashback_percent = safeMoney(condo?.cashback_percent);
+  const total_cashback = receita_bruta * (cashback_percent / 100);
+
+  // Repasse = consumo * tarifa (consumo = leitura_atual - leitura_base)
+  const agua_atual = safeNum(aud?.agua_leitura) ?? safeNum(aud?.leitura_agua);
+  const energia_atual = safeNum(aud?.energia_leitura) ?? safeNum(aud?.leitura_energia);
+  const gas_atual = safeNum(aud?.gas_leitura) ?? safeNum(aud?.leitura_gas);
+
+  const agua_base = safeNum(aud?.agua_leitura_base) ?? safeNum(aud?.agua_base) ?? safeNum(aud?.base_agua);
+  const energia_base =
+    safeNum(aud?.energia_leitura_base) ?? safeNum(aud?.energia_base) ?? safeNum(aud?.base_energia);
+  const gas_base = safeNum(aud?.gas_leitura_base) ?? safeNum(aud?.gas_base) ?? safeNum(aud?.base_gas);
+
+  const consumo_agua =
+    agua_atual != null && agua_base != null ? clampNonNeg(agua_atual - agua_base) : 0;
+  const consumo_energia =
+    energia_atual != null && energia_base != null ? clampNonNeg(energia_atual - energia_base) : 0;
+  const consumo_gas =
+    gas_atual != null && gas_base != null ? clampNonNeg(gas_atual - gas_base) : 0;
+
+  const agua_valor_m3 = safeMoney(condo?.agua_valor_m3);
+  const energia_valor_kwh = safeMoney(condo?.energia_valor_kwh);
+  const gas_valor_m3 = safeMoney(condo?.gas_valor_m3);
+
+  const total_repasse =
+    consumo_agua * agua_valor_m3 +
+    consumo_energia * energia_valor_kwh +
+    consumo_gas * gas_valor_m3;
+
+  const total_a_pagar = total_repasse + total_cashback;
+
+  return {
+    receita_bruta,
+    cashback_percent,
+    total_cashback,
+    consumo_agua,
+    consumo_energia,
+    consumo_gas,
+    total_repasse,
+    total_a_pagar,
+  };
+}
+
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
     const { user, role } = await getUserAndRole();
@@ -103,32 +163,33 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     const auditoriaId = params.id;
 
+    // ✅ Pega auditoria com campos suficientes pra calcular consumo (sem depender de colunas exatas)
     const { data: aud, error: audErr } = await supabaseAdmin()
       .from("auditorias")
-      .select("id, condominio_id, mes_ref, status")
+      .select("*")
       .eq("id", auditoriaId)
       .maybeSingle();
 
     if (audErr) return bad(audErr.message, 500);
     if (!aud) return bad("Auditoria não encontrada", 404);
 
-    // ✅ legado (fallback). NÃO pedir colunas novas que ainda não existem no banco.
+    // ✅ Condomínio: pega tudo pra não quebrar e pra ler tarifas/cashback
     const { data: condo, error: condoErr } = await supabaseAdmin()
       .from("condominios")
-      .select("id, valor_ciclo_lavadora, valor_ciclo_secadora")
+      .select("*")
       .eq("id", (aud as any).condominio_id)
       .maybeSingle();
 
     if (condoErr) return bad(condoErr.message, 500);
 
-    // ✅ FIX build: tipagem segura
+    // ✅ legado (fallback) só pra preços (se faltar em condominio_maquinas)
     const condoAny: any = condo ?? {};
     const fallback = {
       lav: condoAny.valor_ciclo_lavadora != null ? Number(condoAny.valor_ciclo_lavadora) : 0,
       sec: condoAny.valor_ciclo_secadora != null ? Number(condoAny.valor_ciclo_secadora) : 0,
     };
 
-    // ✅ tipos + preço por capacidade vêm do cadastro de máquinas do condomínio
+    // ✅ tipos + preço por capacidade
     const tipos = await getTiposDoCondominioComPreco(String((aud as any).condominio_id), fallback);
 
     const { data: rows, error: rowsErr } = await supabaseAdmin()
@@ -160,11 +221,23 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       };
     });
 
+    // ✅ NOVO: totais (pra tela e principalmente pro relatório financeiro)
+    const totais = calcTotais(aud, condoAny, itens);
+
     return NextResponse.json({
       ok: true,
       data: {
         auditoria: aud,
         itens,
+
+        // ✅ adicionado (não quebra nada existente)
+        totais,
+
+        // ✅ espelha campos “planos” pra facilitar consumo por outros endpoints
+        receita_bruta: totais.receita_bruta,
+        total_cashback: totais.total_cashback,
+        total_repasse: totais.total_repasse,
+        total_a_pagar: totais.total_a_pagar,
       },
     });
   } catch (e: any) {
@@ -186,20 +259,20 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const itensIn = Array.isArray(body?.itens) ? body.itens : null;
     if (!itensIn) return bad("Payload inválido. Esperado {itens:[...]}");
 
-    // 1) carrega auditoria
+    // 1) carrega auditoria (com campos suficientes)
     const { data: aud, error: audErr } = await supabaseAdmin()
       .from("auditorias")
-      .select("id, condominio_id, mes_ref, status, auditor_id")
+      .select("*")
       .eq("id", auditoriaId)
       .maybeSingle();
 
     if (audErr) return bad(audErr.message, 500);
     if (!aud) return bad("Auditoria não encontrada", 404);
 
-    // 2) fallback legado do condomínio (somente para preço / UI)
+    // 2) condomínio completo (tarifas/cashback)
     const { data: condo, error: condoErr } = await supabaseAdmin()
       .from("condominios")
-      .select("id, valor_ciclo_lavadora, valor_ciclo_secadora")
+      .select("*")
       .eq("id", (aud as any).condominio_id)
       .maybeSingle();
 
@@ -273,11 +346,20 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       };
     });
 
+    const totais = calcTotais(aud, condoAny, itens);
+
     return NextResponse.json({
       ok: true,
       data: {
         auditoria: aud,
         itens,
+
+        totais,
+
+        receita_bruta: totais.receita_bruta,
+        total_cashback: totais.total_cashback,
+        total_repasse: totais.total_repasse,
+        total_a_pagar: totais.total_a_pagar,
       },
     });
   } catch (e: any) {
