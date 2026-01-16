@@ -102,10 +102,15 @@ function getBaseUrlFromReq(req: Request) {
   return `${proto}://${host}`;
 }
 
-async function fetchTotaisForAuditoria(baseUrl: string, auditoriaId: string) {
+async function fetchTotaisForAuditoria(baseUrl: string, auditoriaId: string, cookie: string) {
+  const headers = cookie ? { cookie } : undefined;
+
   // 1) tenta /ciclos
   try {
-    const r = await fetch(`${baseUrl}/api/auditorias/${auditoriaId}/ciclos`, { cache: "no-store" });
+    const r = await fetch(`${baseUrl}/api/auditorias/${auditoriaId}/ciclos`, {
+      cache: "no-store",
+      headers,
+    });
     if (r.ok) {
       const j = await r.json();
       return {
@@ -119,7 +124,10 @@ async function fetchTotaisForAuditoria(baseUrl: string, auditoriaId: string) {
 
   // 2) fallback: /auditorias/[id]
   try {
-    const r = await fetch(`${baseUrl}/api/auditorias/${auditoriaId}`, { cache: "no-store" });
+    const r = await fetch(`${baseUrl}/api/auditorias/${auditoriaId}`, {
+      cache: "no-store",
+      headers,
+    });
     if (r.ok) {
       const j = await r.json();
       return {
@@ -132,49 +140,6 @@ async function fetchTotaisForAuditoria(baseUrl: string, auditoriaId: string) {
   } catch {}
 
   return { total_repasse: 0, total_cashback: 0, total_a_pagar: 0, receita_bruta: 0 };
-}
-
-async function listAuditoriasDoMes(mesRef: string) {
-  const admin = supabaseAdmin();
-
-  // ✅ 1) tenta MES_REF e só cai pro ANO_MES se MES_REF NÃO EXISTIR (erro de coluna)
-  const r1 = await admin
-    .from("auditorias")
-    .select("id, condominio_id, mes_ref, status")
-    .eq("mes_ref", mesRef)
-    .in("status", ["em_conferencia", "final"]);
-
-  if (!r1.error) {
-    // ✅ se veio vazio, é vazio mesmo. NÃO tenta ano_mes.
-    return { data: r1.data ?? [] };
-  }
-
-  const msg = String(r1.error?.message ?? "").toLowerCase();
-  const isMesRefMissing =
-    msg.includes("column") && msg.includes("mes_ref") && msg.includes("does not exist");
-
-  if (!isMesRefMissing) {
-    // outro erro real
-    throw new Error(r1.error.message);
-  }
-
-  // ✅ 2) fallback para schema antigo (se existir)
-  const r2 = await admin
-    .from("auditorias")
-    .select("id, condominio_id, ano_mes, status")
-    .eq("ano_mes", mesRef)
-    .in("status", ["em_conferencia", "final"]);
-
-  if (r2.error) throw new Error(r2.error.message);
-
-  const normalized = (r2.data ?? []).map((a: any) => ({
-    id: a.id,
-    condominio_id: a.condominio_id,
-    mes_ref: a.ano_mes ?? mesRef,
-    status: a.status,
-  }));
-
-  return { data: normalized };
 }
 
 export async function GET(req: Request) {
@@ -193,9 +158,19 @@ export async function GET(req: Request) {
     const baseUrl = getBaseUrlFromReq(req);
     if (!baseUrl) return bad("Não foi possível determinar baseUrl", 500);
 
-    const { data: auds } = await listAuditoriasDoMes(mes_ref);
+    // ✅ ESSENCIAL: repassa sessão para chamadas internas
+    const cookie = req.headers.get("cookie") || "";
 
-    if (!auds.length) {
+    // ✅ Busca auditorias do mês (schema real: mes_ref)
+    const { data: auds, error: audErr } = await supabaseAdmin()
+      .from("auditorias")
+      .select("id, condominio_id, mes_ref, status")
+      .eq("mes_ref", mes_ref)
+      .in("status", ["em_conferencia", "final"]);
+
+    if (audErr) return bad(audErr.message, 500);
+
+    if (!auds || auds.length === 0) {
       return NextResponse.json({ ok: true, mes_ref, rows: [] });
     }
 
@@ -210,14 +185,19 @@ export async function GET(req: Request) {
 
     const condoById = new Map<string, any>((condominios ?? []).map((c: any) => [c.id, c]));
 
-    // mês anterior para variação
+    // ✅ totais do mês anterior (variação)
     let prevByCondo = new Map<string, number>();
     if (mes_prev) {
-      const { data: prevAuds } = await listAuditoriasDoMes(mes_prev);
-      if (prevAuds.length) {
+      const { data: prevAuds, error: prevErr } = await supabaseAdmin()
+        .from("auditorias")
+        .select("id, condominio_id, mes_ref, status")
+        .eq("mes_ref", mes_prev)
+        .in("status", ["em_conferencia", "final"]);
+
+      if (!prevErr && prevAuds && prevAuds.length) {
         const totalsPrev = await Promise.all(
           prevAuds.map(async (a: any) => {
-            const t = await fetchTotaisForAuditoria(baseUrl, a.id);
+            const t = await fetchTotaisForAuditoria(baseUrl, a.id, cookie);
             return { condominio_id: a.condominio_id, total: num(t.total_a_pagar) };
           })
         );
@@ -234,7 +214,7 @@ export async function GET(req: Request) {
         const condo = condoById.get(String(a.condominio_id)) ?? {};
         const pagamento_texto = buildPagamentoTexto(condo);
 
-        const t = await fetchTotaisForAuditoria(baseUrl, a.id);
+        const t = await fetchTotaisForAuditoria(baseUrl, a.id, cookie);
 
         const repasse = num(t.total_repasse);
         const cashback = num(t.total_cashback);
