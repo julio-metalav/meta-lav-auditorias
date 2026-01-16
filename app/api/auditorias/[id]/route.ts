@@ -55,7 +55,19 @@ async function fetchCondominioBasics(condominioId: string) {
 
   const { data, error } = await sb
     .from("condominios")
-    .select("id, tipo_pagamento, valor_ciclo_lavadora, valor_ciclo_secadora")
+    .select(
+      [
+        "id",
+        "tipo_pagamento",
+        "valor_ciclo_lavadora",
+        "valor_ciclo_secadora",
+        // ✅ NOVO: cashback + tarifas (para repasse)
+        "cashback_percent",
+        "agua_valor_m3",
+        "energia_valor_kwh",
+        "gas_valor_m3",
+      ].join(",")
+    )
     .eq("id", condominioId)
     .maybeSingle();
 
@@ -70,12 +82,23 @@ function withCompatAliases(aud: any, condominio: any) {
   const base_energia = aud?.energia_leitura_base ?? null;
   const base_gas = aud?.gas_leitura_base ?? null;
 
+  // ✅ NOVO: passa dados do condomínio para a UI do fechamento
+  const cashback_percent = condominio?.cashback_percent ?? null;
+  const agua_valor_m3 = condominio?.agua_valor_m3 ?? null;
+  const energia_valor_kwh = condominio?.energia_valor_kwh ?? null;
+  const gas_valor_m3 = condominio?.gas_valor_m3 ?? null;
+
   return {
     ...aud,
     pagamento_metodo,
     base_agua,
     base_energia,
     base_gas,
+
+    cashback_percent,
+    agua_valor_m3,
+    energia_valor_kwh,
+    gas_valor_m3,
   };
 }
 
