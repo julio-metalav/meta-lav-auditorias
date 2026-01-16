@@ -1,6 +1,5 @@
 export const runtime = "nodejs";
 
-import { NextResponse } from "next/server";
 import PDFDocument from "pdfkit";
 import { getUserAndRole } from "@/lib/auth";
 
@@ -24,26 +23,7 @@ function pct(n: any) {
   return `${v.toFixed(2).replace(".", ",")}%`;
 }
 
-function pagamentoLinha(p: any) {
-  if (!p) return "";
-  const cpf = p.cpf_cnpj ? ` | CNPJ/CPF: ${p.cpf_cnpj}` : "";
-
-  if (p.pix) {
-    const titular = p.titular ? ` | ${p.titular}` : "";
-    return `PIX: ${p.pix}${titular}${cpf}`;
-  }
-
-  const banco = p.banco ? `Banco (${p.banco})` : "";
-  const ag = p.agencia ? `Ag: ${p.agencia}` : "";
-  const cc = p.conta ? `Conta: ${p.conta}` : "";
-  const tipo = p.tipo_conta ? ` (${p.tipo_conta})` : "";
-  const titular = p.titular ? ` | ${p.titular}` : "";
-
-  const parts = [banco, ag, cc].filter(Boolean).join(" | ");
-  return parts ? `${parts}${tipo}${titular}${cpf}` : "";
-}
-
-// Converte stream do PDFKit (Node) em ReadableStream (Web) p/ NextResponse
+// PDFKit (Node stream) -> ReadableStream (Web)
 function pdfkitToReadableStream(doc: any) {
   return new ReadableStream({
     start(controller) {
@@ -65,14 +45,14 @@ function pdfkitToReadableStream(doc: any) {
 
 export async function GET(req: Request) {
   const { user, role } = await getUserAndRole();
-  if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  if (!user) return Response.json({ error: "Não autenticado" }, { status: 401 });
   if (!roleGte((role ?? null) as any, "interno")) {
-    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+    return Response.json({ error: "Sem permissão" }, { status: 403 });
   }
 
   const url = new URL(req.url);
   const mes_ref = (url.searchParams.get("mes_ref") ?? "").trim();
-  if (!mes_ref) return NextResponse.json({ error: "Informe mes_ref=YYYY-MM-01" }, { status: 400 });
+  if (!mes_ref) return Response.json({ error: "Informe mes_ref=YYYY-MM-01" }, { status: 400 });
 
   const origin = new URL(req.url).origin;
   const relRes = await fetch(`${origin}/api/relatorios/financeiro?mes_ref=${encodeURIComponent(mes_ref)}`, {
@@ -82,11 +62,11 @@ export async function GET(req: Request) {
 
   if (!relRes.ok) {
     const j = await relRes.json().catch(() => ({}));
-    return NextResponse.json({ error: (j as any)?.error ?? "Falha ao gerar relatório" }, { status: 400 });
+    return Response.json({ error: (j as any)?.error ?? "Falha ao gerar relatório" }, { status: 400 });
   }
 
-  const relJson = await relRes.json().catch(() => ({}));
-  const rows = Array.isArray((relJson as any)?.data) ? (relJson as any).data : [];
+  const relJson: any = await relRes.json();
+  const rows = Array.isArray(relJson?.data) ? relJson.data : [];
 
   const doc = new PDFDocument({ size: "A4", margin: 36 });
 
@@ -95,16 +75,13 @@ export async function GET(req: Request) {
   doc.fontSize(10).fillColor("#333").text(`Gerado em: ${new Date().toLocaleString("pt-BR")}`);
   doc.moveDown(1);
 
-  doc.fontSize(11).fillColor("#000");
-
   for (const r of rows) {
-    doc.fontSize(12).text(String(r?.condominio ?? "Condomínio"));
-    doc.fontSize(9).fillColor("#444").text(pagamentoLinha(r?.pagamento));
-    doc.fillColor("#000");
+    doc.fillColor("#000").fontSize(12).text(String(r?.condominio ?? "Condomínio"));
+    doc.fillColor("#444").fontSize(9).text(String(r?.pagamento_texto ?? ""));
 
-    doc
-      .fontSize(10)
-      .text(`Repasse: ${brl(r?.repasse)}   |   Cashback: ${brl(r?.cashback)}   |   Total: ${brl(r?.total)}`);
+    doc.fillColor("#000").fontSize(10).text(
+      `Repasse: ${brl(r?.repasse)}   |   Cashback: ${brl(r?.cashback)}   |   Total: ${brl(r?.total)}`
+    );
 
     doc.fontSize(10).text(`Variação vs mês anterior: ${pct(r?.variacao_percent)}`);
 
@@ -118,7 +95,7 @@ export async function GET(req: Request) {
   const stream = pdfkitToReadableStream(doc);
   const filename = `relatorio_financeiro_${mes_ref}.pdf`;
 
-  return new NextResponse(stream, {
+  return new Response(stream, {
     status: 200,
     headers: {
       "Content-Type": "application/pdf",
