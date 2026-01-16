@@ -26,11 +26,21 @@ function pct(n: any) {
 
 function pagamentoLinha(p: any) {
   if (!p) return "";
-  const tipo = String(p.tipo ?? "").toLowerCase();
-  if (tipo.includes("pix")) {
-    return `PIX: ${p.pix ?? ""} | Titular: ${p.titular ?? ""}`;
+  const cpf = p.cpf_cnpj ? ` | CNPJ/CPF: ${p.cpf_cnpj}` : "";
+
+  if (p.pix) {
+    const titular = p.titular ? ` | ${p.titular}` : "";
+    return `PIX: ${p.pix}${titular}${cpf}`;
   }
-  return `Banco: ${p.banco ?? ""} | Ag: ${p.agencia ?? ""} | Cc: ${p.conta ?? ""} | Titular: ${p.titular ?? ""}`;
+
+  const banco = p.banco ? `Banco (${p.banco})` : "";
+  const ag = p.agencia ? `Ag: ${p.agencia}` : "";
+  const cc = p.conta ? `Conta: ${p.conta}` : "";
+  const tipo = p.tipo_conta ? ` (${p.tipo_conta})` : "";
+  const titular = p.titular ? ` | ${p.titular}` : "";
+
+  const parts = [banco, ag, cc].filter(Boolean).join(" | ");
+  return parts ? `${parts}${tipo}${titular}${cpf}` : "";
 }
 
 // Converte stream do PDFKit (Node) em ReadableStream (Web) p/ NextResponse
@@ -64,7 +74,6 @@ export async function GET(req: Request) {
   const mes_ref = (url.searchParams.get("mes_ref") ?? "").trim();
   if (!mes_ref) return NextResponse.json({ error: "Informe mes_ref=YYYY-MM-01" }, { status: 400 });
 
-  // chama o JSON base (já logado, repassa cookie)
   const origin = new URL(req.url).origin;
   const relRes = await fetch(`${origin}/api/relatorios/financeiro?mes_ref=${encodeURIComponent(mes_ref)}`, {
     headers: { cookie: req.headers.get("cookie") ?? "" },
@@ -76,10 +85,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: (j as any)?.error ?? "Falha ao gerar relatório" }, { status: 400 });
   }
 
-  const relJson = await relRes.json();
+  const relJson = await relRes.json().catch(() => ({}));
   const rows = Array.isArray((relJson as any)?.data) ? (relJson as any).data : [];
 
-  // monta PDF
   const doc = new PDFDocument({ size: "A4", margin: 36 });
 
   doc.fontSize(16).text(`Relatório Financeiro - ${mes_ref}`, { align: "left" });
@@ -90,7 +98,7 @@ export async function GET(req: Request) {
   doc.fontSize(11).fillColor("#000");
 
   for (const r of rows) {
-    doc.fontSize(12).text(String(r?.condominio ?? "Condomínio"), { continued: false });
+    doc.fontSize(12).text(String(r?.condominio ?? "Condomínio"));
     doc.fontSize(9).fillColor("#444").text(pagamentoLinha(r?.pagamento));
     doc.fillColor("#000");
 
@@ -98,8 +106,7 @@ export async function GET(req: Request) {
       .fontSize(10)
       .text(`Repasse: ${brl(r?.repasse)}   |   Cashback: ${brl(r?.cashback)}   |   Total: ${brl(r?.total)}`);
 
-    const ant = r?.mes_anterior == null ? "—" : brl(r?.mes_anterior);
-    doc.fontSize(10).text(`Mês anterior: ${ant}   |   Variação: ${pct(r?.variacao_percent)}`);
+    doc.fontSize(10).text(`Variação vs mês anterior: ${pct(r?.variacao_percent)}`);
 
     doc.moveDown(0.8);
     doc.moveTo(doc.x, doc.y).lineTo(559, doc.y).strokeColor("#e5e5e5").stroke();
