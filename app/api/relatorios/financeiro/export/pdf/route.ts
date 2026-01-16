@@ -1,10 +1,5 @@
 export const runtime = "nodejs";
 
-import { NextResponse } from "next/server";
-import PDFDocument from "pdfkit";
-import { PassThrough } from "stream";
-import path from "path";
-import fs from "fs";
 import { getUserAndRole } from "@/lib/auth";
 
 type Role = "auditor" | "interno" | "gestor";
@@ -15,8 +10,11 @@ function roleGte(role: Role | null, min: Role) {
   return rank[role] >= rank[min];
 }
 
-function bad(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
+function jsonError(message: string, status = 400) {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+  });
 }
 
 function getBaseUrlFromReq(req: Request) {
@@ -29,26 +27,9 @@ function getBaseUrlFromReq(req: Request) {
   return `${proto}://${host}`;
 }
 
-function nodeStreamToWebReadable(nodeStream: NodeJS.ReadableStream) {
-  return new ReadableStream({
-    start(controller) {
-      nodeStream.on("data", (chunk) => controller.enqueue(chunk));
-      nodeStream.on("end", () => controller.close());
-      nodeStream.on("error", (err) => controller.error(err));
-    },
-    cancel() {
-      try {
-        // @ts-ignore
-        nodeStream.destroy?.();
-      } catch {}
-    },
-  });
-}
-
 function money(v: any) {
   const n = Number(v);
   if (!Number.isFinite(n)) return "0,00";
-  // formato simples pt-BR sem Intl (pra evitar variação em runtime)
   return n.toFixed(2).replace(".", ",");
 }
 
@@ -58,82 +39,173 @@ function percent(v: any) {
   return (n * 100).toFixed(2).replace(".", ",") + "%";
 }
 
+function pdfEscape(s: string) {
+  // escape \ ( ) e remove chars de controle
+  return String(s ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/[\u0000-\u001F\u007F]/g, " ");
+}
+
+/**
+ * Gera um PDF básico, com fonte padrão Helvetica (Type1) sem depender de PDFKit.
+ * Suporta múltiplas páginas se precisar.
+ */
+function buildSimplePdf(pages: string[]) {
+  const objects: string[] = [];
+
+  // 1) Catalog
+  // 2) Pages
+  // 3..n) Page objects + Contents
+  // Font object: Helvetica (Type1) - padrão do PDF
+
+  const addObject = (content: string) => {
+    objects.push(content);
+    return objects.length; // id 1-based
+  };
+
+  const fontObjId = addObject(`<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>`);
+
+  const pageObjIds: number[] = [];
+  const contentObjIds: number[] = [];
+
+  // Page tree placeholder, vamos criar depois que soubermos pages
+  const pagesObjId = addObject(`<< /Type /Pages /Kids [] /Count 0 >>`);
+
+  // Catalog
+  const catalogObjId = addObject(`<< /Type /Catalog /Pages ${pagesObjId} 0 R >>`);
+
+  // Create pages
+  for (const pageContentStream of pages) {
+    const contentBytes = Buffer.from(pageContentStream, "utf8");
+    const contentObjId = addObject(
+      `<< /Length ${contentBytes.length} >>\nstream\n${pageContentStream}\nendstream`
+    );
+    contentObjIds.push(contentObjId);
+
+    const pageObjId = addObject(
+      `<< /Type /Page /Parent ${pagesObjId} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontObjId} 0 R >> >> /Contents ${contentObjId} 0 R >>`
+    );
+    pageObjIds.push(pageObjId);
+  }
+
+  // Update Pages object (Kids/Count)
+  const kids = pageObjIds.map((id) => `${id} 0 R`).join(" ");
+  objects[pagesObjId - 1] = `<< /Type /Pages /Kids [ ${kids} ] /Count ${pageObjIds.length} >>`;
+
+  // Build xref
+  let pdf = "%PDF-1.4\n";
+  const offsets: number[] = [0]; // object 0
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(Buffer.byteLength(pdf, "utf8"));
+    pdf += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`;
+  }
+
+  const xrefOffset = Buffer.byteLength(pdf, "utf8");
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += `0000000000 65535 f \n`;
+  for (let i = 1; i < offsets.length; i++) {
+    const off = String(offsets[i]).padStart(10, "0");
+    pdf += `${off} 00000 n \n`;
+  }
+
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogObjId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+
+  return Buffer.from(pdf, "utf8");
+}
+
+function makePagesFromRows(title: string, rows: any[]) {
+  // coordenadas
+  const left = 50;
+  let y = 800;
+  const lineH = 14;
+
+  const pageStreams: string[] = [];
+  let lines: string[] = [];
+
+  const flushPage = () => {
+    // monta stream PDF com texto
+    // BT ... ET
+    // usamos Td absoluto por linha (mais simples)
+    const content =
+      "BT\n/F1 12 Tf\n" +
+      lines.join("\n") +
+      "\nET\n";
+    pageStreams.push(content);
+    lines = [];
+    y = 800;
+  };
+
+  const addLine = (text: string, size = 12, bold = false) => {
+    // fonte continua F1; só muda tamanho
+    const safe = pdfEscape(text);
+    lines.push(`/F1 ${size} Tf`);
+    lines.push(`${left} ${y} Td (${safe}) Tj`);
+    // volta origem do texto (Td é relativo), então precisamos "resetar" movendo de volta:
+    lines.push(`${-left} ${-y} Td`);
+    y -= lineH;
+
+    if (y < 80) flushPage();
+  };
+
+  // título
+  addLine(title, 14, true);
+  y -= 6;
+
+  if (!rows.length) {
+    addLine("Sem auditorias em conferência para este mês.", 12);
+    flushPage();
+    return pageStreams;
+  }
+
+  for (const r of rows) {
+    addLine(String(r?.condominio_nome ?? "Condomínio"), 12);
+    addLine(String(r?.pagamento_texto ?? ""), 10);
+    addLine(`Repasse: R$ ${money(r?.repasse)}`, 10);
+    addLine(`Cashback: R$ ${money(r?.cashback)}`, 10);
+    addLine(`Total: R$ ${money(r?.total)}`, 10);
+    addLine(`Variação vs mês anterior: ${percent(r?.variacao_percent)}`, 10);
+    y -= 8;
+    if (y < 80) flushPage();
+  }
+
+  flushPage();
+  return pageStreams;
+}
+
 export async function GET(req: Request) {
   try {
     const { user, role } = await getUserAndRole();
-    if (!user) return bad("Não autenticado", 401);
-    if (!roleGte(role as any, "interno")) return bad("Sem permissão", 403);
+    if (!user) return jsonError("Não autenticado", 401);
+    if (!roleGte(role as any, "interno")) return jsonError("Sem permissão", 403);
 
     const url = new URL(req.url);
     const mes_ref = url.searchParams.get("mes_ref") || "";
-    if (!mes_ref) return bad("Parâmetro mes_ref obrigatório (YYYY-MM-01)", 400);
+    if (!mes_ref) return jsonError("Parâmetro mes_ref obrigatório (YYYY-MM-01)", 400);
 
     const baseUrl = getBaseUrlFromReq(req);
-    if (!baseUrl) return bad("Não foi possível determinar baseUrl", 500);
+    if (!baseUrl) return jsonError("Não foi possível determinar baseUrl", 500);
 
     const cookie = req.headers.get("cookie") || "";
 
-    // ✅ Fonte da verdade: JSON base
     const r = await fetch(
       `${baseUrl}/api/relatorios/financeiro?mes_ref=${encodeURIComponent(mes_ref)}`,
-      { cache: "no-store", headers: { cookie } }
+      { cache: "no-store", headers: cookie ? { cookie } : {} }
     );
 
     if (!r.ok) {
       const t = await r.text().catch(() => "");
-      return bad(`Falha ao gerar base do relatório (${r.status}). ${t}`, 500);
+      return jsonError(`Falha ao gerar base do relatório (${r.status}). ${t}`, 500);
     }
 
     const j: any = await r.json();
     const rows: any[] = Array.isArray(j?.rows) ? j.rows : [];
 
-    // ✅ PDF com fontes TTF (evita Helvetica.afm)
-    const doc = new PDFDocument({ size: "A4", margin: 36 });
-    const passthrough = new PassThrough();
-    doc.pipe(passthrough);
+    const pages = makePagesFromRows(`Relatório Financeiro - ${mes_ref}`, rows);
+    const pdfBytes = buildSimplePdf(pages);
 
-    // Caminhos das fontes dentro do bundle (public/ vai junto)
-    const fontRegular = path.join(process.cwd(), "public", "fonts", "Roboto-Regular.ttf");
-    const fontBold = path.join(process.cwd(), "public", "fonts", "Roboto-Bold.ttf");
-
-    // Se não achar fonte, falha com mensagem clara (pra você saber que faltou copiar)
-    if (!fs.existsSync(fontRegular) || !fs.existsSync(fontBold)) {
-      doc.end();
-      return bad(
-        "Fontes do PDF não encontradas. Adicione public/fonts/Roboto-Regular.ttf e public/fonts/Roboto-Bold.ttf",
-        500
-      );
-    }
-
-    doc.registerFont("R", fontRegular);
-    doc.registerFont("B", fontBold);
-
-    doc.font("B").fontSize(14).text(`Relatório Financeiro - ${mes_ref}`, { align: "center" });
-    doc.moveDown();
-
-    doc.font("R").fontSize(10);
-
-    if (!rows.length) {
-      doc.text("Sem auditorias em conferência para este mês.");
-    } else {
-      for (const row of rows) {
-        doc.font("B").text(String(row?.condominio_nome ?? "Condomínio"));
-        doc.font("R").text(String(row?.pagamento_texto ?? ""));
-
-        doc.text(`Repasse: R$ ${money(row?.repasse)}`);
-        doc.text(`Cashback: R$ ${money(row?.cashback)}`);
-        doc.text(`Total: R$ ${money(row?.total)}`);
-        doc.text(`Variação vs mês anterior: ${percent(row?.variacao_percent)}`);
-
-        doc.moveDown();
-      }
-    }
-
-    doc.end();
-
-    const webStream = nodeStreamToWebReadable(passthrough);
-
-    return new Response(webStream as any, {
+    return new Response(pdfBytes, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
@@ -142,6 +214,6 @@ export async function GET(req: Request) {
       },
     });
   } catch (e: any) {
-    return bad(e?.message ?? "Erro inesperado", 500);
+    return jsonError(e?.message ?? "Erro inesperado", 500);
   }
 }
