@@ -293,8 +293,6 @@ export default function CondominiosPage() {
       if (!condominioId) throw new Error("Condomínio salvo, mas não veio o ID na resposta da API (/api/condominios).");
 
       // 2) salva máquinas do condomínio
-      // ✅ IMPORTANTE: backend espera ARRAY AGREGADO com {categoria, capacidade_kg, quantidade, valor_ciclo...}
-      // (o backend gera maquina_tag e faz replace)
       const maquinasPayload = maquinas
         .map((m) => {
           const quantidadeRaw = Number(m.quantidade);
@@ -313,10 +311,11 @@ export default function CondominiosPage() {
 
       if (!maquinasPayload.length) throw new Error("Informe quantidade de máquinas (mínimo 1).");
 
+      // ✅ FIX DEFINITIVO: endpoint espera { itens: [...] }, não array puro
       const r2 = await fetch(`/api/condominios/${condominioId}/maquinas`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(maquinasPayload),
+        body: JSON.stringify({ itens: maquinasPayload }),
       });
 
       const j2 = await r2.json().catch(() => ({}));
@@ -479,12 +478,7 @@ export default function CondominiosPage() {
             {/* ✅ NOVO: tarifas */}
             <div>
               <div className="small">Água (R$/m³)</div>
-              <input
-                className="input"
-                placeholder="ex: 15,00"
-                value={form.agua_valor_m3}
-                onChange={(e) => setForm({ ...form, agua_valor_m3: e.target.value })}
-              />
+              <input className="input" placeholder="ex: 15,00" value={form.agua_valor_m3} onChange={(e) => setForm({ ...form, agua_valor_m3: e.target.value })} />
             </div>
             <div>
               <div className="small">Energia (R$/kWh)</div>
@@ -497,12 +491,7 @@ export default function CondominiosPage() {
             </div>
             <div>
               <div className="small">Gás (R$/m³)</div>
-              <input
-                className="input"
-                placeholder="ex: 30,00"
-                value={form.gas_valor_m3}
-                onChange={(e) => setForm({ ...form, gas_valor_m3: e.target.value })}
-              />
+              <input className="input" placeholder="ex: 30,00" value={form.gas_valor_m3} onChange={(e) => setForm({ ...form, gas_valor_m3: e.target.value })} />
             </div>
           </div>
 
@@ -518,8 +507,7 @@ export default function CondominiosPage() {
 
           <div className="card" style={{ marginTop: 10 }}>
             <div className="small" style={{ marginBottom: 8 }}>
-              Total máquinas: <b>{maquinasResumo.total}</b> &nbsp;|&nbsp; Lavadoras: <b>{maquinasResumo.lav}</b> &nbsp;|&nbsp; Secadoras:{" "}
-              <b>{maquinasResumo.sec}</b>
+              Total máquinas: <b>{maquinasResumo.total}</b> &nbsp;|&nbsp; Lavadoras: <b>{maquinasResumo.lav}</b> &nbsp;|&nbsp; Secadoras: <b>{maquinasResumo.sec}</b>
             </div>
 
             {maquinas.length === 0 ? (
@@ -558,7 +546,6 @@ export default function CondominiosPage() {
                             value={String(m.quantidade ?? 1)}
                             onChange={(e) => {
                               const raw = e.target.value.replace(/[^\d]/g, "");
-                              // ✅ se apagar, volta pra 1 (não deixa virar 0 e quebrar o save)
                               updateMaquina(i, { quantidade: raw === "" ? 1 : Number(raw) });
                             }}
                             onBlur={() => {
