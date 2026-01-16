@@ -120,20 +120,29 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
           "auditor_id",
           "mes_ref",
           "status",
+
           "agua_leitura",
           "energia_leitura",
           "gas_leitura",
+
           "agua_leitura_base",
           "energia_leitura_base",
           "gas_leitura_base",
           "leitura_base_origem",
+
           "observacoes",
+
+          // ✅ IMPORTANTE pro Interno:
+          "comprovante_fechamento_url",
+          "fechamento_obs",
+
           "foto_agua_url",
           "foto_energia_url",
           "foto_gas_url",
           "foto_quimicos_url",
           "foto_bombonas_url",
           "foto_conector_bala_url",
+
           "created_at",
           "updated_at",
         ].join(",")
@@ -201,12 +210,17 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       "energia_leitura",
       "gas_leitura",
       "observacoes",
+
+      // ✅ Interno: observação do financeiro (precisa salvar)
+      "fechamento_obs",
+
       "foto_agua_url",
       "foto_energia_url",
       "foto_gas_url",
       "foto_quimicos_url",
       "foto_bombonas_url",
       "foto_conector_bala_url",
+
       "status",
     ];
 
@@ -235,20 +249,29 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
           "auditor_id",
           "mes_ref",
           "status",
+
           "agua_leitura",
           "energia_leitura",
           "gas_leitura",
+
           "agua_leitura_base",
           "energia_leitura_base",
           "gas_leitura_base",
           "leitura_base_origem",
+
           "observacoes",
+
+          // ✅ importante pra UI do interno refletir
+          "comprovante_fechamento_url",
+          "fechamento_obs",
+
           "foto_agua_url",
           "foto_energia_url",
           "foto_gas_url",
           "foto_quimicos_url",
           "foto_bombonas_url",
           "foto_conector_bala_url",
+
           "created_at",
           "updated_at",
         ].join(",")
