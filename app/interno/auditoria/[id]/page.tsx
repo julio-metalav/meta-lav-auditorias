@@ -32,6 +32,12 @@ type Aud = {
   // vindo do backend (derivado do cadastro do condomínio)
   pagamento_metodo?: PagamentoMetodo | null;
 
+  // ✅ PASSO 2: vindo do backend (cadastro do condomínio)
+  cashback_percent?: number | null;
+  agua_valor_m3?: number | null;
+  energia_valor_kwh?: number | null;
+  gas_valor_m3?: number | null;
+
   // pode vir junto do backend
   condominios?: { id?: string; nome?: string; cidade?: string; uf?: string } | null;
   condominio?: { id?: string; nome?: string; cidade?: string; uf?: string } | null;
@@ -90,6 +96,10 @@ function toLower(x: any) {
 function safeNumber(x: any, fallback = 0) {
   const n = Number(x);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function moneyBRL(n: number) {
+  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
 function cicloLabel(it: CicloItem) {
@@ -229,7 +239,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         valor_ciclo: x.valor_ciclo !== null && x.valor_ciclo !== undefined ? Number(x.valor_ciclo) : null,
       }));
 
-      // ✅ antes era ensureFourCombos(...) -> agora só usa o que o backend permitir
       const normalized = normalizeCiclos(normalizedRaw);
 
       setCiclos(normalized);
@@ -296,7 +305,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       setErr(null);
       setSavingCiclos(true);
 
-      // Persistência oficial: (categoria + capacidade_kg)
       const itens = (ciclos ?? []).map((it) => {
         const categoria = String(it.categoria ?? it.tipo ?? "").toLowerCase().trim();
         const capacidade_kg = it.capacidade_kg ?? null;
@@ -319,7 +327,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         body: JSON.stringify({ itens }),
       });
 
-      // recarrega
       const ciclosJson = await fetchJSON(`/api/auditorias/${id}/ciclos`);
       const list: any[] = Array.isArray(ciclosJson?.itens)
         ? ciclosJson.itens
@@ -335,12 +342,10 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         capacidade_kg: x.capacidade_kg ?? null,
         ciclos: Number(x.ciclos ?? 0) || 0,
         valor_ciclo: x.valor_ciclo ?? null,
-        // compat
         maquina_tag: x.maquina_tag ?? null,
         tipo: x.tipo ?? null,
       }));
 
-      // ✅ antes era ensureFourCombos(...)
       const normalized = normalizeCiclos(normalizedRaw);
 
       setCiclos(normalized);
@@ -486,6 +491,41 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   const exigeComprovante = useMemo(() => {
     return (aud?.pagamento_metodo ?? null) === "direto";
   }, [aud?.pagamento_metodo]);
+
+  // ✅ PASSO 2: cálculo do financeiro correto
+  const financeiro = useMemo(() => {
+    const receita = relPrev.receita_total; // null se faltou preço
+    const cashbackPct = safeNumber(aud?.cashback_percent, 0);
+
+    const cashback = receita === null ? null : receita * (cashbackPct / 100);
+
+    const aguaV = safeNumber(aud?.agua_valor_m3, 0);
+    const energiaV = safeNumber(aud?.energia_valor_kwh, 0);
+    const gasV = safeNumber(aud?.gas_valor_m3, 0);
+
+    const repAgua = relPrev.consumo_agua * aguaV;
+    const repEnergia = relPrev.consumo_energia * energiaV;
+    const repGas = relPrev.consumo_gas * gasV;
+
+    const repasse = repAgua + repEnergia + repGas;
+
+    const totalPagar = cashback === null ? null : cashback + repasse;
+    const liquidoMetaLav = cashback === null ? null : receita! - cashback - repasse;
+
+    return {
+      cashbackPct,
+      cashback,
+      aguaV,
+      energiaV,
+      gasV,
+      repAgua,
+      repEnergia,
+      repGas,
+      repasse,
+      totalPagar,
+      liquidoMetaLav,
+    };
+  }, [aud, relPrev]);
 
   async function finalizarAuditoria() {
     const audId = String(aud?.id ?? id).trim();
@@ -824,9 +864,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                       </div>
 
                       <div className="col-span-3 text-right text-sm font-semibold text-gray-900">
-                        {it.valor_ciclo !== null && it.valor_ciclo !== undefined
-                          ? Number(it.valor_ciclo).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-                          : "—"}
+                        {it.valor_ciclo !== null && it.valor_ciclo !== undefined ? moneyBRL(Number(it.valor_ciclo)) : "—"}
                       </div>
 
                       <div className="col-span-3 flex justify-end">
@@ -853,61 +891,79 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
           <div className="mt-6 rounded-2xl border border-gray-100 bg-white p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-gray-900">Prévia financeira (simples)</div>
+                <div className="text-sm font-semibold text-gray-900">Resumo financeiro (repasse + cashback)</div>
                 <div className="mt-1 text-xs text-gray-600">
-                  Calcula somente se o backend enviar <span className="font-semibold">valor_ciclo</span> por linha.
-                  Se faltar preço, mostra “—” para não confundir.
+                  Cashback = % sobre a <span className="font-semibold">receita bruta</span>. Repasse = consumo × tarifa do condomínio.
                 </div>
                 {relPrev.faltou_preco ? (
                   <div className="mt-2 text-xs text-amber-700">
                     Atenção: faltou <span className="font-semibold">valor_ciclo</span> em pelo menos um item com ciclos &gt; 0.
-                    A prévia não será calculada até o preço vir do backend.
+                    A receita/cashback não será calculada até o preço vir do backend.
                   </div>
                 ) : null}
               </div>
 
               <div className="text-right">
-                <div className="text-xs font-semibold text-gray-600">Receita total</div>
+                <div className="text-xs font-semibold text-gray-600">Total a pagar</div>
                 <div className="text-lg font-bold text-gray-900">
-                  {relPrev.receita_total === null ? "—" : relPrev.receita_total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                  {financeiro.totalPagar === null ? "—" : moneyBRL(financeiro.totalPagar)}
                 </div>
               </div>
             </div>
 
             <div className="mt-4 grid gap-3 md:grid-cols-3">
               <div className="rounded-2xl border border-gray-100 p-3">
-                <div className="text-xs font-semibold text-gray-600">Lavadoras</div>
-                <div className="mt-1 text-sm text-gray-800">
-                  <span className="font-semibold">{relPrev.lavadoras_ciclos}</span> ciclos
-                </div>
+                <div className="text-xs font-semibold text-gray-600">Receita bruta</div>
                 <div className="mt-1 text-sm font-semibold text-gray-900">
-                  {relPrev.lavadoras_valor === null ? "—" : relPrev.lavadoras_valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                  {relPrev.receita_total === null ? "—" : moneyBRL(relPrev.receita_total)}
+                </div>
+                <div className="mt-1 text-xs text-gray-500">
+                  Lavadoras: {relPrev.lavadoras_ciclos} • Secadoras: {relPrev.secadoras_ciclos}
                 </div>
               </div>
 
               <div className="rounded-2xl border border-gray-100 p-3">
-                <div className="text-xs font-semibold text-gray-600">Secadoras</div>
-                <div className="mt-1 text-sm text-gray-800">
-                  <span className="font-semibold">{relPrev.secadoras_ciclos}</span> ciclos
+                <div className="text-xs font-semibold text-gray-600">Cashback</div>
+                <div className="mt-1 text-sm text-gray-700">
+                  %: <span className="font-semibold">{Number(financeiro.cashbackPct ?? 0).toFixed(2)}%</span>
                 </div>
                 <div className="mt-1 text-sm font-semibold text-gray-900">
-                  {relPrev.secadoras_valor === null ? "—" : relPrev.secadoras_valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                  {financeiro.cashback === null ? "—" : moneyBRL(financeiro.cashback)}
                 </div>
               </div>
 
               <div className="rounded-2xl border border-gray-100 p-3">
-                <div className="text-xs font-semibold text-gray-600">Consumo do mês</div>
+                <div className="text-xs font-semibold text-gray-600">Repasse (insumos)</div>
+
                 <div className="mt-1 text-xs text-gray-700">
-                  Água: <span className="font-semibold">{relPrev.consumo_agua}</span> • Energia:{" "}
-                  <span className="font-semibold">{relPrev.consumo_energia}</span> • Gás:{" "}
-                  <span className="font-semibold">{relPrev.consumo_gas}</span>
+                  Água: <span className="font-semibold">{relPrev.consumo_agua}</span> ×{" "}
+                  <span className="font-semibold">{moneyBRL(financeiro.aguaV)}</span> ={" "}
+                  <span className="font-semibold">{moneyBRL(financeiro.repAgua)}</span>
                 </div>
-                <div className="mt-2 text-[11px] text-gray-500">(Água só lavadora; gás só secadora onde existir; energia pode afetar ambas.)</div>
+
+                <div className="mt-1 text-xs text-gray-700">
+                  Energia: <span className="font-semibold">{relPrev.consumo_energia}</span> ×{" "}
+                  <span className="font-semibold">{moneyBRL(financeiro.energiaV)}</span> ={" "}
+                  <span className="font-semibold">{moneyBRL(financeiro.repEnergia)}</span>
+                </div>
+
+                <div className="mt-1 text-xs text-gray-700">
+                  Gás: <span className="font-semibold">{relPrev.consumo_gas}</span> ×{" "}
+                  <span className="font-semibold">{moneyBRL(financeiro.gasV)}</span> ={" "}
+                  <span className="font-semibold">{moneyBRL(financeiro.repGas)}</span>
+                </div>
+
+                <div className="mt-2 text-sm font-semibold text-gray-900">
+                  Repasse total: {moneyBRL(financeiro.repasse)}
+                </div>
               </div>
             </div>
 
             <div className="mt-4 text-xs text-gray-500">
-              Fluxo: Interno lança ciclos + base (se precisar) → relatório → financeiro paga/anexa (se direto) → finaliza.
+              (Opcional) Líquido Meta-Lav = Receita − Cashback − Repasse:{" "}
+              <span className="font-semibold">
+                {financeiro.liquidoMetaLav === null ? "—" : moneyBRL(financeiro.liquidoMetaLav)}
+              </span>
             </div>
           </div>
         </div>
