@@ -14,7 +14,7 @@ type Maquina = {
   limpeza_quimica_ciclos: number;
   limpeza_mecanica_ciclos: number;
 
-  // ✅ NOVO: o que o usuário digita (pra não travar o input)
+  // campo texto pra input livre
   valor_ciclo_text: string;
 };
 
@@ -36,9 +36,7 @@ function parseMoneyPtBr(input: string): number {
   const s = String(input ?? "").trim();
   if (!s) return 0;
   const cleaned = s.replace(/\s/g, "").replace(/^R\$/i, "");
-  const normalized = cleaned.includes(",")
-    ? cleaned.replace(/\./g, "").replace(",", ".")
-    : cleaned;
+  const normalized = cleaned.includes(",") ? cleaned.replace(/\./g, "").replace(",", ".") : cleaned;
   const n = Number(normalized);
   return Number.isFinite(n) ? n : 0;
 }
@@ -53,6 +51,20 @@ function clampPosInt(n: number, fallback: number) {
   if (!Number.isFinite(n)) return fallback;
   const i = Math.trunc(n);
   return i > 0 ? i : fallback;
+}
+
+// ✅ Lê as máquinas da resposta da API em QUALQUER formato
+function extractItens(j: any): any[] {
+  if (!j) return [];
+  if (Array.isArray(j)) return j;
+  if (Array.isArray(j.itens)) return j.itens;
+  if (Array.isArray(j.items)) return j.items;
+  if (Array.isArray(j.data?.itens)) return j.data.itens;
+  if (Array.isArray(j.data?.items)) return j.data.items;
+  if (Array.isArray(j.data)) return j.data;
+  // fallback antigo (se existir em algum lugar)
+  if (Array.isArray(j.maquinas)) return j.maquinas;
+  return [];
 }
 
 export default function CondominioMaquinasPage({ params }: { params: { id: string } }) {
@@ -70,14 +82,15 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
     setLoading(true);
     setErr(null);
     setOkMsg(null);
+
     try {
       const r = await fetch(`/api/condominios/${condominioId}/maquinas`, { cache: "no-store" });
-      const j = await r.json();
+      const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error ?? "Erro ao carregar");
 
-      const maquinas = (j?.maquinas ?? []) as any[];
+      const itens = extractItens(j);
 
-      const normalized: Maquina[] = maquinas.map((m) => {
+      const normalized: Maquina[] = itens.map((m: any) => {
         const valor = Number(m.valor_ciclo ?? 0);
         return {
           id: m.id,
@@ -86,11 +99,8 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
           capacidade_kg: m.capacidade_kg === null || m.capacidade_kg === undefined ? null : Number(m.capacidade_kg),
           quantidade: Number(m.quantidade ?? 0),
           valor_ciclo: valor,
-
           limpeza_quimica_ciclos: Number(m.limpeza_quimica_ciclos ?? 500),
           limpeza_mecanica_ciclos: Number(m.limpeza_mecanica_ciclos ?? 2000),
-
-          // ✅ inicia o campo de texto já formatado
           valor_ciclo_text: formatMoneyPtBr(valor),
         };
       });
@@ -113,7 +123,7 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
       ...prev,
       {
         categoria: "lavadora",
-        capacidade_kg: 10,
+        capacidade_kg: 10, // pode digitar 15 etc
         quantidade: 1,
         valor_ciclo: 0,
         valor_ciclo_text: "0,00",
@@ -146,7 +156,7 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
     try {
       if (rows.length === 0) throw new Error("Adicione pelo menos 1 tipo de máquina.");
 
-      // ✅ consolida texto -> number antes de validar/enviar
+      // normaliza texto -> number
       const normalizedRows = rows.map((r) => {
         const valor = parseMoneyPtBr(r.valor_ciclo_text);
         return { ...r, valor_ciclo: valor };
@@ -154,30 +164,30 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
 
       for (const r of normalizedRows) {
         if (!r.categoria) throw new Error("categoria é obrigatória");
-        if (r.capacidade_kg !== null && !Number.isFinite(Number(r.capacidade_kg))) throw new Error("capacidade_kg inválida");
-        if (!Number.isFinite(Number(r.quantidade)) || Number(r.quantidade) < 0) throw new Error("quantidade inválida");
+        if (r.capacidade_kg === null || r.capacidade_kg === undefined || !Number.isFinite(Number(r.capacidade_kg)))
+          throw new Error("capacidade_kg é obrigatória (ex: 10 ou 15)");
+        if (!Number.isFinite(Number(r.quantidade)) || Number(r.quantidade) <= 0) throw new Error("quantidade deve ser > 0");
         if (!Number.isFinite(Number(r.valor_ciclo)) || Number(r.valor_ciclo) < 0) throw new Error("valor_ciclo inválido");
-
         if (!Number.isFinite(Number(r.limpeza_quimica_ciclos)) || Number(r.limpeza_quimica_ciclos) <= 0)
           throw new Error("limpeza_quimica_ciclos inválido");
         if (!Number.isFinite(Number(r.limpeza_mecanica_ciclos)) || Number(r.limpeza_mecanica_ciclos) <= 0)
           throw new Error("limpeza_mecanica_ciclos inválido");
       }
 
-      const payload = normalizedRows.map((r) => ({
+      const itens = normalizedRows.map((r) => ({
         categoria: r.categoria,
-        capacidade_kg: r.capacidade_kg === null ? null : Number(r.capacidade_kg),
-        quantidade: Number(r.quantidade),
+        capacidade_kg: Number(r.capacidade_kg),
+        quantidade: Math.trunc(Number(r.quantidade)),
         valor_ciclo: Number(r.valor_ciclo),
-
         limpeza_quimica_ciclos: clampPosInt(Number(r.limpeza_quimica_ciclos), 500),
         limpeza_mecanica_ciclos: clampPosInt(Number(r.limpeza_mecanica_ciclos), 2000),
       }));
 
+      // ✅ envia no padrão do backend: {itens:[...]}
       const res = await fetch(`/api/condominios/${condominioId}/maquinas`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ itens }),
       });
 
       const j = await res.json().catch(() => ({}));
@@ -202,7 +212,7 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
       </div>
 
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-        <button onClick={() => router.push("/auditorias")} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #ccc" }}>
+        <button onClick={() => router.push("/condominios")} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #ccc" }}>
           Voltar
         </button>
 
@@ -229,9 +239,15 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
       </div>
 
       <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginBottom: 12, display: "flex", gap: 16, flexWrap: "wrap" }}>
-        <div><strong>Total máquinas:</strong> {totals.total}</div>
-        <div><strong>Lavadoras:</strong> {totals.lav}</div>
-        <div><strong>Secadoras:</strong> {totals.sec}</div>
+        <div>
+          <strong>Total máquinas:</strong> {totals.total}
+        </div>
+        <div>
+          <strong>Lavadoras:</strong> {totals.lav}
+        </div>
+        <div>
+          <strong>Secadoras:</strong> {totals.sec}
+        </div>
       </div>
 
       {rows.length === 0 ? (
@@ -271,10 +287,10 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
                   inputMode="numeric"
                   value={r.capacidade_kg === null ? "" : String(r.capacidade_kg)}
                   onChange={(e) => {
-                    const raw = e.target.value.replace(/[^\d.]/g, "");
+                    const raw = e.target.value.replace(/[^\d]/g, "");
                     updateRow(i, { capacidade_kg: raw === "" ? null : Number(raw) });
                   }}
-                  placeholder="ex: 10"
+                  placeholder="ex: 10 ou 15"
                   style={{ padding: 8, borderRadius: 10, border: "1px solid #ccc" }}
                 />
               </label>
@@ -283,16 +299,15 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
                 <span style={{ fontSize: 12, opacity: 0.8 }}>Qtd</span>
                 <input
                   inputMode="numeric"
-                  value={String(r.quantidade ?? 0)}
+                  value={String(r.quantidade ?? 1)}
                   onChange={(e) => {
                     const raw = e.target.value.replace(/[^\d]/g, "");
-                    updateRow(i, { quantidade: raw === "" ? 0 : Number(raw) });
+                    updateRow(i, { quantidade: raw === "" ? 1 : Number(raw) });
                   }}
                   style={{ padding: 8, borderRadius: 10, border: "1px solid #ccc" }}
                 />
               </label>
 
-              {/* ✅ Agora aceita digitar livre: 16,50 */}
               <label style={{ display: "grid", gap: 6, minWidth: 170 }}>
                 <span style={{ fontSize: 12, opacity: 0.8 }}>Valor por ciclo</span>
                 <input
@@ -300,12 +315,10 @@ export default function CondominioMaquinasPage({ params }: { params: { id: strin
                   placeholder="ex: 16,50"
                   value={r.valor_ciclo_text}
                   onChange={(e) => {
-                    // deixa digitar número, vírgula e ponto (ponto opcional)
                     const raw = e.target.value.replace(/[^\d.,]/g, "");
                     updateRow(i, { valor_ciclo_text: raw });
                   }}
                   onBlur={() => {
-                    // ao sair do campo, normaliza para 2 casas e atualiza number
                     const n = parseMoneyPtBr(r.valor_ciclo_text);
                     updateRow(i, { valor_ciclo: n, valor_ciclo_text: formatMoneyPtBr(n) });
                   }}
