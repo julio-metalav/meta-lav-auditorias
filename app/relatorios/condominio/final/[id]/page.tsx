@@ -4,6 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/app/components/AppShell";
 
+<a
+  href={`/api/relatorios/condominio/final/${id}/pdf`}
+  target="_blank"
+  className="rounded-xl bg-black px-4 py-2 text-sm text-white"
+>
+  Baixar PDF
+</a>
+
 type ReportDTO = {
   meta: {
     auditoria_id: string;
