@@ -9,6 +9,12 @@ function normalizeTipoPagamento(input: any): TipoPagamento {
   return s === "boleto" ? "boleto" : "direto";
 }
 
+function numOrNull(v: any): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 export async function GET() {
   const { supabase, user, role } = await getUserAndRole();
   if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
@@ -17,21 +23,19 @@ export async function GET() {
     const { data, error } = await supabase
       .from("auditor_condominios")
       .select(
-        "condominio_id, condominios(id,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento)"
+        "condominio_id, condominios(id,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3)"
       )
       .eq("auditor_id", user.id)
       .order("condominios(nome)");
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-    const condos = (data ?? [])
-      .map((r: any) => r.condominios)
-      .filter(Boolean);
+    const condos = (data ?? []).map((r: any) => r.condominios).filter(Boolean);
     return NextResponse.json({ data: condos });
   }
 
   const { data, error } = await supabase
     .from("condominios")
     .select(
-      "id,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,created_at"
+      "id,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3,created_at"
     )
     .order("nome", { ascending: true });
 
@@ -72,22 +76,20 @@ export async function POST(req: Request) {
     pix: String(body?.pix || "").trim(),
     maquinas: body?.maquinas ?? null,
 
+    // ✅ NOVO: tarifas (repasse por consumo)
+    agua_valor_m3: numOrNull(body?.agua_valor_m3),
+    energia_valor_kwh: numOrNull(body?.energia_valor_kwh),
+    gas_valor_m3: numOrNull(body?.gas_valor_m3),
+
     // NOVO (regra de negócio): default direto
     tipo_pagamento: normalizeTipoPagamento(body?.tipo_pagamento),
   };
 
   if (!payload.nome || !payload.cidade || !payload.uf) {
-    return NextResponse.json(
-      { error: "Campos obrigatórios: nome, cidade, uf" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Campos obrigatórios: nome, cidade, uf" }, { status: 400 });
   }
 
-  const { data, error } = await supabase
-    .from("condominios")
-    .insert(payload)
-    .select("id")
-    .single();
+  const { data, error } = await supabase.from("condominios").insert(payload).select("id").single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   return NextResponse.json({ ok: true, data });
