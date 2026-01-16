@@ -53,13 +53,14 @@ function getLeituraAtual(aud: any, kind: "agua" | "energia" | "gas") {
 }
 
 function getLeituraBase(aud: any, kind: "agua" | "energia" | "gas") {
+  // ✅ Só colunas que existem no seu schema atual: *_leitura_base e base_*
   if (kind === "agua") {
-    return safeNum(aud?.agua_leitura_base) ?? safeNum(aud?.agua_base) ?? safeNum(aud?.base_agua);
+    return safeNum(aud?.agua_leitura_base) ?? safeNum(aud?.base_agua);
   }
   if (kind === "energia") {
-    return safeNum(aud?.energia_leitura_base) ?? safeNum(aud?.energia_base) ?? safeNum(aud?.base_energia);
+    return safeNum(aud?.energia_leitura_base) ?? safeNum(aud?.base_energia);
   }
-  return safeNum(aud?.gas_leitura_base) ?? safeNum(aud?.gas_base) ?? safeNum(aud?.base_gas);
+  return safeNum(aud?.gas_leitura_base) ?? safeNum(aud?.base_gas);
 }
 
 export async function GET(req: Request, { params }: { params: { id: string } }) {
@@ -92,9 +93,6 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
           "agua_leitura_base",
           "energia_leitura_base",
           "gas_leitura_base",
-          "agua_base",
-          "energia_base",
-          "gas_base",
           "base_agua",
           "base_energia",
           "base_gas",
@@ -158,7 +156,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
     const cashbackPercent = safeMoney((condo as any)?.cashback_percent);
 
-    // Leituras e consumos (consumo vem do /ciclos para manter consistência)
+    // Leituras/base
     const aguaBase = getLeituraBase(aud, "agua");
     const aguaAtual = getLeituraAtual(aud, "agua");
     const energiaBase = getLeituraBase(aud, "energia");
@@ -166,6 +164,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     const gasBase = getLeituraBase(aud, "gas");
     const gasAtual = getLeituraAtual(aud, "gas");
 
+    // Consumos (vêm do /ciclos pra manter consistência)
     const consumoAgua = safeMoney(totais?.consumo_agua);
     const consumoEnergia = safeMoney(totais?.consumo_energia);
     const consumoGas = safeMoney(totais?.consumo_gas);
