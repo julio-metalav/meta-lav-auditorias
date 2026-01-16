@@ -103,11 +103,14 @@ export default function CondominiosPage() {
     sindico_telefone: "",
     zelador_nome: "",
     zelador_telefone: "",
-    valor_ciclo_lavadora: "",
-    valor_ciclo_secadora: "",
+
+    // ⚠️ REMOVIDO da UI (duplicava com parque de máquinas)
+    // valor_ciclo_lavadora: "",
+    // valor_ciclo_secadora: "",
+
     cashback_percent: "",
 
-    // ✅ NOVO: tarifas para cálculo de repasse por consumo
+    // ✅ tarifas para cálculo de repasse por consumo
     agua_valor_m3: "",
     energia_valor_kwh: "",
     gas_valor_m3: "",
@@ -171,8 +174,8 @@ export default function CondominiosPage() {
       ...prev,
       {
         categoria: "lavadora",
-        capacidade_kg: 10,
-        quantidade: 1, // ✅ default seguro
+        capacidade_kg: 10, // default
+        quantidade: 1,
         valor_ciclo_text: "0,00",
         limpeza_quimica_ciclos: 500,
         limpeza_mecanica_ciclos: 2000,
@@ -209,11 +212,8 @@ export default function CondominiosPage() {
       sindico_telefone: "",
       zelador_nome: "",
       zelador_telefone: "",
-      valor_ciclo_lavadora: "",
-      valor_ciclo_secadora: "",
       cashback_percent: "",
 
-      // ✅ NOVO
       agua_valor_m3: "",
       energia_valor_kwh: "",
       gas_valor_m3: "",
@@ -245,18 +245,15 @@ export default function CondominiosPage() {
     setSaving(true);
 
     try {
-      if (!form.nome || !form.cidade || !form.uf) {
-        throw new Error("Preencha Nome, Cidade e UF.");
-      }
-
+      if (!form.nome || !form.cidade || !form.uf) throw new Error("Preencha Nome, Cidade e UF.");
       if (!maquinas.length) throw new Error("Cadastre pelo menos 1 tipo de máquina.");
 
-      // ✅ REGRA: precisa ter quantidade > 0
       for (let idx = 0; idx < maquinas.length; idx++) {
         const m = maquinas[idx];
 
         if (!m.categoria) throw new Error(`Linha ${idx + 1}: Categoria da máquina é obrigatória.`);
-        if (m.capacidade_kg !== null && !Number.isFinite(Number(m.capacidade_kg))) throw new Error(`Linha ${idx + 1}: Capacidade (kg) inválida.`);
+        if (m.capacidade_kg === null || m.capacidade_kg === undefined || !Number.isFinite(Number(m.capacidade_kg)))
+          throw new Error(`Linha ${idx + 1}: Capacidade (kg) é obrigatória. Use 10 ou 15.`);
         if (!Number.isFinite(Number(m.quantidade)) || Number(m.quantidade) <= 0) throw new Error(`Linha ${idx + 1}: Quantidade deve ser maior que zero.`);
         const val = parseMoneyPtBr(m.valor_ciclo_text);
         if (!Number.isFinite(val) || val < 0) throw new Error(`Linha ${idx + 1}: Valor por ciclo inválido.`);
@@ -268,11 +265,12 @@ export default function CondominiosPage() {
 
       const payload: any = { ...form };
 
-      payload.valor_ciclo_lavadora = payload.valor_ciclo_lavadora ? parseMoneyPtBr(String(payload.valor_ciclo_lavadora)) : null;
-      payload.valor_ciclo_secadora = payload.valor_ciclo_secadora ? parseMoneyPtBr(String(payload.valor_ciclo_secadora)) : null;
+      // ⚠️ não manda valor_ciclo_lavadora/secadora (evita duplicidade)
+      payload.valor_ciclo_lavadora = null;
+      payload.valor_ciclo_secadora = null;
+
       payload.cashback_percent = payload.cashback_percent ? Number(payload.cashback_percent) : null;
 
-      // ✅ NOVO: tarifas (repasse)
       payload.agua_valor_m3 = payload.agua_valor_m3 ? parseMoneyPtBr(String(payload.agua_valor_m3)) : null;
       payload.energia_valor_kwh = payload.energia_valor_kwh ? parseMoneyPtBr(String(payload.energia_valor_kwh)) : null;
       payload.gas_valor_m3 = payload.gas_valor_m3 ? parseMoneyPtBr(String(payload.gas_valor_m3)) : null;
@@ -289,10 +287,8 @@ export default function CondominiosPage() {
       if (!r.ok) throw new Error(j?.error || "Erro ao salvar condomínio");
 
       const condominioId: string | undefined = j?.data?.id ?? j?.id ?? j?.condominio?.id ?? j?.data?.[0]?.id;
-
       if (!condominioId) throw new Error("Condomínio salvo, mas não veio o ID na resposta da API (/api/condominios).");
 
-      // 2) salva máquinas do condomínio
       const maquinasPayload = maquinas
         .map((m) => {
           const quantidadeRaw = Number(m.quantidade);
@@ -301,7 +297,7 @@ export default function CondominiosPage() {
           return {
             categoria: m.categoria,
             capacidade_kg: m.capacidade_kg !== null ? Number(m.capacidade_kg) : null,
-            quantidade, // 🔒 GARANTIDO
+            quantidade,
             valor_ciclo: Number(parseMoneyPtBr(m.valor_ciclo_text) || 0),
             limpeza_quimica_ciclos: clampPosInt(Number(m.limpeza_quimica_ciclos), 500),
             limpeza_mecanica_ciclos: clampPosInt(Number(m.limpeza_mecanica_ciclos), 2000),
@@ -311,7 +307,7 @@ export default function CondominiosPage() {
 
       if (!maquinasPayload.length) throw new Error("Informe quantidade de máquinas (mínimo 1).");
 
-      // ✅ FIX DEFINITIVO: endpoint espera { itens: [...] }, não array puro
+      // ✅ padrão: envia {itens:[...]} (backend também aceita array)
       const r2 = await fetch(`/api/condominios/${condominioId}/maquinas`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -453,29 +449,10 @@ export default function CondominiosPage() {
           <div className="small">Financeiro</div>
           <div className="grid2">
             <div>
-              <div className="small">Valor ciclo lavadora (R$)</div>
-              <input
-                className="input"
-                placeholder="ex: 16,50"
-                value={form.valor_ciclo_lavadora}
-                onChange={(e) => setForm({ ...form, valor_ciclo_lavadora: e.target.value })}
-              />
-            </div>
-            <div>
-              <div className="small">Valor ciclo secadora (R$)</div>
-              <input
-                className="input"
-                placeholder="ex: 8,00"
-                value={form.valor_ciclo_secadora}
-                onChange={(e) => setForm({ ...form, valor_ciclo_secadora: e.target.value })}
-              />
-            </div>
-            <div>
               <div className="small">Cashback %</div>
               <input className="input" value={form.cashback_percent} onChange={(e) => setForm({ ...form, cashback_percent: e.target.value })} />
             </div>
 
-            {/* ✅ NOVO: tarifas */}
             <div>
               <div className="small">Água (R$/m³)</div>
               <input className="input" placeholder="ex: 15,00" value={form.agua_valor_m3} onChange={(e) => setForm({ ...form, agua_valor_m3: e.target.value })} />
@@ -498,7 +475,7 @@ export default function CondominiosPage() {
           <div style={{ height: 14 }} />
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
             <div className="small" style={{ fontWeight: 700 }}>
-              Parque de máquinas
+              Parque de máquinas (preço por tipo)
             </div>
             <button className="btn" onClick={addMaquina}>
               + Adicionar tipo
@@ -531,12 +508,16 @@ export default function CondominiosPage() {
                           <input
                             className="input"
                             inputMode="numeric"
+                            placeholder="10 ou 15"
                             value={m.capacidade_kg === null ? "" : String(m.capacidade_kg)}
                             onChange={(e) => {
-                              const raw = e.target.value.replace(/[^\d.]/g, "");
+                              const raw = e.target.value.replace(/[^\d]/g, "");
                               updateMaquina(i, { capacidade_kg: raw === "" ? null : Number(raw) });
                             }}
                           />
+                          <div className="small" style={{ opacity: 0.7, marginTop: 4 }}>
+                            dica: 10 = padrão, 15 = grande
+                          </div>
                         </div>
                         <div style={{ width: 120 }}>
                           <div className="small">Qtd</div>
