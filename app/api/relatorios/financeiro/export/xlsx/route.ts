@@ -1,5 +1,6 @@
 export const runtime = "nodejs";
 
+import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { getUserAndRole } from "@/lib/auth";
 
@@ -11,83 +12,99 @@ function roleGte(role: Role | null, min: Role) {
   return rank[role] >= rank[min];
 }
 
-function money(n: any) {
-  const v = Number(n);
-  return Number.isFinite(v) ? v : 0;
+function bad(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
 }
 
-function pct01(n: any) {
-  // Excel % usa 0.0398 para 3.98%
-  const v = Number(n);
-  if (!Number.isFinite(v)) return null;
-  return v / 100;
+function getBaseUrlFromReq(req: Request) {
+  const host =
+    req.headers.get("x-forwarded-host") ??
+    req.headers.get("host") ??
+    req.headers.get(":authority");
+  const proto = req.headers.get("x-forwarded-proto") ?? "https";
+  if (!host) return null;
+  return `${proto}://${host}`;
 }
 
 export async function GET(req: Request) {
-  const { user, role } = await getUserAndRole();
-  if (!user) return Response.json({ error: "Não autenticado" }, { status: 401 });
-  if (!roleGte((role ?? null) as any, "interno")) {
-    return Response.json({ error: "Sem permissão" }, { status: 403 });
-  }
+  try {
+    const { user, role } = await getUserAndRole();
+    if (!user) return bad("Não autenticado", 401);
+    if (!roleGte(role as any, "interno")) return bad("Sem permissão", 403);
 
-  const url = new URL(req.url);
-  const mes_ref = (url.searchParams.get("mes_ref") ?? "").trim();
-  if (!mes_ref) return Response.json({ error: "Informe mes_ref=YYYY-MM-01" }, { status: 400 });
+    const url = new URL(req.url);
+    const mes_ref = url.searchParams.get("mes_ref") || "";
+    if (!mes_ref) return bad("Parâmetro mes_ref obrigatório (YYYY-MM-01)", 400);
 
-  const origin = new URL(req.url).origin;
-  const relRes = await fetch(`${origin}/api/relatorios/financeiro?mes_ref=${encodeURIComponent(mes_ref)}`, {
-    headers: { cookie: req.headers.get("cookie") ?? "" },
-    cache: "no-store",
-  });
+    const baseUrl = getBaseUrlFromReq(req);
+    if (!baseUrl) return bad("Não foi possível determinar baseUrl", 500);
 
-  if (!relRes.ok) {
-    const j = await relRes.json().catch(() => ({}));
-    return Response.json({ error: (j as any)?.error ?? "Falha ao gerar relatório" }, { status: 400 });
-  }
+    const cookie = req.headers.get("cookie") || "";
 
-  const relJson: any = await relRes.json();
-  const rows = Array.isArray(relJson?.data) ? relJson.data : [];
+    // ✅ Fonte da verdade: JSON base
+    const r = await fetch(
+      `${baseUrl}/api/relatorios/financeiro?mes_ref=${encodeURIComponent(mes_ref)}`,
+      {
+        cache: "no-store",
+        headers: { cookie },
+      }
+    );
 
-  const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet(`Financeiro ${mes_ref}`);
+    if (!r.ok) {
+      const t = await r.text().catch(() => "");
+      return bad(`Falha ao gerar base do relatório (${r.status}). ${t}`, 500);
+    }
 
-  ws.columns = [
-    { header: "Condomínio", key: "condominio", width: 34 },
-    { header: "Pagamento (PIX/Banco)", key: "pagamento", width: 55 },
-    { header: "Repasse (R$)", key: "repasse", width: 14 },
-    { header: "Cashback (R$)", key: "cashback", width: 14 },
-    { header: "Total (R$)", key: "total", width: 14 },
-    { header: "Variação vs mês anterior (%)", key: "variacao_percent", width: 26 },
-  ];
+    const j: any = await r.json();
+    const rows: any[] = Array.isArray(j?.rows) ? j.rows : [];
 
-  ws.getRow(1).font = { bold: true };
+    // ✅ Monta XLSX
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "Meta-Lav";
+    wb.created = new Date();
 
-  for (const r of rows) {
-    ws.addRow({
-      condominio: r.condominio ?? "",
-      pagamento: r.pagamento_texto ?? "",
-      repasse: money(r.repasse),
-      cashback: money(r.cashback),
-      total: money(r.total),
-      variacao_percent: r.variacao_percent == null ? null : pct01(r.variacao_percent),
+    const ws = wb.addWorksheet("Financeiro");
+
+    ws.columns = [
+      { header: "Condomínio", key: "condominio_nome", width: 35 },
+      { header: "Pagamento (PIX/Banco)", key: "pagamento_texto", width: 45 },
+      { header: "Repasse (R$)", key: "repasse", width: 15 },
+      { header: "Cashback (R$)", key: "cashback", width: 15 },
+      { header: "Total (R$)", key: "total", width: 15 },
+      { header: "Variação vs mês anterior (%)", key: "variacao_percent", width: 22 },
+    ];
+
+    ws.getRow(1).font = { bold: true };
+
+    for (const row of rows) {
+      ws.addRow({
+        condominio_nome: String(row?.condominio_nome ?? ""),
+        pagamento_texto: String(row?.pagamento_texto ?? ""),
+        repasse: Number(row?.repasse ?? 0),
+        cashback: Number(row?.cashback ?? 0),
+        total: Number(row?.total ?? 0),
+        variacao_percent: Number(row?.variacao_percent ?? 0),
+      });
+    }
+
+    // Formatos
+    ws.getColumn("repasse").numFmt = '"R$" #,##0.00';
+    ws.getColumn("cashback").numFmt = '"R$" #,##0.00';
+    ws.getColumn("total").numFmt = '"R$" #,##0.00';
+    ws.getColumn("variacao_percent").numFmt = "0.00%";
+
+    const buf = await wb.xlsx.writeBuffer();
+
+    return new Response(buf as any, {
+      status: 200,
+      headers: {
+        "Content-Type":
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="relatorio_financeiro_${mes_ref}.xlsx"`,
+        "Cache-Control": "no-store",
+      },
     });
+  } catch (e: any) {
+    return bad(e?.message ?? "Erro inesperado", 500);
   }
-
-  // formatos
-  for (const col of ["C", "D", "E"]) ws.getColumn(col).numFmt = '"R$" #,##0.00';
-  ws.getColumn("F").numFmt = "0.00%";
-
-  // buffer
-  const buf = await wb.xlsx.writeBuffer();
-  const bytes = Buffer.from(buf);
-  const filename = `relatorio_financeiro_${mes_ref}.xlsx`;
-
-  return new Response(bytes, {
-    status: 200,
-    headers: {
-      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename="${filename}"`,
-      "Cache-Control": "no-store",
-    },
-  });
 }
