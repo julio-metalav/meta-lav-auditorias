@@ -644,11 +644,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const executablePath = await chromium.executablePath();
 
     const browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath,
-      headless: chromium.headless,
-    });
+  args: chromium.args,
+  executablePath,
+  headless: chromium.headless,
+});
+
 
     try {
       const page = await browser.newPage();
