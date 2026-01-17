@@ -26,7 +26,7 @@ function safeNumber(v: any) {
 type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
 type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
-async function fetchImageAsBuffer(url: string, timeoutMs = 30000): Promise<ImageSrcObj | null> {
+async function fetchImageAsBuffer(url: string, timeoutMs = 12000): Promise<ImageSrcObj | null> {
   const u = safeText(url).trim();
   if (!u) return null;
 
@@ -49,8 +49,8 @@ async function fetchImageAsBuffer(url: string, timeoutMs = 30000): Promise<Image
     const ab = await res.arrayBuffer();
     const buf = Buffer.from(ab);
 
-    // Evita PDF gigante por acidente (segurança)
-    if (buf.length > 6 * 1024 * 1024) return null; // > 6MB
+    // segurança pra não gerar PDF gigante
+    if (buf.length > 6 * 1024 * 1024) return null;
 
     return { data: buf, format };
   } catch {
@@ -80,6 +80,21 @@ async function fetchReportJson(req: NextRequest, origin: string, auditoriaId: st
     throw new Error(msg);
   }
   return json?.data ?? null;
+}
+
+async function fetchLogo(origin: string): Promise<ImageSrcObj | null> {
+  // tenta exatamente os nomes que você tem no /public (do seu print)
+  const candidates = [
+    `${origin}/logo.png`,
+    `${origin}/logo.jpg`,
+    `${origin}/${encodeURI("logo Meta Lav.jpg")}`,
+  ];
+
+  for (const url of candidates) {
+    const img = await fetchImageAsBuffer(url, 8000);
+    if (img) return img;
+  }
+  return null;
 }
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -133,8 +148,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const obs = safeText(data?.observacoes || "");
     const observacoes = obs.trim() ? obs : "";
 
-    // LOGO (opcional). Coloque o arquivo em /public/meta-lav-logo.png
-    const logo = await fetchImageAsBuffer(`${origin}/meta-lav-logo.png`, 8000);
+    const logo = await fetchLogo(origin);
 
     const anexosRaw = data?.anexos || {};
     const candidates: Array<{ tipo: string; url: string }> = [
@@ -146,7 +160,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     const anexos: AnexoPdf[] = [];
     for (const c of candidates) {
-      const src = await fetchImageAsBuffer(c.url);
+      const src = await fetchImageAsBuffer(c.url, 20000);
       if (src) anexos.push({ tipo: c.tipo, src, isImagem: true });
       else anexos.push({ tipo: c.tipo, isImagem: false });
     }
