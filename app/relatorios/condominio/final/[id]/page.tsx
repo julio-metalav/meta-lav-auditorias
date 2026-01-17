@@ -14,10 +14,9 @@ type ReportDTO = {
   vendas_por_maquina: {
     itens: Array<{
       maquina: string;
-      tipo: string;
       ciclos: number;
       valor_unitario: number;
-      receita: number;
+      valor_total: number; // ✅ vem do backend
     }>;
     receita_bruta_total: number;
     cashback_percent: number;
@@ -89,7 +88,7 @@ function Table({ children }: { children: any }) {
 
 export default function RelatorioFinalPage() {
   const params = useParams<{ id: string }>();
-  const id = String(params?.id ?? "");
+  const id = String(params?.id ?? "").trim();
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -97,20 +96,39 @@ export default function RelatorioFinalPage() {
 
   useEffect(() => {
     let alive = true;
+
     async function run() {
       setLoading(true);
       setErr(null);
+
       try {
-        const res = await fetch(`/api/relatorios/condominio/final/${id}`, { cache: "no-store" });
+        const res = await fetch(`/api/relatorios/condominio/final/${id}`, {
+          cache: "no-store",
+          credentials: "include", // ✅ força envio de cookie/sessão
+          headers: { Accept: "application/json" },
+        });
+
         const json = await res.json().catch(() => null);
-        if (!res.ok) throw new Error(json?.error ?? "Falha ao carregar relatório.");
-        if (alive) setData(json?.data ?? null);
+
+        if (!res.ok) {
+          const msg =
+            json?.error ??
+            (res.status === 401
+              ? "Sessão expirada ou acesso negado. Faça login novamente."
+              : `Falha ao carregar relatório (HTTP ${res.status}).`);
+          throw new Error(msg);
+        }
+
+        // ✅ seu endpoint retorna { ok: true, data: {...} }
+        const payload = json?.data ?? null;
+        if (alive) setData(payload);
       } catch (e: any) {
         if (alive) setErr(e?.message ?? "Erro inesperado");
       } finally {
         if (alive) setLoading(false);
       }
     }
+
     if (id) run();
     return () => {
       alive = false;
@@ -142,7 +160,6 @@ export default function RelatorioFinalPage() {
               <p className="mt-1 text-sm text-zinc-500">Visualização para conferência.</p>
             </div>
 
-            {/* ✅ Botão PDF (dentro do componente, com id válido) */}
             <a
               href={`/api/relatorios/condominio/final/${id}/pdf`}
               target="_blank"
@@ -196,13 +213,12 @@ export default function RelatorioFinalPage() {
 
             {/* 1 VENDAS */}
             <Box>
-              <SectionTitle n="1" title="Vendas por máquina" subtitle="Fechamento de caixa por tipo/capacidade" />
+              <SectionTitle n="1" title="Vendas por máquina" subtitle="Fechamento de caixa por máquina/capacidade" />
 
               <Table>
                 <thead className="bg-zinc-50 text-zinc-600">
                   <tr>
                     <th className="px-4 py-3 text-left font-medium">Máquina</th>
-                    <th className="px-4 py-3 text-left font-medium">Tipo</th>
                     <th className="px-4 py-3 text-right font-medium">Ciclos</th>
                     <th className="px-4 py-3 text-right font-medium">Valor unitário</th>
                     <th className="px-4 py-3 text-right font-medium">Receita</th>
@@ -212,10 +228,9 @@ export default function RelatorioFinalPage() {
                   {data.vendas_por_maquina.itens.map((it, idx) => (
                     <tr key={idx} className="border-t border-zinc-200">
                       <td className="px-4 py-3 text-zinc-900">{it.maquina}</td>
-                      <td className="px-4 py-3 text-zinc-700">{it.tipo}</td>
                       <td className="px-4 py-3 text-right text-zinc-700">{it.ciclos}</td>
                       <td className="px-4 py-3 text-right text-zinc-700">{brl(it.valor_unitario)}</td>
-                      <td className="px-4 py-3 text-right font-medium text-zinc-900">{brl(it.receita)}</td>
+                      <td className="px-4 py-3 text-right font-medium text-zinc-900">{brl(it.valor_total)}</td>
                     </tr>
                   ))}
                 </tbody>
