@@ -43,7 +43,13 @@ const styles = StyleSheet.create({
   secHint: { marginTop: 4, fontSize: 9, color: "#6b7280" },
 
   // table
-  table: { marginTop: 8, borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10, overflow: "hidden" },
+  table: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 10,
+    overflow: "hidden",
+  },
   tr: { flexDirection: "row" },
   thead: { backgroundColor: "#f3f4f6" },
   th: { fontSize: 9, fontWeight: 700, color: "#374151", paddingVertical: 8, paddingHorizontal: 10 },
@@ -139,7 +145,9 @@ export function RelatorioFinalPdf({ data }: { data: DTO }) {
           </View>
 
           <View style={{ marginTop: 10, backgroundColor: "#f3f4f6", borderRadius: 10, padding: 10 }}>
-            <Text style={{ fontSize: 10, fontWeight: 700 }}>Relatório de Prestação de Contas – Lavanderia Compartilhada</Text>
+            <Text style={{ fontSize: 10, fontWeight: 700 }}>
+              Relatório de Prestação de Contas – Lavanderia Compartilhada
+            </Text>
             <Text style={{ marginTop: 3, fontSize: 9, color: "#6b7280" }}>
               Auditoria finalizada. Valores abaixo consolidam vendas, cashback e repasse de consumo.
             </Text>
@@ -163,7 +171,7 @@ export function RelatorioFinalPdf({ data }: { data: DTO }) {
             </View>
 
             {vendas.map((i: any, idx: number) => (
-              <View key={idx} style={[styles.tr, idx === 0 ? null : styles.rowBorder]}>
+              <View key={idx} style={[styles.tr, idx === 0 ? undefined : styles.rowBorder]}>
                 <Text style={[styles.td, { width: "40%" }]}>{i.maquina}</Text>
                 <Text style={[styles.td, styles.right, { width: "15%" }]}>{fmt(i.ciclos)}</Text>
                 <Text style={[styles.td, styles.right, { width: "20%" }]}>{brl(i.valor_unitario)}</Text>
@@ -209,7 +217,7 @@ export function RelatorioFinalPdf({ data }: { data: DTO }) {
             </View>
 
             {consumo.map((c: any, idx: number) => (
-              <View key={idx} style={[styles.tr, idx === 0 ? null : styles.rowBorder]}>
+              <View key={idx} style={[styles.tr, idx === 0 ? undefined : styles.rowBorder]}>
                 <Text style={[styles.td, { width: "18%" }]}>{c.insumo}</Text>
                 <Text style={[styles.td, styles.right, { width: "16%" }]}>{fmt(c.leitura_anterior)}</Text>
                 <Text style={[styles.td, styles.right, { width: "16%" }]}>{fmt(c.leitura_atual)}</Text>
@@ -271,8 +279,8 @@ export function RelatorioFinalPdf({ data }: { data: DTO }) {
         )}
       </Page>
 
-      {/* PAGE 2 — ANEXOS (SEM LINKS, EMBUTIDOS) */}
-      {(anexosImagem.length > 0) && (
+      {/* PAGE 2 — ANEXOS (SEM LINKS, EMBUTIDOS COMO IMAGEM) */}
+      {anexosImagem.length > 0 && (
         <Page size="A4" style={styles.page}>
           <Text style={styles.tiny}>Anexos</Text>
           <Text style={styles.anexosTitle}>Fotos e comprovante (embutidos)</Text>
