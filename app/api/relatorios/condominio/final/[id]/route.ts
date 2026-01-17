@@ -21,11 +21,11 @@ function m(v: any): number {
 }
 
 function tipoPagamento(v: any): TipoPagamento {
-  return String(v ?? "").toLowerCase() === "boleto" ? "boleto" : "direto";
+  return String(v).toLowerCase() === "boleto" ? "boleto" : "direto";
 }
 
 function categoria(v: any) {
-  return String(v ?? "").toLowerCase() === "secadora" ? "Secadora" : "Lavadora";
+  return String(v).toLowerCase() === "secadora" ? "Secadora" : "Lavadora";
 }
 
 function maquinaLabel(cat: any, kg: any) {
@@ -38,14 +38,12 @@ function competencia(iso: any) {
   return `${s.slice(5, 7)}/${s.slice(0, 4)}`;
 }
 
-export async function GET(req: Request, { params }: { params: { id: string } }) {
+export async function GET(_: Request, { params }: { params: { id: string } }) {
   const { user, role } = await getUserAndRole();
   if (!user) return bad("Não autenticado", 401);
   if (!roleGte(role as Role, "interno")) return bad("Sem permissão", 403);
 
-  const auditoriaId = String(params?.id ?? "").trim();
-  if (!auditoriaId) return bad("ID da auditoria ausente", 400);
-
+  const auditoriaId = params.id;
   const admin = supabaseAdmin();
 
   const { data: aud, error } = await admin
@@ -74,7 +72,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
   if (error) return bad(error.message, 500);
   if (!aud) return bad("Auditoria não encontrada", 404);
-  if (String(aud.status ?? "").toLowerCase() !== "final") return bad("Auditoria não finalizada");
+  if (aud.status !== "final") return bad("Auditoria não finalizada");
 
   const { data: condo, error: condoErr } = await admin
     .from("condominios")
@@ -85,58 +83,66 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   if (condoErr) return bad(condoErr.message, 500);
   if (!condo) return bad("Condomínio não encontrado", 404);
 
-  // ✅ Busca ciclos pelo endpoint existente (sem duplicar cálculo)
-  const origin = new URL(req.url).origin;
-  const cookie = req.headers.get("cookie") ?? "";
+  // chama a rota existente de ciclos
+  const origin = new URL((globalThis as any).location?.href ?? "http://localhost").origin;
 
   const ciclosRes = await fetch(`${origin}/api/auditorias/${auditoriaId}/ciclos`, {
+    headers: { "Content-Type": "application/json" },
     cache: "no-store",
-    headers: { cookie },
   });
 
   const ciclosJson = await ciclosRes.json().catch(() => null);
-  if (!ciclosRes.ok) return bad(ciclosJson?.error ?? "Falha ao obter ciclos.", ciclosRes.status || 400);
+  if (!ciclosRes.ok) return bad(ciclosJson?.error ?? "Falha ao obter ciclos", 500);
 
-  const ciclos = ciclosJson?.data;
-  if (!ciclos) return bad("Resposta de ciclos vazia.", 500);
-  if (!Array.isArray(ciclos.itens)) return bad("Resposta de ciclos inválida (itens).", 500);
-  if (!ciclos.totais) return bad("Resposta de ciclos inválida (totais).", 500);
+  const ciclos = ciclosJson?.data ?? ciclosJson; // compat
 
-  const vendas = ciclos.itens.map((i: any) => ({
+  const vendas = (ciclos?.itens ?? []).map((i: any) => ({
     maquina: maquinaLabel(i.categoria, i.capacidade_kg),
-    tipo: categoria(i.categoria),
     ciclos: m(i.ciclos),
     valor_unitario: m(i.valor_ciclo),
-    receita: m(i.ciclos) * m(i.valor_ciclo),
+    valor_total: m(i.ciclos) * m(i.valor_ciclo),
   }));
 
-  const consumo: Array<any> = [
+  const aguaUnit = m(condo.agua_valor_m3);
+  const energiaUnit = m(condo.energia_valor_kwh);
+  const gasUnit = m(condo.gas_valor_m3);
+
+  const consumo: any[] = [
     {
       insumo: "Água",
       leitura_anterior: n(aud.agua_leitura_base),
       leitura_atual: n(aud.agua_leitura),
-      consumo: m(ciclos.totais.consumo_agua),
-      valor_total: m(ciclos.totais.consumo_agua) * m(condo.agua_valor_m3),
+      consumo: m(ciclos?.totais?.consumo_agua),
+      valor_unitario: aguaUnit,
+      valor_total: m(ciclos?.totais?.consumo_agua) * aguaUnit,
     },
     {
       insumo: "Energia",
       leitura_anterior: n(aud.energia_leitura_base),
       leitura_atual: n(aud.energia_leitura),
-      consumo: m(ciclos.totais.consumo_energia),
-      valor_total: m(ciclos.totais.consumo_energia) * m(condo.energia_valor_kwh),
+      consumo: m(ciclos?.totais?.consumo_energia),
+      valor_unitario: energiaUnit,
+      valor_total: m(ciclos?.totais?.consumo_energia) * energiaUnit,
     },
   ];
 
-  const consumoGas = m(ciclos.totais.consumo_gas);
-  if (consumoGas > 0) {
+  // ✅ gás entra se existir "valor de gás" cadastrado no condomínio
+  if (gasUnit > 0) {
     consumo.push({
       insumo: "Gás",
       leitura_anterior: n(aud.gas_leitura_base),
       leitura_atual: n(aud.gas_leitura),
-      consumo: consumoGas,
-      valor_total: consumoGas * m(condo.gas_valor_m3),
+      consumo: m(ciclos?.totais?.consumo_gas),
+      valor_unitario: gasUnit,
+      valor_total: m(ciclos?.totais?.consumo_gas) * gasUnit,
     });
   }
+
+  const receitaBruta = m(ciclos?.totais?.receita_bruta);
+  const cashbackPercent = m(condo.cashback_percent);
+  const totalCashback = m(ciclos?.totais?.total_cashback);
+  const totalRepasse = m(ciclos?.totais?.total_repasse);
+  const totalAPagar = m(ciclos?.totais?.total_a_pagar);
 
   return NextResponse.json({
     ok: true,
@@ -147,28 +153,35 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         competencia: competencia(aud.mes_ref),
         gerado_em: new Date().toISOString(),
       },
+
       vendas_por_maquina: {
         itens: vendas,
-        receita_bruta_total: m(ciclos.totais.receita_bruta),
-        cashback_percent: m(condo.cashback_percent),
-        valor_cashback: m(ciclos.totais.total_cashback),
+        receita_bruta_total: receitaBruta,
+        cashback_percent: cashbackPercent,
+        valor_cashback: totalCashback,
       },
+
       consumo_insumos: {
         itens: consumo,
-        total_repasse_consumo: m(ciclos.totais.total_repasse),
+        total_repasse_consumo: totalRepasse,
       },
+
       totalizacao_final: {
-        cashback: m(ciclos.totais.total_cashback),
-        repasse_consumo: m(ciclos.totais.total_repasse),
-        total_a_pagar_condominio: m(ciclos.totais.total_a_pagar),
+        cashback: totalCashback,
+        repasse_consumo: totalRepasse,
+        total_a_pagar_condominio: totalAPagar,
       },
+
       observacoes: aud.fechamento_obs,
+
       anexos: {
         foto_agua_url: aud.foto_agua_url,
         foto_energia_url: aud.foto_energia_url,
-        foto_gas_url: aud.foto_gas_url,
+        foto_gas_url: gasUnit > 0 ? aud.foto_gas_url : null,
         comprovante_fechamento_url:
-          tipoPagamento(condo.tipo_pagamento) === "direto" ? aud.comprovante_fechamento_url : null,
+          tipoPagamento(condo.tipo_pagamento) === "direto"
+            ? aud.comprovante_fechamento_url
+            : null,
       },
     },
   });
