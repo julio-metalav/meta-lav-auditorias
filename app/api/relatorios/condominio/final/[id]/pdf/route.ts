@@ -26,7 +26,10 @@ function safeNumber(v: any) {
 type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
 type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
-async function fetchImageAsBuffer(url: string, timeoutMs = 12000): Promise<ImageSrcObj | null> {
+async function fetchImageAsBuffer(
+  url: string,
+  timeoutMs = 12000
+): Promise<ImageSrcObj | null> {
   const u = safeText(url).trim();
   if (!u) return null;
 
@@ -49,7 +52,7 @@ async function fetchImageAsBuffer(url: string, timeoutMs = 12000): Promise<Image
     const ab = await res.arrayBuffer();
     const buf = Buffer.from(ab);
 
-    // segurança pra não gerar PDF gigante
+    // segurança: evita PDF gigante
     if (buf.length > 6 * 1024 * 1024) return null;
 
     return { data: buf, format };
@@ -66,46 +69,55 @@ function getOrigin(req: NextRequest) {
   return `${proto}://${host}`;
 }
 
-async function fetchReportJson(req: NextRequest, origin: string, auditoriaId: string) {
+async function fetchReportJson(
+  req: NextRequest,
+  origin: string,
+  auditoriaId: string
+) {
   const cookie = req.headers.get("cookie") || "";
 
-  const res = await fetch(`${origin}/api/relatorios/condominio/final/${auditoriaId}`, {
-    cache: "no-store",
-    headers: { "Content-Type": "application/json", cookie },
-  });
+  const res = await fetch(
+    `${origin}/api/relatorios/condominio/final/${auditoriaId}`,
+    {
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", cookie },
+    }
+  );
 
   const json = await res.json().catch(() => null);
   if (!res.ok) {
-    const msg = json?.error ? safeText(json.error) : "Falha ao obter dados do relatório.";
+    const msg = json?.error
+      ? safeText(json.error)
+      : "Falha ao obter dados do relatório.";
     throw new Error(msg);
   }
   return json?.data ?? null;
 }
 
+/**
+ * LOGO OFICIAL
+ * Precisa existir em: /public/logo.png
+ */
 async function fetchLogo(origin: string): Promise<ImageSrcObj | null> {
   const url = `${origin}/logo.png`;
 
   const img = await fetchImageAsBuffer(url, 8000);
   if (!img) {
-    console.error("LOGO NÃO ENCONTRADA:", url);
+    console.error("LOGO NAO ENCONTRADA:", url);
     return null;
   }
 
   return img;
 }
 
-
-  for (const url of candidates) {
-    const img = await fetchImageAsBuffer(url, 8000);
-    if (img) return img;
-  }
-  return null;
-}
-
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
   const { user, role } = await getUserAndRole();
   if (!user) return bad("Não autenticado", 401);
-  if (!roleGte(role as Role, "interno")) return bad("Sem permissão", 403);
+  if (!roleGte(role as Role, "interno"))
+    return bad("Sem permissão", 403);
 
   const auditoriaId = safeText(params?.id);
   if (!auditoriaId) return bad("ID inválido", 400);
@@ -130,9 +142,15 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       : [];
 
     const kpis = {
-      receita_bruta: safeNumber(data?.vendas_por_maquina?.receita_bruta_total),
-      cashback_percentual: safeNumber(data?.vendas_por_maquina?.cashback_percent),
-      cashback_valor: safeNumber(data?.vendas_por_maquina?.valor_cashback),
+      receita_bruta: safeNumber(
+        data?.vendas_por_maquina?.receita_bruta_total
+      ),
+      cashback_percentual: safeNumber(
+        data?.vendas_por_maquina?.cashback_percent
+      ),
+      cashback_valor: safeNumber(
+        data?.vendas_por_maquina?.valor_cashback
+      ),
     };
 
     const consumos = Array.isArray(data?.consumo_insumos?.itens)
@@ -146,9 +164,15 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         }))
       : [];
 
-    const total_consumo = safeNumber(data?.consumo_insumos?.total_repasse_consumo);
-    const total_cashback = safeNumber(data?.totalizacao_final?.cashback);
-    const total_pagar = safeNumber(data?.totalizacao_final?.total_a_pagar_condominio);
+    const total_consumo = safeNumber(
+      data?.consumo_insumos?.total_repasse_consumo
+    );
+    const total_cashback = safeNumber(
+      data?.totalizacao_final?.cashback
+    );
+    const total_pagar = safeNumber(
+      data?.totalizacao_final?.total_a_pagar_condominio
+    );
 
     const obs = safeText(data?.observacoes || "");
     const observacoes = obs.trim() ? obs : "";
@@ -157,10 +181,22 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     const anexosRaw = data?.anexos || {};
     const candidates: Array<{ tipo: string; url: string }> = [
-      { tipo: "Foto do medidor de Água", url: safeText(anexosRaw?.foto_agua_url) },
-      { tipo: "Foto do medidor de Energia", url: safeText(anexosRaw?.foto_energia_url) },
-      { tipo: "Foto do medidor de Gás", url: safeText(anexosRaw?.foto_gas_url) },
-      { tipo: "Comprovante de pagamento", url: safeText(anexosRaw?.comprovante_fechamento_url) },
+      {
+        tipo: "Foto do medidor de Água",
+        url: safeText(anexosRaw?.foto_agua_url),
+      },
+      {
+        tipo: "Foto do medidor de Energia",
+        url: safeText(anexosRaw?.foto_energia_url),
+      },
+      {
+        tipo: "Foto do medidor de Gás",
+        url: safeText(anexosRaw?.foto_gas_url),
+      },
+      {
+        tipo: "Comprovante de pagamento",
+        url: safeText(anexosRaw?.comprovante_fechamento_url),
+      },
     ].filter((x) => x.url);
 
     const anexos: AnexoPdf[] = [];
@@ -196,6 +232,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       },
     });
   } catch (e: any) {
-    return bad(e?.message ? safeText(e.message) : "Erro ao gerar PDF", 500);
+    return bad(
+      e?.message ? safeText(e.message) : "Erro ao gerar PDF",
+      500
+    );
   }
 }
