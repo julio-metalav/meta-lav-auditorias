@@ -1,16 +1,14 @@
 export const runtime = "nodejs";
 
 import React from "react";
-import { NextResponse } from "next/server";
 import { pdf } from "@react-pdf/renderer";
 import { RelatorioFinalPdf } from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
 import { getUserAndRole, roleGte } from "@/lib/auth";
 
 export async function GET(req: Request, { params }: { params: { id: string } }) {
   const { user, role } = await getUserAndRole();
-  if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  if (!roleGte(role, "interno"))
-    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  if (!user) return Response.json({ error: "Não autenticado" }, { status: 401 });
+  if (!roleGte(role, "interno")) return Response.json({ error: "Sem permissão" }, { status: 403 });
 
   const origin = new URL(req.url).origin;
 
@@ -20,16 +18,19 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   });
 
   const json = await res.json().catch(() => null);
-  if (!res.ok) return NextResponse.json(json ?? { error: "Falha ao obter dados" }, { status: res.status });
+  if (!res.ok) return Response.json(json ?? { error: "Falha ao obter dados" }, { status: res.status });
 
-  // ✅ Sem JSX em route.ts (evita Syntax Error no build)
   const doc = React.createElement(RelatorioFinalPdf as any, { data: json.data });
-  const buffer = await pdf(doc as any).toBuffer();
 
-  return new NextResponse(buffer, {
+  // Buffer (Node) -> Uint8Array (web BodyInit ok)
+  const buf = await pdf(doc as any).toBuffer();
+  const bytes = new Uint8Array(buf);
+
+  return new Response(bytes, {
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `inline; filename="relatorio-${params.id}.pdf"`,
+      "Cache-Control": "no-store",
     },
   });
 }
