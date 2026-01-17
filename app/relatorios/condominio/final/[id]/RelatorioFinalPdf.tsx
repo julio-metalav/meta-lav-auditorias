@@ -8,11 +8,10 @@ import {
 } from "@react-pdf/renderer";
 
 /**
- * Observação:
- * - NÃO usar null em style[]
- * - Layout fechado conforme especificação
- * - Nenhum link externo
- * - Gás só aparece se existir
+ * PDF FINAL – Meta Lav
+ * - Nenhum null ou undefined em styles
+ * - Layout fechado
+ * - Tipagem compatível com react-pdf
  */
 
 type VendaMaquina = {
@@ -38,92 +37,98 @@ type Anexo = {
 };
 
 type Props = {
-  condominio: {
-    nome: string;
-  };
+  condominio: { nome: string };
   periodo: string;
-
   vendas: VendaMaquina[];
-
   kpis: {
     receita_bruta: number;
     cashback_percentual: number;
     cashback_valor: number;
   };
-
   consumos: ConsumoItem[];
   total_consumo: number;
-
   total_cashback: number;
   total_pagar: number;
-
   observacoes?: string;
-
   anexos: Anexo[];
 };
 
-export default function RelatorioFinalPdf({
-  condominio,
-  periodo,
-  vendas,
-  kpis,
-  consumos,
-  total_consumo,
-  total_cashback,
-  total_pagar,
-  observacoes,
-  anexos,
-}: Props) {
+export default function RelatorioFinalPdf(props: Props) {
+  const {
+    condominio,
+    periodo,
+    vendas,
+    kpis,
+    consumos,
+    total_consumo,
+    total_cashback,
+    total_pagar,
+    observacoes,
+    anexos,
+  } = props;
+
   return (
     <Document>
       {/* ===================== PÁGINA 1 ===================== */}
       <Page size="A4" style={styles.page}>
         <Text style={styles.title}>Relatório Mensal – Meta Lav</Text>
         <Text style={styles.subtitle}>
-          Condomínio: {condominio.nome} {"\n"}
+          Condomínio: {condominio.nome}{"\n"}
           Período: {periodo}
         </Text>
 
-        {/* ===================== VENDAS POR MÁQUINA ===================== */}
+        {/* VENDAS */}
         <Section title="Vendas por Máquina">
           <Text style={styles.helper}>
             Máquina — Qtde de ciclos — Valor unitário — Valor total
           </Text>
 
           <Table>
-            <TableHeader
+            <HeaderRow
               cols={["Máquina", "Ciclos", "Valor unitário", "Valor total"]}
             />
 
-            {vendas.map((v, idx) => (
-              <TableRow
-                key={idx}
-                values={[
-                  v.maquina,
-                  v.ciclos.toString(),
-                  money(v.valor_unitario),
-                  money(v.valor_total),
-                ]}
-                withBorder={idx > 0}
-              />
-            ))}
+            {vendas.map((v, i) =>
+              i === 0 ? (
+                <Row
+                  key={i}
+                  values={[
+                    v.maquina,
+                    v.ciclos.toString(),
+                    money(v.valor_unitario),
+                    money(v.valor_total),
+                  ]}
+                />
+              ) : (
+                <RowWithBorder
+                  key={i}
+                  values={[
+                    v.maquina,
+                    v.ciclos.toString(),
+                    money(v.valor_unitario),
+                    money(v.valor_total),
+                  ]}
+                />
+              )
+            )}
           </Table>
 
-          <KpiLine label="Receita Bruta Total" value={money(kpis.receita_bruta)} />
-          <KpiLine
+          <Kpi label="Receita Bruta Total" value={money(kpis.receita_bruta)} />
+          <Kpi
             label={`Cashback (${kpis.cashback_percentual}%)`}
             value={money(kpis.cashback_valor)}
           />
         </Section>
 
-        {/* ===================== CONSUMO ===================== */}
+        {/* CONSUMO */}
         <Section title="Consumo de Insumos">
           <Text style={styles.helper}>
-            Insumo — Medição anterior — Medição atual — Consumo — Valor unitário — Valor total
+            Insumo — Medição anterior — Medição atual — Consumo — Valor unitário —
+            Valor total
           </Text>
 
           <Table>
-            <TableHeader
+            <HeaderRow
               cols={[
                 "Insumo",
                 "Anterior",
@@ -134,62 +139,75 @@ export default function RelatorioFinalPdf({
               ]}
             />
 
-            {consumos.map((c, idx) => (
-              <TableRow
-                key={idx}
-                values={[
-                  c.nome,
-                  c.anterior.toString(),
-                  c.atual.toString(),
-                  c.consumo.toString(),
-                  money(c.valor_unitario),
-                  money(c.valor_total),
-                ]}
-                withBorder={idx > 0}
-              />
-            ))}
+            {consumos.map((c, i) =>
+              i === 0 ? (
+                <Row
+                  key={i}
+                  values={[
+                    c.nome,
+                    c.anterior.toString(),
+                    c.atual.toString(),
+                    c.consumo.toString(),
+                    money(c.valor_unitario),
+                    money(c.valor_total),
+                  ]}
+                />
+              ) : (
+                <RowWithBorder
+                  key={i}
+                  values={[
+                    c.nome,
+                    c.anterior.toString(),
+                    c.atual.toString(),
+                    c.consumo.toString(),
+                    money(c.valor_unitario),
+                    money(c.valor_total),
+                  ]}
+                />
+              )
+            )}
           </Table>
 
-          <KpiLine
+          <Kpi
             label="Total do repasse de consumo"
             value={money(total_consumo)}
             bold
           />
         </Section>
 
-        {/* ===================== TOTALIZAÇÃO ===================== */}
+        {/* TOTALIZAÇÃO */}
         <Section title="Totalização Final">
-          <KpiLine label="Cashback" value={money(total_cashback)} />
-          <KpiLine label="Repasse de consumo" value={money(total_consumo)} />
-          <KpiLine
+          <Kpi label="Cashback" value={money(total_cashback)} />
+          <Kpi label="Repasse de consumo" value={money(total_consumo)} />
+          <Kpi
             label="TOTAL A PAGAR AO CONDOMÍNIO"
             value={money(total_pagar)}
             highlight
           />
         </Section>
 
-        {/* ===================== OBSERVAÇÕES ===================== */}
-        {observacoes ? (
+        {/* OBS */}
+        {observacoes && (
           <Section title="Observações">
             <Text style={styles.text}>{observacoes}</Text>
           </Section>
-        ) : null}
+        )}
       </Page>
 
-      {/* ===================== PÁGINA 2 – ANEXOS ===================== */}
+      {/* ===================== PÁGINA 2 ===================== */}
       <Page size="A4" style={styles.page}>
         <Text style={styles.title}>Anexos</Text>
 
         <View style={styles.grid}>
-          {anexos.map((a, idx) =>
+          {anexos.map((a, i) =>
             a.isImagem && a.url ? (
-              <View key={idx} style={styles.imageBox}>
+              <View key={i} style={styles.imageBox}>
                 <Text style={styles.imageLabel}>{a.tipo}</Text>
                 <Image src={a.url} style={styles.image} />
               </View>
             ) : (
-              <Text key={idx} style={styles.notice}>
-                {a.tipo}: anexo não é imagem (não incorporado ao PDF)
+              <Text key={i} style={styles.notice}>
+                {a.tipo}: anexo não é imagem
               </Text>
             )
           )}
@@ -214,7 +232,7 @@ function Table({ children }: any) {
   return <View style={styles.table}>{children}</View>;
 }
 
-function TableHeader({ cols }: { cols: string[] }) {
+function HeaderRow({ cols }: { cols: string[] }) {
   return (
     <View style={[styles.tr, styles.trHeader]}>
       {cols.map((c, i) => (
@@ -226,15 +244,9 @@ function TableHeader({ cols }: { cols: string[] }) {
   );
 }
 
-function TableRow({
-  values,
-  withBorder,
-}: {
-  values: string[];
-  withBorder: boolean;
-}) {
+function Row({ values }: { values: string[] }) {
   return (
-    <View style={[styles.tr, withBorder ? styles.trBorder : undefined]}>
+    <View style={styles.tr}>
       {values.map((v, i) => (
         <Text key={i} style={styles.td}>
           {v}
@@ -244,7 +256,19 @@ function TableRow({
   );
 }
 
-function KpiLine({
+function RowWithBorder({ values }: { values: string[] }) {
+  return (
+    <View style={[styles.tr, styles.trBorder]}>
+      {values.map((v, i) => (
+        <Text key={i} style={styles.td}>
+          {v}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+function Kpi({
   label,
   value,
   bold,
@@ -257,14 +281,12 @@ function KpiLine({
 }) {
   return (
     <View style={styles.kpiLine}>
-      <Text style={[styles.kpiLabel, bold ? styles.bold : undefined]}>
-        {label}
-      </Text>
+      <Text style={[styles.kpiLabel, bold && styles.bold]}>{label}</Text>
       <Text
         style={[
           styles.kpiValue,
-          bold ? styles.bold : undefined,
-          highlight ? styles.highlight : undefined,
+          bold && styles.bold,
+          highlight && styles.highlight,
         ]}
       >
         {value}
@@ -285,106 +307,33 @@ function money(v: number) {
 /* ===================== STYLES ===================== */
 
 const styles = StyleSheet.create({
-  page: {
-    padding: 32,
-    fontSize: 10,
-    fontFamily: "Helvetica",
-  },
-
-  title: {
-    fontSize: 16,
-    fontWeight: "bold",
-    marginBottom: 8,
-  },
-
-  subtitle: {
-    marginBottom: 16,
-  },
-
-  section: {
-    marginBottom: 18,
-  },
-
-  sectionTitle: {
-    fontSize: 12,
-    fontWeight: "bold",
-    marginBottom: 6,
-  },
-
-  helper: {
-    fontSize: 9,
-    marginBottom: 4,
-    color: "#555",
-  },
-
-  table: {
-    borderWidth: 1,
-    borderColor: "#000",
-    marginBottom: 8,
-  },
-
-  tr: {
-    flexDirection: "row",
-  },
-
+  page: { padding: 32, fontSize: 10 },
+  title: { fontSize: 16, fontWeight: "bold", marginBottom: 8 },
+  subtitle: { marginBottom: 16 },
+  section: { marginBottom: 18 },
+  sectionTitle: { fontSize: 12, fontWeight: "bold", marginBottom: 6 },
+  helper: { fontSize: 9, marginBottom: 4, color: "#555" },
+  table: { borderWidth: 1, borderColor: "#000", marginBottom: 8 },
+  tr: { flexDirection: "row" },
   trHeader: {
     backgroundColor: "#eee",
     borderBottomWidth: 1,
     borderColor: "#000",
   },
-
-  trBorder: {
-    borderTopWidth: 1,
-    borderColor: "#000",
-  },
-
-  td: {
-    flex: 1,
-    padding: 4,
-  },
-
-  th: {
-    fontWeight: "bold",
-  },
-
+  trBorder: { borderTopWidth: 1, borderColor: "#000" },
+  td: { flex: 1, padding: 4 },
+  th: { fontWeight: "bold" },
   kpiLine: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginTop: 4,
   },
-
-  kpiLabel: {},
-
-  kpiValue: {},
-
-  bold: {
-    fontWeight: "bold",
-  },
-
-  highlight: {
-    fontSize: 12,
-    fontWeight: "bold",
-  },
-
-  text: {
-    fontSize: 10,
-  },
-
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-  },
-
-  imageBox: {
-    width: "48%",
-    margin: "1%",
-  },
-
-  imageLabel: {
-    fontSize: 9,
-    marginBottom: 2,
-  },
-
+  bold: { fontWeight: "bold" },
+  highlight: { fontSize: 12, fontWeight: "bold" },
+  text: { fontSize: 10 },
+  grid: { flexDirection: "row", flexWrap: "wrap" },
+  imageBox: { width: "48%", margin: "1%" },
+  imageLabel: { fontSize: 9, marginBottom: 2 },
   image: {
     width: "100%",
     height: 200,
@@ -392,9 +341,5 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#000",
   },
-
-  notice: {
-    fontSize: 9,
-    marginBottom: 6,
-  },
+  notice: { fontSize: 9, marginBottom: 6 },
 });
