@@ -1,37 +1,72 @@
 export const runtime = "nodejs";
 
 import React from "react";
+import { NextResponse } from "next/server";
 import { pdf } from "@react-pdf/renderer";
-import { RelatorioFinalPdf } from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
+
+import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
 import { getUserAndRole, roleGte } from "@/lib/auth";
 
-export async function GET(req: Request, { params }: { params: { id: string } }) {
-  const { user, role } = await getUserAndRole();
-  if (!user) return Response.json({ error: "Não autenticado" }, { status: 401 });
-  if (!roleGte(role, "interno")) return Response.json({ error: "Sem permissão" }, { status: 403 });
+/**
+ * Gera o PDF final do relatório do condomínio
+ * - Usa @react-pdf/renderer
+ * - Conversão correta: toBlob() -> ArrayBuffer -> Uint8Array
+ * - Não altera regras de negócio
+ */
 
-  const origin = new URL(req.url).origin;
+type Role = "auditor" | "interno" | "gestor";
 
-  const res = await fetch(`${origin}/api/relatorios/condominio/final/${params.id}`, {
-    headers: { cookie: req.headers.get("cookie") ?? "" },
-    cache: "no-store",
+export async function GET(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  const { supabase, user, role } = await getUserAndRole();
+
+  if (!user) {
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  }
+
+  if (!roleGte(role as Role, "interno")) {
+    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  }
+
+  const auditoriaId = params.id;
+
+  /**
+   * Busca o JSON consolidado do relatório final
+   * (já validado e funcionando)
+   */
+  const baseUrl = new URL(req.url).origin;
+  const jsonUrl = `${baseUrl}/api/relatorios/condominio/final/${auditoriaId}`;
+
+  const jsonResp = await fetch(jsonUrl, {
+    headers: {
+      cookie: req.headers.get("cookie") ?? "",
+    },
   });
 
-  const json = await res.json().catch(() => null);
-  if (!res.ok) return Response.json(json ?? { error: "Falha ao obter dados" }, { status: res.status });
+  if (!jsonResp.ok) {
+    return NextResponse.json(
+      { error: "Erro ao buscar dados do relatório" },
+      { status: 500 }
+    );
+  }
 
-  const doc = React.createElement(RelatorioFinalPdf as any, { data: json.data });
+  const data = await jsonResp.json();
 
-  // ✅ web-safe: Blob -> ArrayBuffer -> Uint8Array
-  const blob = await pdf(doc as any).toBlob();
-  const ab = await blob.arrayBuffer();
-  const bytes = new Uint8Array(ab);
+  /**
+   * Geração do PDF
+   */
+  const doc = <RelatorioFinalPdf {...data} />;
 
-  return new Response(bytes, {
+  const blob = await pdf(doc).toBlob();
+  const arrayBuffer = await blob.arrayBuffer();
+  const uint8 = new Uint8Array(arrayBuffer);
+
+  return new NextResponse(uint8, {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `inline; filename="relatorio-${params.id}.pdf"`,
-      "Cache-Control": "no-store",
+      "Content-Disposition": `inline; filename="relatorio-condominio-${auditoriaId}.pdf"`,
     },
   });
 }
