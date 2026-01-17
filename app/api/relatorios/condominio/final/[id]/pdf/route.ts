@@ -22,9 +22,10 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
   const doc = React.createElement(RelatorioFinalPdf as any, { data: json.data });
 
-  // Buffer (Node) -> Uint8Array (web BodyInit ok)
-  const buf = await pdf(doc as any).toBuffer();
-  const bytes = new Uint8Array(buf);
+  // ✅ web-safe: Blob -> ArrayBuffer -> Uint8Array
+  const blob = await pdf(doc as any).toBlob();
+  const ab = await blob.arrayBuffer();
+  const bytes = new Uint8Array(ab);
 
   return new Response(bytes, {
     headers: {
