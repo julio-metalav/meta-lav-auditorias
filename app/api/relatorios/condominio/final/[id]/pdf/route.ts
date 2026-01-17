@@ -50,7 +50,6 @@ async function fetchImageAsBuffer(url: string, timeoutMs = 30000): Promise<Image
     const buf = Buffer.from(ab);
 
     // Evita PDF gigante por acidente (segurança)
-    // Se quiser, dá pra ajustar o limite depois.
     if (buf.length > 6 * 1024 * 1024) return null; // > 6MB
 
     return { data: buf, format };
@@ -61,11 +60,13 @@ async function fetchImageAsBuffer(url: string, timeoutMs = 30000): Promise<Image
   }
 }
 
-async function fetchReportJson(req: NextRequest, auditoriaId: string) {
+function getOrigin(req: NextRequest) {
   const host = req.headers.get("host") || "";
   const proto = req.headers.get("x-forwarded-proto") || "https";
-  const origin = `${proto}://${host}`;
+  return `${proto}://${host}`;
+}
 
+async function fetchReportJson(req: NextRequest, origin: string, auditoriaId: string) {
   const cookie = req.headers.get("cookie") || "";
 
   const res = await fetch(`${origin}/api/relatorios/condominio/final/${auditoriaId}`, {
@@ -89,12 +90,15 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const auditoriaId = safeText(params?.id);
   if (!auditoriaId) return bad("ID inválido", 400);
 
+  const origin = getOrigin(req);
+
   try {
-    const data = await fetchReportJson(req, auditoriaId);
+    const data = await fetchReportJson(req, origin, auditoriaId);
     if (!data) return bad("Relatório sem dados", 404);
 
     const condominioNome = safeText(data?.meta?.condominio_nome);
     const periodo = safeText(data?.meta?.competencia);
+    const geradoEm = safeText(data?.meta?.gerado_em);
 
     const vendas = Array.isArray(data?.vendas_por_maquina?.itens)
       ? data.vendas_por_maquina.itens.map((v: any) => ({
@@ -127,7 +131,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const total_pagar = safeNumber(data?.totalizacao_final?.total_a_pagar_condominio);
 
     const obs = safeText(data?.observacoes || "");
-    const observacoes = obs.trim() ? obs : undefined;
+    const observacoes = obs.trim() ? obs : "";
+
+    // LOGO (opcional). Coloque o arquivo em /public/meta-lav-logo.png
+    const logo = await fetchImageAsBuffer(`${origin}/meta-lav-logo.png`, 8000);
 
     const anexosRaw = data?.anexos || {};
     const candidates: Array<{ tipo: string; url: string }> = [
@@ -145,8 +152,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     }
 
     const doc = React.createElement(RelatorioFinalPdf as any, {
+      logo,
       condominio: { nome: condominioNome },
       periodo,
+      gerado_em: geradoEm,
       vendas,
       kpis,
       consumos,
