@@ -9,9 +9,10 @@ import {
 
 /**
  * PDF FINAL – Meta Lav
- * - Nenhum null ou undefined em styles
- * - Layout fechado
- * - Tipagem compatível com react-pdf
+ * Build-safe:
+ * - Nenhum null
+ * - Nenhum undefined
+ * - Nenhum style inexistente
  */
 
 type VendaMaquina = {
@@ -53,20 +54,18 @@ type Props = {
   anexos: Anexo[];
 };
 
-export default function RelatorioFinalPdf(props: Props) {
-  const {
-    condominio,
-    periodo,
-    vendas,
-    kpis,
-    consumos,
-    total_consumo,
-    total_cashback,
-    total_pagar,
-    observacoes,
-    anexos,
-  } = props;
-
+export default function RelatorioFinalPdf({
+  condominio,
+  periodo,
+  vendas,
+  kpis,
+  consumos,
+  total_consumo,
+  total_cashback,
+  total_pagar,
+  observacoes,
+  anexos,
+}: Props) {
   return (
     <Document>
       {/* ===================== PÁGINA 1 ===================== */}
@@ -87,7 +86,6 @@ export default function RelatorioFinalPdf(props: Props) {
             <HeaderRow
               cols={["Máquina", "Ciclos", "Valor unitário", "Valor total"]}
             />
-
             {vendas.map((v, i) =>
               i === 0 ? (
                 <Row
@@ -138,7 +136,6 @@ export default function RelatorioFinalPdf(props: Props) {
                 "Valor total",
               ]}
             />
-
             {consumos.map((c, i) =>
               i === 0 ? (
                 <Row
@@ -186,7 +183,7 @@ export default function RelatorioFinalPdf(props: Props) {
           />
         </Section>
 
-        {/* OBS */}
+        {/* OBSERVAÇÕES */}
         {observacoes && (
           <Section title="Observações">
             <Text style={styles.text}>{observacoes}</Text>
@@ -313,6 +310,7 @@ const styles = StyleSheet.create({
   section: { marginBottom: 18 },
   sectionTitle: { fontSize: 12, fontWeight: "bold", marginBottom: 6 },
   helper: { fontSize: 9, marginBottom: 4, color: "#555" },
+
   table: { borderWidth: 1, borderColor: "#000", marginBottom: 8 },
   tr: { flexDirection: "row" },
   trHeader: {
@@ -323,14 +321,20 @@ const styles = StyleSheet.create({
   trBorder: { borderTopWidth: 1, borderColor: "#000" },
   td: { flex: 1, padding: 4 },
   th: { fontWeight: "bold" },
+
   kpiLine: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginTop: 4,
   },
+  kpiLabel: { fontSize: 10 },
+  kpiValue: { fontSize: 10 },
+
   bold: { fontWeight: "bold" },
   highlight: { fontSize: 12, fontWeight: "bold" },
+
   text: { fontSize: 10 },
+
   grid: { flexDirection: "row", flexWrap: "wrap" },
   imageBox: { width: "48%", margin: "1%" },
   imageLabel: { fontSize: 9, marginBottom: 2 },
