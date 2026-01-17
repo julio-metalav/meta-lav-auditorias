@@ -8,11 +8,12 @@ import {
 } from "@react-pdf/renderer";
 
 /**
- * PDF FINAL – Meta Lav
- * Build-safe:
+ * RELATÓRIO FINAL – META LAV
+ * Build-safe definitivo:
  * - Nenhum null
  * - Nenhum undefined
- * - Nenhum style inexistente
+ * - Nenhum boolean em style[]
+ * - Tipagem 100% compatível com react-pdf
  */
 
 type VendaMaquina = {
@@ -111,8 +112,11 @@ export default function RelatorioFinalPdf({
             )}
           </Table>
 
-          <Kpi label="Receita Bruta Total" value={money(kpis.receita_bruta)} />
-          <Kpi
+          <KpiNormal
+            label="Receita Bruta Total"
+            value={money(kpis.receita_bruta)}
+          />
+          <KpiNormal
             label={`Cashback (${kpis.cashback_percentual}%)`}
             value={money(kpis.cashback_valor)}
           />
@@ -165,21 +169,19 @@ export default function RelatorioFinalPdf({
             )}
           </Table>
 
-          <Kpi
+          <KpiBold
             label="Total do repasse de consumo"
             value={money(total_consumo)}
-            bold
           />
         </Section>
 
         {/* TOTALIZAÇÃO */}
         <Section title="Totalização Final">
-          <Kpi label="Cashback" value={money(total_cashback)} />
-          <Kpi label="Repasse de consumo" value={money(total_consumo)} />
-          <Kpi
+          <KpiNormal label="Cashback" value={money(total_cashback)} />
+          <KpiNormal label="Repasse de consumo" value={money(total_consumo)} />
+          <KpiHighlight
             label="TOTAL A PAGAR AO CONDOMÍNIO"
             value={money(total_pagar)}
-            highlight
           />
         </Section>
 
@@ -265,29 +267,31 @@ function RowWithBorder({ values }: { values: string[] }) {
   );
 }
 
-function Kpi({
-  label,
-  value,
-  bold,
-  highlight,
-}: {
-  label: string;
-  value: string;
-  bold?: boolean;
-  highlight?: boolean;
-}) {
+/* ===================== KPI (SEM CONDICIONAIS) ===================== */
+
+function KpiNormal({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.kpiLine}>
-      <Text style={[styles.kpiLabel, bold && styles.bold]}>{label}</Text>
-      <Text
-        style={[
-          styles.kpiValue,
-          bold && styles.bold,
-          highlight && styles.highlight,
-        ]}
-      >
-        {value}
-      </Text>
+      <Text style={styles.kpiLabel}>{label}</Text>
+      <Text style={styles.kpiValue}>{value}</Text>
+    </View>
+  );
+}
+
+function KpiBold({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.kpiLine}>
+      <Text style={styles.kpiLabelBold}>{label}</Text>
+      <Text style={styles.kpiValueBold}>{value}</Text>
+    </View>
+  );
+}
+
+function KpiHighlight({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.kpiLine}>
+      <Text style={styles.kpiLabelHighlight}>{label}</Text>
+      <Text style={styles.kpiValueHighlight}>{value}</Text>
     </View>
   );
 }
@@ -307,6 +311,7 @@ const styles = StyleSheet.create({
   page: { padding: 32, fontSize: 10 },
   title: { fontSize: 16, fontWeight: "bold", marginBottom: 8 },
   subtitle: { marginBottom: 16 },
+
   section: { marginBottom: 18 },
   sectionTitle: { fontSize: 12, fontWeight: "bold", marginBottom: 6 },
   helper: { fontSize: 9, marginBottom: 4, color: "#555" },
@@ -329,9 +334,10 @@ const styles = StyleSheet.create({
   },
   kpiLabel: { fontSize: 10 },
   kpiValue: { fontSize: 10 },
-
-  bold: { fontWeight: "bold" },
-  highlight: { fontSize: 12, fontWeight: "bold" },
+  kpiLabelBold: { fontSize: 10, fontWeight: "bold" },
+  kpiValueBold: { fontSize: 10, fontWeight: "bold" },
+  kpiLabelHighlight: { fontSize: 12, fontWeight: "bold" },
+  kpiValueHighlight: { fontSize: 12, fontWeight: "bold" },
 
   text: { fontSize: 10 },
 
