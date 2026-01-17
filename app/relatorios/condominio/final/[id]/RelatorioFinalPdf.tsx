@@ -14,6 +14,13 @@ import {
  * - Nenhum undefined
  * - Nenhum boolean em style[]
  * - Tipagem 100% compatível com react-pdf
+ *
+ * V1 VISUAL (corporativo):
+ * - Hierarquia de títulos
+ * - Espaçamento e cards
+ * - Tabelas mais limpas
+ * - TOTAL A PAGAR destacado
+ * - Anexos organizados em grid
  */
 
 type VendaMaquina = {
@@ -71,26 +78,53 @@ export default function RelatorioFinalPdf({
     <Document>
       {/* ===================== PÁGINA 1 ===================== */}
       <Page size="A4" style={styles.page}>
-        <Text style={styles.title}>Relatório Mensal – Meta Lav</Text>
-        <Text style={styles.subtitle}>
-          Condomínio: {condominio.nome}{"\n"}
-          Período: {periodo}
-        </Text>
+        {/* Header corporativo */}
+        <View style={styles.headerBar}>
+          <View style={styles.headerLeft}>
+            <Text style={styles.brand}>META LAV</Text>
+            <Text style={styles.headerTitle}>
+              Prestação de Contas — Lavanderia Compartilhada
+            </Text>
+          </View>
+          <View style={styles.headerRight}>
+            <Text style={styles.headerMetaLabel}>Competência</Text>
+            <Text style={styles.headerMetaValue}>{periodo}</Text>
+          </View>
+        </View>
+
+        <View style={styles.headerCard}>
+          <View style={styles.headerCardRow}>
+            <View style={styles.headerCardCol}>
+              <Text style={styles.labelMuted}>Condomínio</Text>
+              <Text style={styles.valueStrong}>{condominio.nome}</Text>
+            </View>
+
+            <View style={styles.headerCardColRight}>
+              <Text style={styles.labelMuted}>Gerado em</Text>
+              <Text style={styles.valueMuted}>{formatNowPtBr()}</Text>
+            </View>
+          </View>
+
+          <View style={styles.headerNote}>
+            <Text style={styles.headerNoteTitle}>
+              Relatório final de auditoria
+            </Text>
+            <Text style={styles.headerNoteText}>
+              Valores consolidados de vendas, cashback e repasse de consumo.
+              Documento para conferência e arquivamento.
+            </Text>
+          </View>
+        </View>
 
         {/* VENDAS */}
-        <Section title="Vendas por Máquina">
-          <Text style={styles.helper}>
-            Máquina — Qtde de ciclos — Valor unitário — Valor total
-          </Text>
-
+        <Section n="1" title="Vendas por máquina" subtitle="Fechamento por capacidade e tipo de máquina">
           <Table>
-            <HeaderRow
-              cols={["Máquina", "Ciclos", "Valor unitário", "Valor total"]}
-            />
+            <HeaderRow cols={["Máquina", "Ciclos", "Valor unitário", "Receita"]} />
             {vendas.map((v, i) =>
               i === 0 ? (
                 <Row
                   key={i}
+                  right={[false, true, true, true]}
                   values={[
                     v.maquina,
                     v.ciclos.toString(),
@@ -101,6 +135,7 @@ export default function RelatorioFinalPdf({
               ) : (
                 <RowWithBorder
                   key={i}
+                  right={[false, true, true, true]}
                   values={[
                     v.maquina,
                     v.ciclos.toString(),
@@ -112,23 +147,28 @@ export default function RelatorioFinalPdf({
             )}
           </Table>
 
-          <KpiNormal
-            label="Receita Bruta Total"
-            value={money(kpis.receita_bruta)}
-          />
-          <KpiNormal
-            label={`Cashback (${kpis.cashback_percentual}%)`}
-            value={money(kpis.cashback_valor)}
-          />
+          <View style={styles.kpiGrid}>
+            <KpiCard
+              label="Receita bruta total"
+              value={money(kpis.receita_bruta)}
+            />
+            <KpiCard
+              label="Cashback"
+              value={`${kpis.cashback_percentual}%`}
+            />
+            <KpiCard
+              label="Valor do cashback"
+              value={money(kpis.cashback_valor)}
+            />
+          </View>
         </Section>
 
         {/* CONSUMO */}
-        <Section title="Consumo de Insumos">
-          <Text style={styles.helper}>
-            Insumo — Medição anterior — Medição atual — Consumo — Valor unitário —
-            Valor total
-          </Text>
-
+        <Section
+          n="2"
+          title="Consumo de insumos"
+          subtitle="Leituras, consumo e repasse"
+        >
           <Table>
             <HeaderRow
               cols={[
@@ -137,13 +177,14 @@ export default function RelatorioFinalPdf({
                 "Atual",
                 "Consumo",
                 "Valor unit.",
-                "Valor total",
+                "Repasse",
               ]}
             />
             {consumos.map((c, i) =>
               i === 0 ? (
                 <Row
                   key={i}
+                  right={[false, true, true, true, true, true]}
                   values={[
                     c.nome,
                     c.anterior.toString(),
@@ -156,6 +197,7 @@ export default function RelatorioFinalPdf({
               ) : (
                 <RowWithBorder
                   key={i}
+                  right={[false, true, true, true, true, true]}
                   values={[
                     c.nome,
                     c.anterior.toString(),
@@ -169,48 +211,84 @@ export default function RelatorioFinalPdf({
             )}
           </Table>
 
-          <KpiBold
-            label="Total do repasse de consumo"
-            value={money(total_consumo)}
-          />
+          <View style={styles.kpiLineWrap}>
+            <Text style={styles.kpiLabelBold}>Total do repasse de consumo</Text>
+            <Text style={styles.kpiValueBold}>{money(total_consumo)}</Text>
+          </View>
         </Section>
 
         {/* TOTALIZAÇÃO */}
-        <Section title="Totalização Final">
-          <KpiNormal label="Cashback" value={money(total_cashback)} />
-          <KpiNormal label="Repasse de consumo" value={money(total_consumo)} />
-          <KpiHighlight
-            label="TOTAL A PAGAR AO CONDOMÍNIO"
-            value={money(total_pagar)}
-          />
+        <Section
+          n="3"
+          title="Totalização final"
+          subtitle="Número principal do relatório"
+        >
+          <View style={styles.totalTable}>
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Cashback</Text>
+              <Text style={styles.totalValue}>{money(total_cashback)}</Text>
+            </View>
+            <View style={styles.totalRowBorder}>
+              <Text style={styles.totalLabel}>Repasse de consumo</Text>
+              <Text style={styles.totalValue}>{money(total_consumo)}</Text>
+            </View>
+          </View>
+
+          <View style={styles.totalHighlight}>
+            <View style={styles.totalHighlightLeft}>
+              <Text style={styles.totalHighlightLabel}>
+                TOTAL A PAGAR AO CONDOMÍNIO
+              </Text>
+              <Text style={styles.totalHighlightHint}>
+                Valor final consolidado
+              </Text>
+            </View>
+            <Text style={styles.totalHighlightValue}>{money(total_pagar)}</Text>
+          </View>
         </Section>
 
         {/* OBSERVAÇÕES */}
-        {observacoes && (
-          <Section title="Observações">
-            <Text style={styles.text}>{observacoes}</Text>
+        {observacoes ? (
+          <Section n="4" title="Observações">
+            <View style={styles.noteBox}>
+              <Text style={styles.text}>{observacoes}</Text>
+            </View>
           </Section>
-        )}
+        ) : null}
+
+        <Footer />
       </Page>
 
       {/* ===================== PÁGINA 2 ===================== */}
       <Page size="A4" style={styles.page}>
-        <Text style={styles.title}>Anexos</Text>
+        <View style={styles.pageTitleWrap}>
+          <Text style={styles.pageTitle}>Anexos</Text>
+          <Text style={styles.pageSubtitle}>
+            Fotos embutidas para auditoria e conferência
+          </Text>
+        </View>
 
         <View style={styles.grid}>
           {anexos.map((a, i) =>
             a.isImagem && a.url ? (
-              <View key={i} style={styles.imageBox}>
+              <View key={i} style={styles.imageCard}>
                 <Text style={styles.imageLabel}>{a.tipo}</Text>
-                <Image src={a.url} style={styles.image} />
+                <View style={styles.imageFrame}>
+                  <Image src={a.url} style={styles.image} />
+                </View>
               </View>
             ) : (
-              <Text key={i} style={styles.notice}>
-                {a.tipo}: anexo não é imagem
-              </Text>
+              <View key={i} style={styles.fileRow}>
+                <Text style={styles.fileDot}>•</Text>
+                <Text style={styles.fileText}>
+                  {a.tipo}: anexo não é imagem
+                </Text>
+              </View>
             )
           )}
         </View>
+
+        <Footer />
       </Page>
     </Document>
   );
@@ -218,11 +296,17 @@ export default function RelatorioFinalPdf({
 
 /* ===================== COMPONENTES ===================== */
 
-function Section({ title, children }: any) {
+function Section({ n, title, subtitle, children }: any) {
   return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {children}
+    <View style={styles.sectionCard}>
+      <View style={styles.sectionHead}>
+        <View style={styles.sectionHeadLeft}>
+          <Text style={styles.sectionNumber}>{n}</Text>
+          <Text style={styles.sectionTitle}>{title}</Text>
+        </View>
+        {subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}
+      </View>
+      <View style={styles.sectionBody}>{children}</View>
     </View>
   );
 }
@@ -243,11 +327,12 @@ function HeaderRow({ cols }: { cols: string[] }) {
   );
 }
 
-function Row({ values }: { values: string[] }) {
+function Row({ values, right }: { values: string[]; right?: boolean[] }) {
+  const flags = right || [];
   return (
     <View style={styles.tr}>
       {values.map((v, i) => (
-        <Text key={i} style={styles.td}>
+        <Text key={i} style={[styles.td, flags[i] ? styles.tdRight : styles.tdLeft]}>
           {v}
         </Text>
       ))}
@@ -255,11 +340,12 @@ function Row({ values }: { values: string[] }) {
   );
 }
 
-function RowWithBorder({ values }: { values: string[] }) {
+function RowWithBorder({ values, right }: { values: string[]; right?: boolean[] }) {
+  const flags = right || [];
   return (
     <View style={[styles.tr, styles.trBorder]}>
       {values.map((v, i) => (
-        <Text key={i} style={styles.td}>
+        <Text key={i} style={[styles.td, flags[i] ? styles.tdRight : styles.tdLeft]}>
           {v}
         </Text>
       ))}
@@ -267,31 +353,20 @@ function RowWithBorder({ values }: { values: string[] }) {
   );
 }
 
-/* ===================== KPI (SEM CONDICIONAIS) ===================== */
-
-function KpiNormal({ label, value }: { label: string; value: string }) {
+function KpiCard({ label, value }: { label: string; value: string }) {
   return (
-    <View style={styles.kpiLine}>
-      <Text style={styles.kpiLabel}>{label}</Text>
-      <Text style={styles.kpiValue}>{value}</Text>
+    <View style={styles.kpiCard}>
+      <Text style={styles.kpiCardLabel}>{label}</Text>
+      <Text style={styles.kpiCardValue}>{value}</Text>
     </View>
   );
 }
 
-function KpiBold({ label, value }: { label: string; value: string }) {
+function Footer() {
   return (
-    <View style={styles.kpiLine}>
-      <Text style={styles.kpiLabelBold}>{label}</Text>
-      <Text style={styles.kpiValueBold}>{value}</Text>
-    </View>
-  );
-}
-
-function KpiHighlight({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.kpiLine}>
-      <Text style={styles.kpiLabelHighlight}>{label}</Text>
-      <Text style={styles.kpiValueHighlight}>{value}</Text>
+    <View style={styles.footer}>
+      <Text style={styles.footerText}>Meta Lav • Prestação de Contas</Text>
+      <Text style={styles.footerText}>Documento gerado automaticamente</Text>
     </View>
   );
 }
@@ -305,51 +380,214 @@ function money(v: number) {
   });
 }
 
+function formatNowPtBr() {
+  // mantém zero risco: sem libs e sem depender de timezone externo
+  try {
+    return new Date().toLocaleString("pt-BR");
+  } catch {
+    return "";
+  }
+}
+
 /* ===================== STYLES ===================== */
 
 const styles = StyleSheet.create({
-  page: { padding: 32, fontSize: 10 },
-  title: { fontSize: 16, fontWeight: "bold", marginBottom: 8 },
-  subtitle: { marginBottom: 16 },
-
-  section: { marginBottom: 18 },
-  sectionTitle: { fontSize: 12, fontWeight: "bold", marginBottom: 6 },
-  helper: { fontSize: 9, marginBottom: 4, color: "#555" },
-
-  table: { borderWidth: 1, borderColor: "#000", marginBottom: 8 },
-  tr: { flexDirection: "row" },
-  trHeader: {
-    backgroundColor: "#eee",
-    borderBottomWidth: 1,
-    borderColor: "#000",
+  page: {
+    paddingTop: 28,
+    paddingBottom: 28,
+    paddingHorizontal: 32,
+    fontSize: 10,
+    color: "#0A0A0A",
   },
-  trBorder: { borderTopWidth: 1, borderColor: "#000" },
-  td: { flex: 1, padding: 4 },
-  th: { fontWeight: "bold" },
 
-  kpiLine: {
+  /* HEADER */
+  headerBar: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginTop: 4,
+    alignItems: "flex-end",
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+    marginBottom: 14,
   },
-  kpiLabel: { fontSize: 10 },
-  kpiValue: { fontSize: 10 },
-  kpiLabelBold: { fontSize: 10, fontWeight: "bold" },
-  kpiValueBold: { fontSize: 10, fontWeight: "bold" },
-  kpiLabelHighlight: { fontSize: 12, fontWeight: "bold" },
-  kpiValueHighlight: { fontSize: 12, fontWeight: "bold" },
+  headerLeft: { flexDirection: "column" },
+  brand: { fontSize: 10, fontWeight: "bold", color: "#111827" },
+  headerTitle: { fontSize: 16, fontWeight: "bold", marginTop: 2, color: "#111827" },
+  headerRight: { flexDirection: "column", alignItems: "flex-end" },
+  headerMetaLabel: { fontSize: 9, color: "#6B7280" },
+  headerMetaValue: { fontSize: 11, fontWeight: "bold", color: "#111827", marginTop: 2 },
 
-  text: { fontSize: 10 },
+  headerCard: {
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 14,
+    backgroundColor: "#FFFFFF",
+  },
+  headerCardRow: { flexDirection: "row", justifyContent: "space-between" },
+  headerCardCol: { flexDirection: "column", flexGrow: 1 },
+  headerCardColRight: { flexDirection: "column", alignItems: "flex-end" },
+  labelMuted: { fontSize: 9, color: "#6B7280" },
+  valueStrong: { fontSize: 13, fontWeight: "bold", marginTop: 2, color: "#111827" },
+  valueMuted: { fontSize: 10, marginTop: 2, color: "#374151" },
 
-  grid: { flexDirection: "row", flexWrap: "wrap" },
-  imageBox: { width: "48%", margin: "1%" },
-  imageLabel: { fontSize: 9, marginBottom: 2 },
+  headerNote: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: "#F9FAFB",
+    borderWidth: 1,
+    borderColor: "#EEF2F7",
+  },
+  headerNoteTitle: { fontSize: 10, fontWeight: "bold", color: "#111827" },
+  headerNoteText: { fontSize: 9, color: "#6B7280", marginTop: 3, lineHeight: 1.35 },
+
+  /* SECTIONS as CARDS */
+  sectionCard: {
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+    backgroundColor: "#FFFFFF",
+  },
+  sectionHead: { marginBottom: 10 },
+  sectionHeadLeft: { flexDirection: "row", alignItems: "baseline" },
+  sectionNumber: { fontSize: 10, fontWeight: "bold", color: "#6B7280", marginRight: 8 },
+  sectionTitle: { fontSize: 12, fontWeight: "bold", color: "#111827" },
+  sectionSubtitle: { fontSize: 9, color: "#6B7280", marginTop: 3 },
+  sectionBody: {},
+
+  /* TABLE */
+  table: {
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 8,
+    overflow: "hidden",
+    marginBottom: 10,
+  },
+  tr: { flexDirection: "row" },
+  trHeader: {
+    backgroundColor: "#F3F4F6",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+  },
+  trBorder: { borderTopWidth: 1, borderTopColor: "#E5E7EB" },
+  td: { flex: 1, paddingVertical: 6, paddingHorizontal: 8, fontSize: 9.5 },
+  th: { fontWeight: "bold", color: "#374151" },
+  tdLeft: { textAlign: "left", color: "#111827" },
+  tdRight: { textAlign: "right", color: "#111827" },
+
+  /* KPI */
+  kpiGrid: { flexDirection: "row", justifyContent: "space-between", marginTop: 6 },
+  kpiCard: {
+    borderWidth: 1,
+    borderColor: "#EEF2F7",
+    backgroundColor: "#F9FAFB",
+    borderRadius: 8,
+    padding: 10,
+    width: "32%",
+  },
+  kpiCardLabel: { fontSize: 9, color: "#6B7280" },
+  kpiCardValue: { fontSize: 12, fontWeight: "bold", color: "#111827", marginTop: 4 },
+
+  kpiLineWrap: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingTop: 4,
+  },
+  kpiLabelBold: { fontSize: 10, fontWeight: "bold", color: "#111827" },
+  kpiValueBold: { fontSize: 10, fontWeight: "bold", color: "#111827" },
+
+  /* TOTALIZATION */
+  totalTable: {
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 8,
+    overflow: "hidden",
+  },
+  totalRow: { flexDirection: "row", justifyContent: "space-between", padding: 10 },
+  totalRowBorder: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    padding: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#E5E7EB",
+  },
+  totalLabel: { fontSize: 10, color: "#374151" },
+  totalValue: { fontSize: 10, fontWeight: "bold", color: "#111827" },
+
+  totalHighlight: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#111827",
+    backgroundColor: "#F9FAFB",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  totalHighlightLeft: { flexDirection: "column" },
+  totalHighlightLabel: { fontSize: 10, fontWeight: "bold", color: "#111827" },
+  totalHighlightHint: { fontSize: 9, color: "#6B7280", marginTop: 2 },
+  totalHighlightValue: { fontSize: 16, fontWeight: "bold", color: "#111827" },
+
+  /* NOTES */
+  noteBox: {
+    borderWidth: 1,
+    borderColor: "#EEF2F7",
+    backgroundColor: "#F9FAFB",
+    borderRadius: 8,
+    padding: 10,
+  },
+  text: { fontSize: 10, color: "#111827", lineHeight: 1.35 },
+
+  /* PAGE 2 */
+  pageTitleWrap: { marginBottom: 10 },
+  pageTitle: { fontSize: 16, fontWeight: "bold", color: "#111827" },
+  pageSubtitle: { fontSize: 9, color: "#6B7280", marginTop: 2 },
+
+  grid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" },
+  imageCard: {
+    width: "48%",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 10,
+    padding: 8,
+    marginBottom: 10,
+    backgroundColor: "#FFFFFF",
+  },
+  imageLabel: { fontSize: 9, fontWeight: "bold", color: "#374151", marginBottom: 6 },
+  imageFrame: {
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 8,
+    padding: 6,
+    backgroundColor: "#F9FAFB",
+  },
   image: {
     width: "100%",
-    height: 200,
+    height: 210,
     objectFit: "contain",
-    borderWidth: 1,
-    borderColor: "#000",
   },
-  notice: { fontSize: 9, marginBottom: 6 },
+
+  fileRow: { flexDirection: "row", alignItems: "center", marginBottom: 6 },
+  fileDot: { fontSize: 10, marginRight: 6, color: "#111827" },
+  fileText: { fontSize: 9, color: "#374151" },
+
+  /* FOOTER */
+  footer: {
+    position: "absolute",
+    left: 32,
+    right: 32,
+    bottom: 18,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    borderTopWidth: 1,
+    borderTopColor: "#E5E7EB",
+    paddingTop: 6,
+  },
+  footerText: { fontSize: 8.5, color: "#9CA3AF" },
 });
