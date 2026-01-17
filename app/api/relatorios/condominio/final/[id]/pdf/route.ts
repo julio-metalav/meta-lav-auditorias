@@ -4,6 +4,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import React from "react";
 import { pdf } from "@react-pdf/renderer";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 import { getUserAndRole, roleGte } from "@/lib/auth";
 import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
@@ -95,19 +97,22 @@ async function fetchReportJson(
 }
 
 /**
- * LOGO OFICIAL
- * Precisa existir em: /public/logo.png
+ * LOGO OFICIAL (SEM FETCH HTTP)
+ * Lê diretamente de /public/logo.png via FS
  */
-async function fetchLogo(origin: string): Promise<ImageSrcObj | null> {
-  const url = `${origin}/logo.png`;
+async function fetchLogo(): Promise<ImageSrcObj | null> {
+  try {
+    const p = path.join(process.cwd(), "public", "logo.png");
+    const buf = await fs.readFile(p);
 
-  const img = await fetchImageAsBuffer(url, 8000);
-  if (!img) {
-    console.error("LOGO NAO ENCONTRADA:", url);
+    if (!buf || buf.length === 0) return null;
+    if (buf.length > 6 * 1024 * 1024) return null;
+
+    return { data: buf, format: "png" };
+  } catch (e) {
+    console.error("ERRO AO LER LOGO EM /public/logo.png:", e);
     return null;
   }
-
-  return img;
 }
 
 export async function GET(
@@ -116,8 +121,7 @@ export async function GET(
 ) {
   const { user, role } = await getUserAndRole();
   if (!user) return bad("Não autenticado", 401);
-  if (!roleGte(role as Role, "interno"))
-    return bad("Sem permissão", 403);
+  if (!roleGte(role as Role, "interno")) return bad("Sem permissão", 403);
 
   const auditoriaId = safeText(params?.id);
   if (!auditoriaId) return bad("ID inválido", 400);
@@ -177,26 +181,14 @@ export async function GET(
     const obs = safeText(data?.observacoes || "");
     const observacoes = obs.trim() ? obs : "";
 
-    const logo = await fetchLogo(origin);
+    const logo = await fetchLogo();
 
     const anexosRaw = data?.anexos || {};
     const candidates: Array<{ tipo: string; url: string }> = [
-      {
-        tipo: "Foto do medidor de Água",
-        url: safeText(anexosRaw?.foto_agua_url),
-      },
-      {
-        tipo: "Foto do medidor de Energia",
-        url: safeText(anexosRaw?.foto_energia_url),
-      },
-      {
-        tipo: "Foto do medidor de Gás",
-        url: safeText(anexosRaw?.foto_gas_url),
-      },
-      {
-        tipo: "Comprovante de pagamento",
-        url: safeText(anexosRaw?.comprovante_fechamento_url),
-      },
+      { tipo: "Foto do medidor de Água", url: safeText(anexosRaw?.foto_agua_url) },
+      { tipo: "Foto do medidor de Energia", url: safeText(anexosRaw?.foto_energia_url) },
+      { tipo: "Foto do medidor de Gás", url: safeText(anexosRaw?.foto_gas_url) },
+      { tipo: "Comprovante de pagamento", url: safeText(anexosRaw?.comprovante_fechamento_url) },
     ].filter((x) => x.url);
 
     const anexos: AnexoPdf[] = [];
@@ -232,9 +224,6 @@ export async function GET(
       },
     });
   } catch (e: any) {
-    return bad(
-      e?.message ? safeText(e.message) : "Erro ao gerar PDF",
-      500
-    );
+    return bad(e?.message ? safeText(e.message) : "Erro ao gerar PDF", 500);
   }
 }
