@@ -108,7 +108,7 @@ function cicloLabel(it: CicloItem) {
 
   const nome = cat === "lavadora" ? "Lavadora" : cat === "secadora" ? "Secadora" : cat ? cat : "Máquina";
 
-  if (cap) return `${nome} • ${cap}kg`;
+  if (cap) return `${nome} — ${cap}kg`;
   return nome;
 }
 
@@ -421,6 +421,10 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
   const isFinal = useMemo(() => toLower(aud?.status) === "final", [aud?.status]);
 
+  // links do relatório (somente quando FINAL)
+  const reportHtmlHref = useMemo(() => `/relatorios/condominio/final/${id}`, [id]);
+  const reportPdfHref = useMemo(() => `/api/relatorios/condominio/final/${id}/pdf`, [id]);
+
   const calculos = useMemo(() => {
     const aguaAtual = safeNumber(aud?.agua_leitura, 0);
     const energiaAtual = safeNumber(aud?.energia_leitura, 0);
@@ -529,7 +533,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     const audId = String(aud?.id ?? id).trim();
     if (!audId) return;
 
-    if (toLower(aud?.status) === "final") return; // 🔒 trava total
+    if (toLower(aud?.status) === "final") return;
 
     try {
       setErr(null);
@@ -578,14 +582,38 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 {condNome} - {condCidadeUf}
               </div>
               <div className="mt-0.5">
-                Mês: <span className="font-medium">{mesRef}</span> • Anterior: <span className="font-medium">{mesPrev}</span> • Status:{" "}
-                <span className="font-medium">{statusLabel(aud?.status)}</span> • Pagamento:{" "}
-                <span className="font-medium">{aud?.pagamento_metodo ?? "—"}</span> • ID: <span className="font-mono text-xs">{id}</span>
+                Mês: <span className="font-medium">{mesRef}</span> — Anterior: <span className="font-medium">{mesPrev}</span> — Status:{" "}
+                <span className="font-medium">{statusLabel(aud?.status)}</span> — Pagamento:{" "}
+                <span className="font-medium">{aud?.pagamento_metodo ?? "—"}</span> — ID: <span className="font-mono text-xs">{id}</span>
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            {/* ✅ Botões do relatório (somente quando FINAL) */}
+            {isFinal ? (
+              <>
+                <a
+                  href={reportHtmlHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
+                  title="Abrir relatório final (visualização)"
+                >
+                  Ver relatório
+                </a>
+                <a
+                  href={reportPdfHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-black/90"
+                  title="Baixar PDF do relatório final"
+                >
+                  Baixar PDF
+                </a>
+              </>
+            ) : null}
+
             <button
               className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
               onClick={() => carregar()}
@@ -865,7 +893,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                       <div className="col-span-6">
                         <div className="text-sm font-semibold text-gray-900">{cicloLabel(it)}</div>
                         <div className="text-xs text-gray-500">
-                          categoria: {String(it.categoria ?? "—")} • capacidade: {it.capacidade_kg ? `${it.capacidade_kg}kg` : "—"}
+                          categoria: {String(it.categoria ?? "—")} — capacidade: {it.capacidade_kg ? `${it.capacidade_kg}kg` : "—"}
                         </div>
                       </div>
 
@@ -920,7 +948,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <div className="text-xs font-semibold text-gray-600">Receita bruta</div>
                 <div className="mt-1 text-sm font-semibold text-gray-900">{relPrev.receita_total === null ? "—" : moneyBRL(relPrev.receita_total)}</div>
                 <div className="mt-1 text-xs text-gray-500">
-                  Lavadoras: {relPrev.lavadoras_ciclos} • Secadoras: {relPrev.secadoras_ciclos}
+                  Lavadoras: {relPrev.lavadoras_ciclos} — Secadoras: {relPrev.secadoras_ciclos}
                 </div>
               </div>
 
@@ -956,7 +984,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
             </div>
 
             <div className="mt-4 text-xs text-gray-500">
-              (Opcional) Líquido Meta-Lav = Receita − Cashback − Repasse:{" "}
+              (Opcional) Líquido Meta-Lav = Receita — Cashback — Repasse:{" "}
               <span className="font-semibold">{financeiro.liquidoMetaLav === null ? "—" : moneyBRL(financeiro.liquidoMetaLav)}</span>
             </div>
           </div>
@@ -965,3 +993,4 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     </AppShell>
   );
 }
+
