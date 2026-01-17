@@ -73,22 +73,14 @@ function fmtDateTime(v?: string) {
 }
 
 /* ================= THEME ================= */
-/**
- * Ajustei para um visual "banco":
- * - Top bar institucional
- * - Tipografia mais limpa
- * - Cards e tabelas com hierarquia
- * Obs: sem sombras (react-pdf é limitado), então usamos borda, padding e contraste.
- */
+
 const C = {
   ink: "#0B1F35",
   muted: "#5B6B7E",
   line: "#D9E2EC",
   bg: "#F5F8FB",
   white: "#FFFFFF",
-  // cor institucional (azul da marca “aproximado”)
   brand: "#0B4A78",
-  // destaque “laranja” discreto (marca)
   accent: "#F59E0B",
 };
 
@@ -327,7 +319,6 @@ const S = StyleSheet.create({
     color: C.muted,
   },
 
-  /* ANEXOS */
   anexoHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -362,20 +353,6 @@ const S = StyleSheet.create({
     height: 310,
     objectFit: "contain",
   },
-
-  badge: {
-    alignSelf: "flex-start",
-    marginTop: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: "#FFF7ED",
-    borderWidth: 1,
-    borderColor: "#FED7AA",
-    color: "#9A3412",
-    fontSize: 8.5,
-    fontWeight: 700,
-  },
 });
 
 /* ================= PDF ================= */
@@ -387,7 +364,6 @@ export default function RelatorioFinalPdf(p: Props) {
 
   return (
     <Document>
-      {/* ================= PAGE 1 ================= */}
       <Page size="A4" style={S.page}>
         <View style={S.topBar} />
 
@@ -442,7 +418,7 @@ export default function RelatorioFinalPdf(p: Props) {
             </View>
 
             {p.vendas.map((v, i) => (
-              <View key={i} style={[S.tr, i % 2 === 1 ? S.trAlt : null]} wrap={false}>
+              <View key={i} style={[S.tr, i % 2 === 1 ? S.trAlt : {}]} wrap={false}>
                 <Text style={[S.td, { width: "40%" }]}>{v.maquina || "—"}</Text>
                 <Text style={[S.td, { width: "15%" }, S.r]}>{n(v.ciclos)}</Text>
                 <Text style={[S.td, { width: "20%" }, S.r]}>{brl(v.valor_unitario)}</Text>
@@ -452,9 +428,9 @@ export default function RelatorioFinalPdf(p: Props) {
           </View>
 
           <Text style={S.noteLine}>
-            Receita bruta: <Text style={S.noteStrong}>{brl(p.kpis.receita_bruta)}</Text>{" "}
-            · Cashback: <Text style={S.noteStrong}>{n(p.kpis.cashback_percentual)}%</Text>{" "}
-            (<Text style={S.noteStrong}>{brl(p.kpis.cashback_valor)}</Text>)
+            Receita bruta: <Text style={S.noteStrong}>{brl(p.kpis.receita_bruta)}</Text> · Cashback:{" "}
+            <Text style={S.noteStrong}>{n(p.kpis.cashback_percentual)}%</Text> (
+            <Text style={S.noteStrong}>{brl(p.kpis.cashback_valor)}</Text>)
           </Text>
         </View>
 
@@ -478,7 +454,7 @@ export default function RelatorioFinalPdf(p: Props) {
             </View>
 
             {p.consumos.map((c, i) => (
-              <View key={i} style={[S.tr, i % 2 === 1 ? S.trAlt : null]} wrap={false}>
+              <View key={i} style={[S.tr, i % 2 === 1 ? S.trAlt : {}]} wrap={false}>
                 <Text style={[S.td, { width: "26%" }]}>{c.nome || "—"}</Text>
                 <Text style={[S.td, { width: "18%" }, S.r]}>{leitura(c.anterior)}</Text>
                 <Text style={[S.td, { width: "18%" }, S.r]}>{leitura(c.atual)}</Text>
@@ -504,14 +480,13 @@ export default function RelatorioFinalPdf(p: Props) {
           </View>
 
           <Text style={S.noteLine}>
-            Cashback: <Text style={S.noteStrong}>{brl(p.total_cashback)}</Text>{" "}
-            · Repasse de consumo: <Text style={S.noteStrong}>{brl(p.total_consumo)}</Text>
+            Cashback: <Text style={S.noteStrong}>{brl(p.total_cashback)}</Text> · Repasse de consumo:{" "}
+            <Text style={S.noteStrong}>{brl(p.total_consumo)}</Text>
           </Text>
 
           <View style={S.totalCard}>
             <Text style={S.totalLabel}>TOTAL A PAGAR AO CONDOMÍNIO</Text>
             <Text style={S.totalValue}>{brl(p.total_pagar)}</Text>
-            <Text style={S.badge}>PAGAMENTO A PROGRAMAR / CONFERIR</Text>
           </View>
         </View>
 
