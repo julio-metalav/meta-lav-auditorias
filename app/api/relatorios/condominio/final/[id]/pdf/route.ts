@@ -1,78 +1,191 @@
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
+import { NextRequest, NextResponse } from "next/server";
 import React from "react";
-import { NextResponse } from "next/server";
 import { pdf } from "@react-pdf/renderer";
 
-import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
 import { getUserAndRole, roleGte } from "@/lib/auth";
-
-/**
- * Geração do PDF final do relatório do condomínio
- *
- * IMPORTANTE:
- * - route.ts NÃO aceita JSX
- * - react-pdf exige ReactElement<DocumentProps>
- * - cast explícito é necessário (limitação de tipagem)
- */
+import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
 
 type Role = "auditor" | "interno" | "gestor";
 
-export async function GET(
-  req: Request,
-  { params }: { params: { id: string } }
-) {
-  const { supabase, user, role } = await getUserAndRole();
+function bad(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
+}
 
-  if (!user) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+function safeText(v: any) {
+  return String(v ?? "");
+}
+
+function safeNumber(v: any) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Faz download da imagem e converte para data URI.
+ * Se falhar (timeout, 403, tamanho, etc), retorna null (NÃO derruba o PDF).
+ */
+async function fetchImageAsDataUri(url: string, timeoutMs = 12000): Promise<string | null> {
+  const u = safeText(url).trim();
+  if (!u) return null;
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(u, {
+      cache: "no-store",
+      signal: controller.signal,
+      // evita alguns bloqueios básicos
+      headers: { "User-Agent": "meta-lav-auditorias-pdf" },
+    });
+
+    if (!res.ok) return null;
+
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    const mime =
+      ct.includes("png") ? "image/png" :
+      ct.includes("jpeg") || ct.includes("jpg") ? "image/jpeg" :
+      ct.includes("webp") ? "image/webp" :
+      ct.includes("gif") ? "image/gif" :
+      "image/png";
+
+    const ab = await res.arrayBuffer();
+    const b64 = Buffer.from(ab).toString("base64");
+
+    // data uri para o react-pdf embutir sem link externo
+    return `data:${mime};base64,${b64}`;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
   }
+}
 
-  if (!roleGte(role as Role, "interno")) {
-    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
-  }
+/**
+ * Busca o JSON do relatório final (rota existente) usando o mesmo host.
+ * Repassa o cookie para manter a sessão.
+ */
+async function fetchReportJson(req: NextRequest, auditoriaId: string) {
+  const host = req.headers.get("host") || "";
+  const proto = req.headers.get("x-forwarded-proto") || "https";
+  const origin = `${proto}://${host}`;
 
-  const auditoriaId = params.id;
+  const cookie = req.headers.get("cookie") || "";
 
-  /**
-   * Busca o JSON consolidado do relatório final
-   */
-  const baseUrl = new URL(req.url).origin;
-  const jsonUrl = `${baseUrl}/api/relatorios/condominio/final/${auditoriaId}`;
-
-  const jsonResp = await fetch(jsonUrl, {
+  const res = await fetch(`${origin}/api/relatorios/condominio/final/${auditoriaId}`, {
+    cache: "no-store",
     headers: {
-      cookie: req.headers.get("cookie") ?? "",
+      "Content-Type": "application/json",
+      cookie,
     },
   });
 
-  if (!jsonResp.ok) {
-    return NextResponse.json(
-      { error: "Erro ao buscar dados do relatório" },
-      { status: 500 }
-    );
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    const msg = json?.error ? safeText(json.error) : "Falha ao obter dados do relatório.";
+    throw new Error(msg);
   }
 
-  const data = await jsonResp.json();
+  // endpoint retorna { ok: true, data: {...} }
+  return json?.data ?? null;
+}
 
-  /**
-   * Geração do PDF
-   * - SEM JSX
-   * - Cast explícito exigido pelo react-pdf
-   */
-  const doc = React.createElement(
-    RelatorioFinalPdf,
-    data
-  ) as React.ReactElement;
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const { user, role } = await getUserAndRole();
+  if (!user) return bad("Não autenticado", 401);
+  if (!roleGte(role as Role, "interno")) return bad("Sem permissão", 403);
 
-  const blob = await pdf(doc).toBlob();
-  const arrayBuffer = await blob.arrayBuffer();
-  const uint8 = new Uint8Array(arrayBuffer);
+  const auditoriaId = safeText(params?.id);
+  if (!auditoriaId) return bad("ID inválido", 400);
 
-  return new NextResponse(uint8, {
-    headers: {
-      "Content-Type": "application/pdf",
-      "Content-Disposition": `inline; filename="relatorio-condominio-${auditoriaId}.pdf"`,
-    },
-  });
+  try {
+    const data = await fetchReportJson(req, auditoriaId);
+    if (!data) return bad("Relatório sem dados", 404);
+
+    // ---- Monta props do PDF (shape estável) ----
+    const condominioNome = safeText(data?.meta?.condominio_nome);
+    const periodo = safeText(data?.meta?.competencia);
+
+    const vendas = Array.isArray(data?.vendas_por_maquina?.itens)
+      ? data.vendas_por_maquina.itens.map((v: any) => ({
+          maquina: safeText(v?.maquina),
+          ciclos: safeNumber(v?.ciclos),
+          valor_unitario: safeNumber(v?.valor_unitario),
+          valor_total: safeNumber(v?.valor_total),
+        }))
+      : [];
+
+    const kpis = {
+      receita_bruta: safeNumber(data?.vendas_por_maquina?.receita_bruta_total),
+      cashback_percentual: safeNumber(data?.vendas_por_maquina?.cashback_percent),
+      cashback_valor: safeNumber(data?.vendas_por_maquina?.valor_cashback),
+    };
+
+    const consumos = Array.isArray(data?.consumo_insumos?.itens)
+      ? data.consumo_insumos.itens.map((c: any) => ({
+          nome: safeText(c?.insumo),
+          anterior: safeNumber(c?.leitura_anterior),
+          atual: safeNumber(c?.leitura_atual),
+          consumo: safeNumber(c?.consumo),
+          valor_unitario: safeNumber(c?.valor_unitario),
+          valor_total: safeNumber(c?.valor_total),
+        }))
+      : [];
+
+    const total_consumo = safeNumber(data?.consumo_insumos?.total_repasse_consumo);
+    const total_cashback = safeNumber(data?.totalizacao_final?.cashback);
+    const total_pagar = safeNumber(data?.totalizacao_final?.total_a_pagar_condominio);
+
+    const observacoes = safeText(data?.observacoes || "");
+
+    // ---- Anexos: embute imagens com tolerância a falha ----
+    const anexosRaw = data?.anexos || {};
+    const candidates: Array<{ tipo: string; url: string }> = [
+      { tipo: "Foto do medidor de Água", url: safeText(anexosRaw?.foto_agua_url) },
+      { tipo: "Foto do medidor de Energia", url: safeText(anexosRaw?.foto_energia_url) },
+      { tipo: "Foto do medidor de Gás", url: safeText(anexosRaw?.foto_gas_url) },
+      { tipo: "Comprovante de pagamento", url: safeText(anexosRaw?.comprovante_fechamento_url) },
+    ].filter((x) => x.url);
+
+    const anexos = [];
+    for (const c of candidates) {
+      const dataUri = await fetchImageAsDataUri(c.url);
+      if (dataUri) {
+        anexos.push({ tipo: c.tipo, url: dataUri, isImagem: true });
+      } else {
+        // mantém registro sem quebrar o PDF
+        anexos.push({ tipo: c.tipo, isImagem: false as const });
+      }
+    }
+
+    // ---- Gera PDF (SEM JSX) ----
+    const element = React.createElement(RelatorioFinalPdf as any, {
+      condominio: { nome: condominioNome },
+      periodo,
+      vendas,
+      kpis,
+      consumos,
+      total_consumo,
+      total_cashback,
+      total_pagar,
+      observacoes: observacoes.trim() ? observacoes : undefined,
+      anexos,
+    });
+
+    const out = await pdf(element).toBuffer();
+
+    return new NextResponse(out, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `inline; filename="relatorio-final-${auditoriaId}.pdf"`,
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch (e: any) {
+    return bad(e?.message ? safeText(e.message) : "Erro ao gerar PDF", 500);
+  }
 }
