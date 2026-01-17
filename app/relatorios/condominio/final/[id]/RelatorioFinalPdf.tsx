@@ -15,10 +15,12 @@ import {
  * - Nenhum boolean em style[]
  * - Tipagem 100% compatível com react-pdf
  *
- * V1 VISUAL (corporativo) - versão conservadora (anti-500):
- * - Remove toLocaleString(pt-BR) no PDF (pode quebrar em serverless)
- * - money() e números sempre seguros
- * - Footer sem position:absolute
+ * V1 VISUAL (corporativo):
+ * - Hierarquia de títulos
+ * - Espaçamento e cards
+ * - Tabelas mais limpas
+ * - TOTAL A PAGAR destacado
+ * - Anexos organizados em grid
  */
 
 type VendaMaquina = {
@@ -96,29 +98,26 @@ export default function RelatorioFinalPdf({
               <Text style={styles.labelMuted}>Condomínio</Text>
               <Text style={styles.valueStrong}>{condominio.nome}</Text>
             </View>
+
             <View style={styles.headerCardColRight}>
-              <Text style={styles.labelMuted}>Documento</Text>
-              <Text style={styles.valueMuted}>Relatório final de auditoria</Text>
+              <Text style={styles.labelMuted}>Gerado em</Text>
+              <Text style={styles.valueMuted}>{formatNowPtBr()}</Text>
             </View>
           </View>
 
           <View style={styles.headerNote}>
             <Text style={styles.headerNoteTitle}>
-              Consolidado de vendas, cashback e repasse
+              Relatório final de auditoria
             </Text>
             <Text style={styles.headerNoteText}>
-              Documento para conferência e arquivamento. O valor “TOTAL A PAGAR”
-              é o número principal do relatório.
+              Valores consolidados de vendas, cashback e repasse de consumo.
+              Documento para conferência e arquivamento.
             </Text>
           </View>
         </View>
 
         {/* VENDAS */}
-        <Section
-          n="1"
-          title="Vendas por máquina"
-          subtitle="Fechamento por capacidade e tipo de máquina"
-        >
+        <Section n="1" title="Vendas por máquina" subtitle="Fechamento por capacidade e tipo de máquina">
           <Table>
             <HeaderRow cols={["Máquina", "Ciclos", "Valor unitário", "Receita"]} />
             {vendas.map((v, i) =>
@@ -127,8 +126,8 @@ export default function RelatorioFinalPdf({
                   key={i}
                   right={[false, true, true, true]}
                   values={[
-                    safeText(v.maquina),
-                    safeInt(v.ciclos),
+                    v.maquina,
+                    v.ciclos.toString(),
                     money(v.valor_unitario),
                     money(v.valor_total),
                   ]}
@@ -138,8 +137,8 @@ export default function RelatorioFinalPdf({
                   key={i}
                   right={[false, true, true, true]}
                   values={[
-                    safeText(v.maquina),
-                    safeInt(v.ciclos),
+                    v.maquina,
+                    v.ciclos.toString(),
                     money(v.valor_unitario),
                     money(v.valor_total),
                   ]}
@@ -149,14 +148,27 @@ export default function RelatorioFinalPdf({
           </Table>
 
           <View style={styles.kpiGrid}>
-            <KpiCard label="Receita bruta total" value={money(kpis.receita_bruta)} />
-            <KpiCard label="Cashback" value={`${safeInt(kpis.cashback_percentual)}%`} />
-            <KpiCard label="Valor do cashback" value={money(kpis.cashback_valor)} />
+            <KpiCard
+              label="Receita bruta total"
+              value={money(kpis.receita_bruta)}
+            />
+            <KpiCard
+              label="Cashback"
+              value={`${kpis.cashback_percentual}%`}
+            />
+            <KpiCard
+              label="Valor do cashback"
+              value={money(kpis.cashback_valor)}
+            />
           </View>
         </Section>
 
         {/* CONSUMO */}
-        <Section n="2" title="Consumo de insumos" subtitle="Leituras, consumo e repasse">
+        <Section
+          n="2"
+          title="Consumo de insumos"
+          subtitle="Leituras, consumo e repasse"
+        >
           <Table>
             <HeaderRow
               cols={[
@@ -174,10 +186,10 @@ export default function RelatorioFinalPdf({
                   key={i}
                   right={[false, true, true, true, true, true]}
                   values={[
-                    safeText(c.nome),
-                    safeInt(c.anterior),
-                    safeInt(c.atual),
-                    safeInt(c.consumo),
+                    c.nome,
+                    c.anterior.toString(),
+                    c.atual.toString(),
+                    c.consumo.toString(),
                     money(c.valor_unitario),
                     money(c.valor_total),
                   ]}
@@ -187,10 +199,10 @@ export default function RelatorioFinalPdf({
                   key={i}
                   right={[false, true, true, true, true, true]}
                   values={[
-                    safeText(c.nome),
-                    safeInt(c.anterior),
-                    safeInt(c.atual),
-                    safeInt(c.consumo),
+                    c.nome,
+                    c.anterior.toString(),
+                    c.atual.toString(),
+                    c.consumo.toString(),
                     money(c.valor_unitario),
                     money(c.valor_total),
                   ]}
@@ -206,7 +218,11 @@ export default function RelatorioFinalPdf({
         </Section>
 
         {/* TOTALIZAÇÃO */}
-        <Section n="3" title="Totalização final" subtitle="Número principal do relatório">
+        <Section
+          n="3"
+          title="Totalização final"
+          subtitle="Número principal do relatório"
+        >
           <View style={styles.totalTable}>
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Cashback</Text>
@@ -220,8 +236,12 @@ export default function RelatorioFinalPdf({
 
           <View style={styles.totalHighlight}>
             <View style={styles.totalHighlightLeft}>
-              <Text style={styles.totalHighlightLabel}>TOTAL A PAGAR AO CONDOMÍNIO</Text>
-              <Text style={styles.totalHighlightHint}>Valor final consolidado</Text>
+              <Text style={styles.totalHighlightLabel}>
+                TOTAL A PAGAR AO CONDOMÍNIO
+              </Text>
+              <Text style={styles.totalHighlightHint}>
+                Valor final consolidado
+              </Text>
             </View>
             <Text style={styles.totalHighlightValue}>{money(total_pagar)}</Text>
           </View>
@@ -231,7 +251,7 @@ export default function RelatorioFinalPdf({
         {observacoes ? (
           <Section n="4" title="Observações">
             <View style={styles.noteBox}>
-              <Text style={styles.text}>{safeText(observacoes)}</Text>
+              <Text style={styles.text}>{observacoes}</Text>
             </View>
           </Section>
         ) : null}
@@ -252,7 +272,7 @@ export default function RelatorioFinalPdf({
           {anexos.map((a, i) =>
             a.isImagem && a.url ? (
               <View key={i} style={styles.imageCard}>
-                <Text style={styles.imageLabel}>{safeText(a.tipo)}</Text>
+                <Text style={styles.imageLabel}>{a.tipo}</Text>
                 <View style={styles.imageFrame}>
                   <Image src={a.url} style={styles.image} />
                 </View>
@@ -260,7 +280,9 @@ export default function RelatorioFinalPdf({
             ) : (
               <View key={i} style={styles.fileRow}>
                 <Text style={styles.fileDot}>•</Text>
-                <Text style={styles.fileText}>{safeText(a.tipo)}: anexo não é imagem</Text>
+                <Text style={styles.fileText}>
+                  {a.tipo}: anexo não é imagem
+                </Text>
               </View>
             )
           )}
@@ -349,31 +371,21 @@ function Footer() {
   );
 }
 
-/* ===================== HELPERS (SEMPRE SEGUROS) ===================== */
+/* ===================== HELPERS ===================== */
 
-function safeText(v: any) {
-  const s = String(v ?? "");
-  return s;
+function money(v: number) {
+  return v.toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
 }
 
-function safeNumber(v: any) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function safeInt(v: any) {
-  const n = safeNumber(v);
-  return String(Math.round(n));
-}
-
-function money(v: any) {
-  const n = safeNumber(v);
-  // evita crash de locale em ambientes estranhos
+function formatNowPtBr() {
+  // mantém zero risco: sem libs e sem depender de timezone externo
   try {
-    return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    return new Date().toLocaleString("pt-BR");
   } catch {
-    // fallback bem simples, mas nunca quebra
-    return `R$ ${n.toFixed(2)}`;
+    return "";
   }
 }
 
@@ -565,9 +577,12 @@ const styles = StyleSheet.create({
   fileDot: { fontSize: 10, marginRight: 6, color: "#111827" },
   fileText: { fontSize: 9, color: "#374151" },
 
-  /* FOOTER (sem absolute) */
+  /* FOOTER */
   footer: {
-    marginTop: 14,
+    position: "absolute",
+    left: 32,
+    right: 32,
+    bottom: 18,
     flexDirection: "row",
     justifyContent: "space-between",
     borderTopWidth: 1,
