@@ -23,11 +23,10 @@ function safeNumber(v: any) {
   return Number.isFinite(n) ? n : 0;
 }
 
-/**
- * Faz download da imagem e converte para data URI.
- * Se falhar (timeout, 403, tamanho, etc), retorna null (NÃO derruba o PDF).
- */
-async function fetchImageAsDataUri(url: string, timeoutMs = 12000): Promise<string | null> {
+type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
+type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
+
+async function fetchImageAsBuffer(url: string, timeoutMs = 30000): Promise<ImageSrcObj | null> {
   const u = safeText(url).trim();
   if (!u) return null;
 
@@ -38,23 +37,23 @@ async function fetchImageAsDataUri(url: string, timeoutMs = 12000): Promise<stri
     const res = await fetch(u, {
       cache: "no-store",
       signal: controller.signal,
-      headers: { "User-Agent": "meta-lav-auditorias-pdf" },
+      headers: { Accept: "image/*" },
     });
 
     if (!res.ok) return null;
 
     const ct = (res.headers.get("content-type") || "").toLowerCase();
-    const mime =
-      ct.includes("png") ? "image/png" :
-      ct.includes("jpeg") || ct.includes("jpg") ? "image/jpeg" :
-      ct.includes("webp") ? "image/webp" :
-      ct.includes("gif") ? "image/gif" :
-      "image/png";
+    const format: "png" | "jpg" =
+      ct.includes("jpeg") || ct.includes("jpg") ? "jpg" : "png";
 
     const ab = await res.arrayBuffer();
-    const b64 = Buffer.from(ab).toString("base64");
+    const buf = Buffer.from(ab);
 
-    return `data:${mime};base64,${b64}`;
+    // Evita PDF gigante por acidente (segurança)
+    // Se quiser, dá pra ajustar o limite depois.
+    if (buf.length > 6 * 1024 * 1024) return null; // > 6MB
+
+    return { data: buf, format };
   } catch {
     return null;
   } finally {
@@ -62,10 +61,6 @@ async function fetchImageAsDataUri(url: string, timeoutMs = 12000): Promise<stri
   }
 }
 
-/**
- * Busca o JSON do relatório final usando o mesmo host.
- * Repassa cookie para manter a sessão.
- */
 async function fetchReportJson(req: NextRequest, auditoriaId: string) {
   const host = req.headers.get("host") || "";
   const proto = req.headers.get("x-forwarded-proto") || "https";
@@ -75,10 +70,7 @@ async function fetchReportJson(req: NextRequest, auditoriaId: string) {
 
   const res = await fetch(`${origin}/api/relatorios/condominio/final/${auditoriaId}`, {
     cache: "no-store",
-    headers: {
-      "Content-Type": "application/json",
-      cookie,
-    },
+    headers: { "Content-Type": "application/json", cookie },
   });
 
   const json = await res.json().catch(() => null);
@@ -86,7 +78,6 @@ async function fetchReportJson(req: NextRequest, auditoriaId: string) {
     const msg = json?.error ? safeText(json.error) : "Falha ao obter dados do relatório.";
     throw new Error(msg);
   }
-
   return json?.data ?? null;
 }
 
@@ -146,14 +137,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       { tipo: "Comprovante de pagamento", url: safeText(anexosRaw?.comprovante_fechamento_url) },
     ].filter((x) => x.url);
 
-    const anexos: Array<{ tipo: string; url?: string; isImagem: boolean }> = [];
+    const anexos: AnexoPdf[] = [];
     for (const c of candidates) {
-      const dataUri = await fetchImageAsDataUri(c.url);
-      if (dataUri) anexos.push({ tipo: c.tipo, url: dataUri, isImagem: true });
+      const src = await fetchImageAsBuffer(c.url);
+      if (src) anexos.push({ tipo: c.tipo, src, isImagem: true });
       else anexos.push({ tipo: c.tipo, isImagem: false });
     }
 
-    // ✅ Importante: tipagem do pdf() é exigente. Cast aqui evita quebra no build.
     const doc = React.createElement(RelatorioFinalPdf as any, {
       condominio: { nome: condominioNome },
       periodo,
