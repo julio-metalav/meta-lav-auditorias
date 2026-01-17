@@ -1,3 +1,4 @@
+import React from "react";
 import {
   Document,
   Page,
@@ -7,753 +8,474 @@ import {
   Image,
 } from "@react-pdf/renderer";
 
-/**
- * RELATÓRIO FINAL – META LAV
- * Visual Passo 1 (hierarquia):
- * - Cabeçalho corporativo
- * - Seções em "cards"
- * - Tabelas mais legíveis
- * - Destaque forte do TOTAL A PAGAR
- * - Sem mexer em regras, dados ou rotas
- *
- * Build-safe:
- * - Nenhum boolean em style[]
- * - Tipagem compatível com react-pdf
- */
-
-type VendaMaquina = {
-  maquina: string;
-  ciclos: number;
-  valor_unitario: number;
-  valor_total: number;
-};
-
-type ConsumoItem = {
-  nome: string;
-  anterior: number;
-  atual: number;
-  consumo: number;
-  valor_unitario: number;
-  valor_total: number;
-};
-
-type Anexo = {
-  tipo: string;
-  url?: string;
-  isImagem: boolean;
-};
+type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
+type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
 type Props = {
   condominio: { nome: string };
   periodo: string;
-  vendas: VendaMaquina[];
+
+  vendas: Array<{
+    maquina: string;
+    ciclos: number;
+    valor_unitario: number;
+    valor_total: number;
+  }>;
+
   kpis: {
     receita_bruta: number;
     cashback_percentual: number;
     cashback_valor: number;
   };
-  consumos: ConsumoItem[];
+
+  consumos: Array<{
+    nome: string;
+    anterior: number;
+    atual: number;
+    consumo: number;
+    valor_unitario: number;
+    valor_total: number;
+  }>;
+
   total_consumo: number;
   total_cashback: number;
   total_pagar: number;
+
   observacoes?: string;
-  anexos: Anexo[];
+
+  // opcional (não quebra nada se não vier)
+  pagamento?: {
+    pix?: string;
+    banco_codigo?: string;
+    banco_nome?: string;
+    agencia?: string;
+    conta?: string;
+    cnpj?: string;
+  };
+
+  anexos: AnexoPdf[];
 };
 
-export default function RelatorioFinalPdf({
-  condominio,
-  periodo,
-  vendas,
-  kpis,
-  consumos,
-  total_consumo,
-  total_cashback,
-  total_pagar,
-  observacoes,
-  anexos,
-}: Props) {
-  return (
-    <Document>
-      {/* ===================== PÁGINA 1 ===================== */}
-      <Page size="A4" style={styles.page}>
-        {/* HEADER */}
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Text style={styles.brand}>META LAV</Text>
-            <Text style={styles.reportTitle}>Prestação de Contas</Text>
-            <Text style={styles.reportSubtitle}>Lavanderia Compartilhada</Text>
-          </View>
-
-          <View style={styles.headerRight}>
-            <Text style={styles.metaLabel}>Condomínio</Text>
-            <Text style={styles.metaValue}>{condominio.nome}</Text>
-
-            <View style={styles.metaSpacer} />
-
-            <Text style={styles.metaLabel}>Competência</Text>
-            <Text style={styles.metaValue}>{periodo}</Text>
-          </View>
-        </View>
-
-        <View style={styles.headerDivider} />
-
-        {/* RESUMO */}
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryTitle}>Resumo executivo</Text>
-          <Text style={styles.summaryText}>
-            Este relatório consolida vendas por máquina, cashback e repasse de
-            consumo (água/energia/gás, quando aplicável), apurados na auditoria
-            finalizada.
-          </Text>
-        </View>
-
-        {/* VENDAS */}
-        <Section
-          index="1"
-          title="Vendas por máquina"
-          subtitle="Fechamento de caixa por equipamento e ciclos"
-        >
-          <Table>
-            <HeaderRow
-              cols={["Máquina", "Ciclos", "Valor unitário", "Valor total"]}
-              align={["left", "right", "right", "right"]}
-            />
-
-            {vendas.map((v, i) => {
-              const values = [
-                v.maquina,
-                v.ciclos.toString(),
-                money(v.valor_unitario),
-                money(v.valor_total),
-              ];
-
-              if (i === 0) return <Row key={i} values={values} align={["left", "right", "right", "right"]} />;
-
-              // alternância visual sem colocar boolean em style[]
-              if (i % 2 === 1) {
-                return (
-                  <RowWithBorderAlt
-                    key={i}
-                    values={values}
-                    align={["left", "right", "right", "right"]}
-                  />
-                );
-              }
-              return (
-                <RowWithBorder
-                  key={i}
-                  values={values}
-                  align={["left", "right", "right", "right"]}
-                />
-              );
-            })}
-          </Table>
-
-          <View style={styles.kpiGrid}>
-            <KpiCard label="Receita bruta total" value={money(kpis.receita_bruta)} />
-            <KpiCard
-              label={`Cashback (${kpis.cashback_percentual}%)`}
-              value={money(kpis.cashback_valor)}
-            />
-          </View>
-        </Section>
-
-        {/* CONSUMO */}
-        <Section
-          index="2"
-          title="Consumo de insumos"
-          subtitle="Leituras, consumo apurado e repasse"
-        >
-          <Table>
-            <HeaderRow
-              cols={[
-                "Insumo",
-                "Anterior",
-                "Atual",
-                "Consumo",
-                "Valor unit.",
-                "Valor total",
-              ]}
-              align={["left", "right", "right", "right", "right", "right"]}
-            />
-
-            {consumos.map((c, i) => {
-              const values = [
-                c.nome,
-                c.anterior.toString(),
-                c.atual.toString(),
-                c.consumo.toString(),
-                money(c.valor_unitario),
-                money(c.valor_total),
-              ];
-
-              if (i === 0) {
-                return (
-                  <Row
-                    key={i}
-                    values={values}
-                    align={["left", "right", "right", "right", "right", "right"]}
-                  />
-                );
-              }
-
-              if (i % 2 === 1) {
-                return (
-                  <RowWithBorderAlt
-                    key={i}
-                    values={values}
-                    align={["left", "right", "right", "right", "right", "right"]}
-                  />
-                );
-              }
-
-              return (
-                <RowWithBorder
-                  key={i}
-                  values={values}
-                  align={["left", "right", "right", "right", "right", "right"]}
-                />
-              );
-            })}
-          </Table>
-
-          <View style={styles.kpiSingle}>
-            <KpiLineStrong label="Total do repasse de consumo" value={money(total_consumo)} />
-          </View>
-        </Section>
-
-        {/* TOTALIZAÇÃO */}
-        <Section
-          index="3"
-          title="Totalização final"
-          subtitle="Número principal do relatório"
-        >
-          <View style={styles.totalBox}>
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Cashback</Text>
-              <Text style={styles.totalValue}>{money(total_cashback)}</Text>
-            </View>
-
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Repasse de consumo</Text>
-              <Text style={styles.totalValue}>{money(total_consumo)}</Text>
-            </View>
-
-            <View style={styles.totalDivider} />
-
-            <View style={styles.totalHighlight}>
-              <Text style={styles.totalHighlightLabel}>
-                TOTAL A PAGAR AO CONDOMÍNIO
-              </Text>
-              <Text style={styles.totalHighlightValue}>{money(total_pagar)}</Text>
-            </View>
-
-            <Text style={styles.totalHint}>
-              Valor consolidado a partir das vendas por máquina, cashback e repasse de consumo.
-            </Text>
-          </View>
-        </Section>
-
-        {/* OBSERVAÇÕES */}
-        {observacoes && (
-          <Section index="4" title="Observações" subtitle="Notas adicionais do fechamento">
-            <View style={styles.noteBox}>
-              <Text style={styles.noteText}>{observacoes}</Text>
-            </View>
-          </Section>
-        )}
-
-        {/* FOOTER */}
-        <Text
-          style={styles.footer}
-          fixed
-          render={({ pageNumber, totalPages }) =>
-            `Meta Lav Auditorias • Página ${pageNumber} de ${totalPages}`
-          }
-        />
-      </Page>
-
-      {/* ===================== PÁGINA 2 ===================== */}
-      <Page size="A4" style={styles.page}>
-        <View style={styles.headerSimple}>
-          <View>
-            <Text style={styles.brand}>META LAV</Text>
-            <Text style={styles.pageTitle}>Anexos</Text>
-            <Text style={styles.pageSubtitle}>
-              Evidências fotográficas e comprovantes vinculados à auditoria.
-            </Text>
-          </View>
-          <View style={styles.headerRightSimple}>
-            <Text style={styles.metaLabel}>Condomínio</Text>
-            <Text style={styles.metaValue}>{condominio.nome}</Text>
-            <View style={styles.metaSpacer} />
-            <Text style={styles.metaLabel}>Competência</Text>
-            <Text style={styles.metaValue}>{periodo}</Text>
-          </View>
-        </View>
-
-        <View style={styles.headerDivider} />
-
-        <View style={styles.grid}>
-          {anexos.map((a, i) => {
-            if (a.isImagem && a.url) {
-              return (
-                <View key={i} style={styles.imageCard}>
-                  <Text style={styles.imageLabel}>{a.tipo}</Text>
-                  <View style={styles.imageFrame}>
-                    <Image src={a.url} style={styles.image} />
-                  </View>
-                </View>
-              );
-            }
-
-            return (
-              <View key={i} style={styles.nonImageCard}>
-                <Text style={styles.nonImageTitle}>{a.tipo}</Text>
-                <Text style={styles.nonImageText}>Anexo não é imagem.</Text>
-              </View>
-            );
-          })}
-        </View>
-
-        <Text
-          style={styles.footer}
-          fixed
-          render={({ pageNumber, totalPages }) =>
-            `Meta Lav Auditorias • Página ${pageNumber} de ${totalPages}`
-          }
-        />
-      </Page>
-    </Document>
-  );
+function n(v: any) {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : 0;
 }
 
-/* ===================== COMPONENTES ===================== */
-
-function Section({
-  index,
-  title,
-  subtitle,
-  children,
-}: {
-  index: string;
-  title: string;
-  subtitle: string;
-  children: any;
-}) {
-  return (
-    <View style={styles.sectionCard}>
-      <View style={styles.sectionHeader}>
-        <View style={styles.sectionBadge}>
-          <Text style={styles.sectionBadgeText}>{index}</Text>
-        </View>
-        <View style={styles.sectionTitles}>
-          <Text style={styles.sectionTitle}>{title}</Text>
-          <Text style={styles.sectionSubtitle}>{subtitle}</Text>
-        </View>
-      </View>
-
-      <View style={styles.sectionBody}>{children}</View>
-    </View>
-  );
+function brl(v: any) {
+  const x = n(v);
+  // evita depender de ambientes sem locale completo
+  return x.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-function Table({ children }: { children: any }) {
-  return <View style={styles.table}>{children}</View>;
+function fmtInt(v: any) {
+  const x = n(v);
+  return x.toLocaleString("pt-BR");
 }
 
-function HeaderRow({
-  cols,
-  align,
-}: {
-  cols: string[];
-  align: Array<"left" | "right">;
-}) {
-  return (
-    <View style={styles.trHeader}>
-      {cols.map((c, i) => {
-        const a = align[i] === "right" ? styles.thRight : styles.thLeft;
-        return (
-          <Text key={i} style={[styles.th, a]}>
-            {c}
-          </Text>
-        );
-      })}
-    </View>
-  );
+function fmtLeitura(v: any) {
+  if (v === null || v === undefined) return "—";
+  const x = Number(v);
+  if (!Number.isFinite(x)) return "—";
+  return x.toLocaleString("pt-BR");
 }
 
-function Row({
-  values,
-  align,
-}: {
-  values: string[];
-  align: Array<"left" | "right">;
-}) {
-  return (
-    <View style={styles.tr}>
-      {values.map((v, i) => {
-        const a = align[i] === "right" ? styles.tdRight : styles.tdLeft;
-        return (
-          <Text key={i} style={[styles.td, a]}>
-            {v}
-          </Text>
-        );
-      })}
-    </View>
-  );
+function imgSrcToDataUri(src: ImageSrcObj) {
+  const base64 = src.data.toString("base64");
+  const mime = src.format === "jpg" ? "image/jpeg" : "image/png";
+  return `data:${mime};base64,${base64}`;
 }
-
-function RowWithBorder({
-  values,
-  align,
-}: {
-  values: string[];
-  align: Array<"left" | "right">;
-}) {
-  return (
-    <View style={styles.trBorder}>
-      {values.map((v, i) => {
-        const a = align[i] === "right" ? styles.tdRight : styles.tdLeft;
-        return (
-          <Text key={i} style={[styles.td, a]}>
-            {v}
-          </Text>
-        );
-      })}
-    </View>
-  );
-}
-
-function RowWithBorderAlt({
-  values,
-  align,
-}: {
-  values: string[];
-  align: Array<"left" | "right">;
-}) {
-  return (
-    <View style={styles.trBorderAlt}>
-      {values.map((v, i) => {
-        const a = align[i] === "right" ? styles.tdRight : styles.tdLeft;
-        return (
-          <Text key={i} style={[styles.td, a]}>
-            {v}
-          </Text>
-        );
-      })}
-    </View>
-  );
-}
-
-/* ===================== KPI ===================== */
-
-function KpiCard({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.kpiCard}>
-      <Text style={styles.kpiLabel}>{label}</Text>
-      <Text style={styles.kpiValue}>{value}</Text>
-    </View>
-  );
-}
-
-function KpiLineStrong({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.kpiLineStrong}>
-      <Text style={styles.kpiLineLabel}>{label}</Text>
-      <Text style={styles.kpiLineValue}>{value}</Text>
-    </View>
-  );
-}
-
-/* ===================== HELPERS ===================== */
-
-function money(v: number) {
-  return v.toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  });
-}
-
-/* ===================== STYLES ===================== */
 
 const styles = StyleSheet.create({
   page: {
-    paddingTop: 34,
-    paddingBottom: 42,
-    paddingHorizontal: 34,
+    size: "A4",
+    paddingTop: 28,
+    paddingBottom: 28,
+    paddingHorizontal: 28,
     fontSize: 10,
-    fontFamily: "Helvetica",
     color: "#111827",
+    fontFamily: "Helvetica",
+    lineHeight: 1.35,
   },
 
-  /* Header */
-  header: {
+  headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
+    marginBottom: 10,
   },
-  headerLeft: { width: "58%" },
-  headerRight: {
-    width: "38%",
+  brand: { fontSize: 11, fontWeight: 700, color: "#111827" },
+  title: { fontSize: 16, fontWeight: 700, marginTop: 2 },
+  subtitle: { fontSize: 10, color: "#6B7280", marginTop: 2 },
+
+  metaBox: {
     borderWidth: 1,
     borderColor: "#E5E7EB",
     borderRadius: 10,
     padding: 10,
-    backgroundColor: "#F9FAFB",
+    minWidth: 180,
   },
+  metaLabel: { fontSize: 8, color: "#6B7280" },
+  metaValue: { fontSize: 10, fontWeight: 700, marginTop: 1 },
 
-  headerSimple: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-  },
-  headerRightSimple: {
-    width: "38%",
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 10,
-    padding: 10,
-    backgroundColor: "#F9FAFB",
-  },
-
-  brand: { fontSize: 10, fontWeight: "bold", letterSpacing: 0.6, color: "#0F172A" },
-
-  reportTitle: { fontSize: 18, fontWeight: "bold", marginTop: 6, color: "#0F172A" },
-  reportSubtitle: { fontSize: 10, marginTop: 2, color: "#475569" },
-
-  pageTitle: { fontSize: 16, fontWeight: "bold", marginTop: 6, color: "#0F172A" },
-  pageSubtitle: { fontSize: 10, marginTop: 2, color: "#475569" },
-
-  metaLabel: { fontSize: 9, color: "#6B7280" },
-  metaValue: { fontSize: 10, fontWeight: "bold", color: "#111827" },
-  metaSpacer: { height: 8 },
-
-  headerDivider: {
-    height: 1,
-    backgroundColor: "#E5E7EB",
-    marginTop: 14,
-    marginBottom: 12,
-  },
-
-  /* Summary */
-  summaryCard: {
+  section: {
     borderWidth: 1,
     borderColor: "#E5E7EB",
     borderRadius: 12,
     padding: 12,
-    backgroundColor: "#FFFFFF",
-    marginBottom: 12,
+    marginTop: 10,
   },
-  summaryTitle: { fontSize: 11, fontWeight: "bold", color: "#0F172A" },
-  summaryText: { fontSize: 9.5, marginTop: 4, color: "#475569", lineHeight: 1.35 },
+  sectionTitleRow: { flexDirection: "row", alignItems: "baseline", gap: 8 },
+  sectionN: { fontSize: 9, fontWeight: 700, color: "#6B7280" },
+  sectionTitle: { fontSize: 12, fontWeight: 700, color: "#111827" },
+  sectionSub: { fontSize: 9, color: "#6B7280", marginTop: 3 },
 
-  /* Section cards */
-  sectionCard: {
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 14,
-    padding: 12,
-    backgroundColor: "#FFFFFF",
-    marginBottom: 12,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  sectionBadge: {
-    width: 18,
-    height: 18,
-    borderRadius: 6,
-    backgroundColor: "#111827",
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 8,
-  },
-  sectionBadgeText: { fontSize: 9, fontWeight: "bold", color: "#FFFFFF" },
-
-  sectionTitles: { flexGrow: 1 },
-  sectionTitle: { fontSize: 12, fontWeight: "bold", color: "#0F172A" },
-  sectionSubtitle: { fontSize: 9, marginTop: 2, color: "#64748B" },
-
-  sectionBody: { marginTop: 10 },
-
-  /* Table */
   table: {
+    marginTop: 10,
     borderWidth: 1,
     borderColor: "#E5E7EB",
     borderRadius: 10,
     overflow: "hidden",
-    marginBottom: 10,
   },
+  trHead: { flexDirection: "row", backgroundColor: "#F9FAFB" },
+  tr: { flexDirection: "row", borderTopWidth: 1, borderTopColor: "#E5E7EB" },
+  th: { paddingVertical: 8, paddingHorizontal: 8, fontSize: 9, color: "#374151", fontWeight: 700 },
+  td: { paddingVertical: 8, paddingHorizontal: 8, fontSize: 9, color: "#111827" },
 
-  trHeader: {
-    flexDirection: "row",
-    backgroundColor: "#F3F4F6",
-    borderBottomWidth: 1,
-    borderColor: "#E5E7EB",
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-  },
-  th: { flex: 1, fontSize: 9, fontWeight: "bold", color: "#334155" },
-  thLeft: { textAlign: "left" },
-  thRight: { textAlign: "right" },
+  colMaquina: { width: "44%" },
+  colNum: { width: "14%" },
+  colMoney: { width: "21%" },
 
-  tr: {
-    flexDirection: "row",
-    paddingVertical: 7,
-    paddingHorizontal: 8,
-    backgroundColor: "#FFFFFF",
-  },
-  trBorder: {
-    flexDirection: "row",
-    paddingVertical: 7,
-    paddingHorizontal: 8,
-    borderTopWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#FFFFFF",
-  },
-  trBorderAlt: {
-    flexDirection: "row",
-    paddingVertical: 7,
-    paddingHorizontal: 8,
-    borderTopWidth: 1,
-    borderColor: "#E5E7EB",
-    backgroundColor: "#FAFAFA",
-  },
+  colInsumo: { width: "28%" },
+  colRead: { width: "18%" },
+  colCons: { width: "18%" },
+  colVal: { width: "18%" },
 
-  td: { flex: 1, fontSize: 10, color: "#111827" },
-  tdLeft: { textAlign: "left" },
-  tdRight: { textAlign: "right" },
+  right: { textAlign: "right" },
 
-  /* KPI */
-  kpiGrid: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  kpiCard: {
-    width: "49%",
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 12,
-    padding: 10,
-    backgroundColor: "#F9FAFB",
-  },
-  kpiLabel: { fontSize: 9, color: "#6B7280" },
-  kpiValue: { fontSize: 12, fontWeight: "bold", marginTop: 4, color: "#0F172A" },
-
-  kpiSingle: {
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 12,
-    padding: 10,
-    backgroundColor: "#F9FAFB",
-  },
-  kpiLineStrong: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "baseline",
-  },
-  kpiLineLabel: { fontSize: 10, fontWeight: "bold", color: "#0F172A" },
-  kpiLineValue: { fontSize: 12, fontWeight: "bold", color: "#0F172A" },
-
-  /* Total box */
-  totalBox: {
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 14,
-    padding: 12,
-    backgroundColor: "#F9FAFB",
-  },
-  totalRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 4,
-  },
-  totalLabel: { fontSize: 10, color: "#334155" },
-  totalValue: { fontSize: 10, fontWeight: "bold", color: "#0F172A" },
-
-  totalDivider: { height: 1, backgroundColor: "#E5E7EB", marginVertical: 8 },
-
-  totalHighlight: {
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    backgroundColor: "#111827",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "baseline",
-  },
-  totalHighlightLabel: {
-    fontSize: 10,
-    fontWeight: "bold",
-    color: "#FFFFFF",
-    letterSpacing: 0.2,
-  },
-  totalHighlightValue: { fontSize: 14, fontWeight: "bold", color: "#FFFFFF" },
-  totalHint: { fontSize: 8.8, color: "#64748B", marginTop: 8, lineHeight: 1.25 },
-
-  /* Notes */
-  noteBox: {
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 12,
-    padding: 10,
-    backgroundColor: "#FFFFFF",
-  },
-  noteText: { fontSize: 10, color: "#0F172A", lineHeight: 1.35 },
-
-  /* Anexos */
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-  },
-
-  imageCard: {
-    width: "49%",
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 12,
-    padding: 10,
-    backgroundColor: "#FFFFFF",
-    marginBottom: 10,
-  },
-  imageLabel: { fontSize: 9, fontWeight: "bold", color: "#0F172A", marginBottom: 6 },
-
-  imageFrame: {
+  kpiRow: { flexDirection: "row", gap: 8, marginTop: 10 },
+  kpi: {
+    flexGrow: 1,
     borderWidth: 1,
     borderColor: "#E5E7EB",
     borderRadius: 10,
-    padding: 6,
+    padding: 10,
     backgroundColor: "#F9FAFB",
   },
-  image: {
-    width: "100%",
-    height: 220,
-    objectFit: "contain",
+  kpiLabel: { fontSize: 8, color: "#6B7280" },
+  kpiValue: { fontSize: 12, fontWeight: 700, marginTop: 2 },
+
+  totalTable: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 10,
+    overflow: "hidden",
+  },
+  totalRow: { flexDirection: "row", justifyContent: "space-between", padding: 10, borderTopWidth: 1, borderTopColor: "#E5E7EB" },
+  totalRowHead: { flexDirection: "row", justifyContent: "space-between", padding: 10 },
+  totalStrong: { fontSize: 11, fontWeight: 700 },
+  totalBig: { fontSize: 14, fontWeight: 700 },
+
+  obsBox: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: "#F9FAFB",
+    minHeight: 46,
+  },
+  obsText: { fontSize: 9, color: "#111827" },
+
+  bankBox: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: "#FFFFFF",
+  },
+  bankLine: { fontSize: 9, color: "#111827", marginTop: 3 },
+
+  footer: {
+    position: "absolute",
+    bottom: 18,
+    left: 28,
+    right: 28,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    color: "#6B7280",
+    fontSize: 8,
   },
 
-  nonImageCard: {
-    width: "49%",
+  anexoTitle: { fontSize: 13, fontWeight: 700 },
+  anexoSub: { fontSize: 9, color: "#6B7280", marginTop: 2 },
+  anexoBox: {
+    marginTop: 12,
     borderWidth: 1,
     borderColor: "#E5E7EB",
     borderRadius: 12,
     padding: 10,
+    height: 680, // área “segura” pra imagem em A4
+    justifyContent: "center",
     backgroundColor: "#FFFFFF",
-    marginBottom: 10,
   },
-  nonImageTitle: { fontSize: 9, fontWeight: "bold", color: "#0F172A" },
-  nonImageText: { fontSize: 9, color: "#64748B", marginTop: 4 },
-
-  /* Footer */
-  footer: {
-    position: "absolute",
-    left: 34,
-    right: 34,
-    bottom: 18,
-    fontSize: 9,
-    color: "#9CA3AF",
-    textAlign: "center",
+  anexoImg: {
+    width: "100%",
+    height: "100%",
+    objectFit: "contain",
   },
+  anexoFallback: { fontSize: 10, color: "#6B7280", textAlign: "center" },
 });
+
+function Footer({ periodo }: { periodo: string }) {
+  return (
+    <View style={styles.footer} fixed>
+      <Text>META LAV — Prestação de Contas</Text>
+      <Text>Competência: {periodo}</Text>
+      <Text
+        render={({ pageNumber, totalPages }) =>
+          `Página ${pageNumber} / ${totalPages}`
+        }
+      />
+    </View>
+  );
+}
+
+export default function RelatorioFinalPdf(props: Props) {
+  const {
+    condominio,
+    periodo,
+    vendas,
+    kpis,
+    consumos,
+    total_consumo,
+    total_cashback,
+    total_pagar,
+    observacoes,
+    pagamento,
+    anexos,
+  } = props;
+
+  const hasPix = Boolean((pagamento?.pix || "").trim());
+  const hasConta = Boolean((pagamento?.agencia || "").trim() || (pagamento?.conta || "").trim());
+
+  const bancoLabel = (() => {
+    const codigo = (pagamento?.banco_codigo || "").trim();
+    const nome = (pagamento?.banco_nome || "").trim();
+    if (nome && codigo) return `${nome} (${codigo})`;
+    if (codigo) return `Banco (${codigo})`;
+    if (nome) return nome;
+    return "Banco";
+  })();
+
+  return (
+    <Document>
+      {/* PAGE 1: RESUMO */}
+      <Page style={styles.page} size="A4">
+        <View style={styles.headerRow}>
+          <View style={{ maxWidth: 340 }}>
+            <Text style={styles.brand}>META LAV</Text>
+            <Text style={styles.title}>Prestação de Contas</Text>
+            <Text style={styles.subtitle}>Lavanderia Compartilhada — Relatório final</Text>
+          </View>
+
+          <View style={styles.metaBox}>
+            <Text style={styles.metaLabel}>Condomínio</Text>
+            <Text style={styles.metaValue}>{condominio?.nome || "—"}</Text>
+
+            <View style={{ marginTop: 8 }}>
+              <Text style={styles.metaLabel}>Competência</Text>
+              <Text style={styles.metaValue}>{periodo || "—"}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* 1 VENDAS */}
+        <View style={styles.section}>
+          <View style={styles.sectionTitleRow}>
+            <Text style={styles.sectionN}>1</Text>
+            <Text style={styles.sectionTitle}>Vendas por máquina</Text>
+          </View>
+          <Text style={styles.sectionSub}>Fechamento de caixa por máquina/capacidade</Text>
+
+          <View style={styles.table}>
+            <View style={styles.trHead}>
+              <Text style={[styles.th, styles.colMaquina]}>Máquina</Text>
+              <Text style={[styles.th, styles.colNum, styles.right]}>Ciclos</Text>
+              <Text style={[styles.th, styles.colMoney, styles.right]}>Valor unit.</Text>
+              <Text style={[styles.th, styles.colMoney, styles.right]}>Receita</Text>
+            </View>
+
+            {vendas?.length ? (
+              vendas.map((v, i) => (
+                <View key={i} style={styles.tr} wrap={false}>
+                  <Text style={[styles.td, styles.colMaquina]}>{v.maquina || "—"}</Text>
+                  <Text style={[styles.td, styles.colNum, styles.right]}>{fmtInt(v.ciclos)}</Text>
+                  <Text style={[styles.td, styles.colMoney, styles.right]}>{brl(v.valor_unitario)}</Text>
+                  <Text style={[styles.td, styles.colMoney, styles.right, { fontWeight: 700 }]}>
+                    {brl(v.valor_total)}
+                  </Text>
+                </View>
+              ))
+            ) : (
+              <View style={styles.tr}>
+                <Text style={[styles.td, { padding: 10, color: "#6B7280" }]}>Sem dados de vendas.</Text>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.kpiRow}>
+            <View style={styles.kpi}>
+              <Text style={styles.kpiLabel}>Receita Bruta Total</Text>
+              <Text style={styles.kpiValue}>{brl(kpis?.receita_bruta)}</Text>
+            </View>
+            <View style={styles.kpi}>
+              <Text style={styles.kpiLabel}>Cashback (%)</Text>
+              <Text style={styles.kpiValue}>{fmtInt(kpis?.cashback_percentual)}%</Text>
+            </View>
+            <View style={styles.kpi}>
+              <Text style={styles.kpiLabel}>Valor do Cashback</Text>
+              <Text style={styles.kpiValue}>{brl(kpis?.cashback_valor)}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* 2 CONSUMO */}
+        <View style={styles.section}>
+          <View style={styles.sectionTitleRow}>
+            <Text style={styles.sectionN}>2</Text>
+            <Text style={styles.sectionTitle}>Consumo de insumos</Text>
+          </View>
+          <Text style={styles.sectionSub}>Leitura anterior, leitura atual, consumo e repasse</Text>
+
+          <View style={styles.table}>
+            <View style={styles.trHead}>
+              <Text style={[styles.th, styles.colInsumo]}>Insumo</Text>
+              <Text style={[styles.th, styles.colRead, styles.right]}>Anterior</Text>
+              <Text style={[styles.th, styles.colRead, styles.right]}>Atual</Text>
+              <Text style={[styles.th, styles.colCons, styles.right]}>Consumo</Text>
+              <Text style={[styles.th, styles.colVal, styles.right]}>Repasse</Text>
+            </View>
+
+            {consumos?.length ? (
+              consumos.map((c, i) => (
+                <View key={i} style={styles.tr} wrap={false}>
+                  <Text style={[styles.td, styles.colInsumo]}>{c.nome || "—"}</Text>
+                  <Text style={[styles.td, styles.colRead, styles.right]}>{fmtLeitura(c.anterior)}</Text>
+                  <Text style={[styles.td, styles.colRead, styles.right]}>{fmtLeitura(c.atual)}</Text>
+                  <Text style={[styles.td, styles.colCons, styles.right]}>{fmtInt(c.consumo)}</Text>
+                  <Text style={[styles.td, styles.colVal, styles.right, { fontWeight: 700 }]}>
+                    {brl(c.valor_total)}
+                  </Text>
+                </View>
+              ))
+            ) : (
+              <View style={styles.tr}>
+                <Text style={[styles.td, { padding: 10, color: "#6B7280" }]}>Sem dados de consumo.</Text>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.kpiRow}>
+            <View style={[styles.kpi, { flexBasis: "100%" }]}>
+              <Text style={styles.kpiLabel}>Total do Repasse de Consumo</Text>
+              <Text style={styles.kpiValue}>{brl(total_consumo)}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* 3 TOTALIZAÇÃO */}
+        <View style={styles.section}>
+          <View style={styles.sectionTitleRow}>
+            <Text style={styles.sectionN}>3</Text>
+            <Text style={styles.sectionTitle}>Totalização final</Text>
+          </View>
+          <Text style={styles.sectionSub}>Número principal do relatório</Text>
+
+          <View style={styles.totalTable}>
+            <View style={styles.totalRowHead}>
+              <Text>Cashback</Text>
+              <Text style={{ fontWeight: 700 }}>{brl(total_cashback)}</Text>
+            </View>
+            <View style={styles.totalRow}>
+              <Text>Repasse de consumo</Text>
+              <Text style={{ fontWeight: 700 }}>{brl(total_consumo)}</Text>
+            </View>
+            <View style={[styles.totalRow, { backgroundColor: "#F9FAFB" }]}>
+              <Text style={styles.totalStrong}>TOTAL A PAGAR AO CONDOMÍNIO</Text>
+              <Text style={styles.totalBig}>{brl(total_pagar)}</Text>
+            </View>
+          </View>
+
+          {/* DADOS BANCÁRIOS (opcional) */}
+          {(hasPix || hasConta) && (
+            <View style={styles.bankBox}>
+              <Text style={{ fontSize: 9, fontWeight: 700 }}>Dados para pagamento</Text>
+
+              {hasPix ? (
+                <Text style={styles.bankLine}>PIX: {pagamento?.pix}</Text>
+              ) : null}
+
+              {hasConta ? (
+                <>
+                  <Text style={styles.bankLine}>
+                    {bancoLabel} | Agência: {pagamento?.agencia || "—"} | Conta: {pagamento?.conta || "—"}
+                  </Text>
+                  <Text style={styles.bankLine}>CNPJ: {pagamento?.cnpj || "—"}</Text>
+                </>
+              ) : null}
+            </View>
+          )}
+        </View>
+
+        {/* 4 OBS */}
+        <View style={styles.section}>
+          <View style={styles.sectionTitleRow}>
+            <Text style={styles.sectionN}>4</Text>
+            <Text style={styles.sectionTitle}>Observações</Text>
+          </View>
+
+          <View style={styles.obsBox}>
+            <Text style={styles.obsText}>
+              {observacoes?.trim() ? observacoes.trim() : "—"}
+            </Text>
+          </View>
+        </View>
+
+        <Footer periodo={periodo || "—"} />
+      </Page>
+
+      {/* ANEXOS: 1 por página (evita PDF “quebrado” e páginas vazias) */}
+      {(anexos || [])
+        .filter((a) => a && a.tipo)
+        .map((a, idx) => {
+          const hasImg = Boolean(a?.isImagem && a?.src?.data);
+          const uri = hasImg ? imgSrcToDataUri(a.src as ImageSrcObj) : null;
+
+          return (
+            <Page key={`anexo-${idx}`} style={styles.page} size="A4">
+              <View>
+                <Text style={styles.brand}>META LAV</Text>
+                <Text style={styles.anexoTitle}>Anexo</Text>
+                <Text style={styles.anexoSub}>{a.tipo}</Text>
+
+                <View style={styles.anexoBox}>
+                  {uri ? (
+                    <Image src={uri} style={styles.anexoImg} />
+                  ) : (
+                    <Text style={styles.anexoFallback}>
+                      Não foi possível incorporar este anexo no PDF.
+                      {"\n"}(o arquivo pode estar indisponível, grande demais ou não ser imagem)
+                    </Text>
+                  )}
+                </View>
+              </View>
+
+              <Footer periodo={periodo || "—"} />
+            </Page>
+          );
+        })}
+    </Document>
+  );
+}
