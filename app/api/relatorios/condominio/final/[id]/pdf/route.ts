@@ -38,7 +38,6 @@ async function fetchImageAsDataUri(url: string, timeoutMs = 12000): Promise<stri
     const res = await fetch(u, {
       cache: "no-store",
       signal: controller.signal,
-      // evita alguns bloqueios básicos
       headers: { "User-Agent": "meta-lav-auditorias-pdf" },
     });
 
@@ -55,7 +54,6 @@ async function fetchImageAsDataUri(url: string, timeoutMs = 12000): Promise<stri
     const ab = await res.arrayBuffer();
     const b64 = Buffer.from(ab).toString("base64");
 
-    // data uri para o react-pdf embutir sem link externo
     return `data:${mime};base64,${b64}`;
   } catch {
     return null;
@@ -65,8 +63,8 @@ async function fetchImageAsDataUri(url: string, timeoutMs = 12000): Promise<stri
 }
 
 /**
- * Busca o JSON do relatório final (rota existente) usando o mesmo host.
- * Repassa o cookie para manter a sessão.
+ * Busca o JSON do relatório final usando o mesmo host.
+ * Repassa cookie para manter a sessão.
  */
 async function fetchReportJson(req: NextRequest, auditoriaId: string) {
   const host = req.headers.get("host") || "";
@@ -89,7 +87,6 @@ async function fetchReportJson(req: NextRequest, auditoriaId: string) {
     throw new Error(msg);
   }
 
-  // endpoint retorna { ok: true, data: {...} }
   return json?.data ?? null;
 }
 
@@ -105,7 +102,6 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const data = await fetchReportJson(req, auditoriaId);
     if (!data) return bad("Relatório sem dados", 404);
 
-    // ---- Monta props do PDF (shape estável) ----
     const condominioNome = safeText(data?.meta?.condominio_nome);
     const periodo = safeText(data?.meta?.competencia);
 
@@ -139,9 +135,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const total_cashback = safeNumber(data?.totalizacao_final?.cashback);
     const total_pagar = safeNumber(data?.totalizacao_final?.total_a_pagar_condominio);
 
-    const observacoes = safeText(data?.observacoes || "");
+    const obs = safeText(data?.observacoes || "");
+    const observacoes = obs.trim() ? obs : undefined;
 
-    // ---- Anexos: embute imagens com tolerância a falha ----
     const anexosRaw = data?.anexos || {};
     const candidates: Array<{ tipo: string; url: string }> = [
       { tipo: "Foto do medidor de Água", url: safeText(anexosRaw?.foto_agua_url) },
@@ -150,19 +146,15 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       { tipo: "Comprovante de pagamento", url: safeText(anexosRaw?.comprovante_fechamento_url) },
     ].filter((x) => x.url);
 
-    const anexos = [];
+    const anexos: Array<{ tipo: string; url?: string; isImagem: boolean }> = [];
     for (const c of candidates) {
       const dataUri = await fetchImageAsDataUri(c.url);
-      if (dataUri) {
-        anexos.push({ tipo: c.tipo, url: dataUri, isImagem: true });
-      } else {
-        // mantém registro sem quebrar o PDF
-        anexos.push({ tipo: c.tipo, isImagem: false as const });
-      }
+      if (dataUri) anexos.push({ tipo: c.tipo, url: dataUri, isImagem: true });
+      else anexos.push({ tipo: c.tipo, isImagem: false });
     }
 
-    // ---- Gera PDF (SEM JSX) ----
-    const element = React.createElement(RelatorioFinalPdf as any, {
+    // ✅ Importante: tipagem do pdf() é exigente. Cast aqui evita quebra no build.
+    const doc = React.createElement(RelatorioFinalPdf as any, {
       condominio: { nome: condominioNome },
       periodo,
       vendas,
@@ -171,11 +163,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       total_consumo,
       total_cashback,
       total_pagar,
-      observacoes: observacoes.trim() ? observacoes : undefined,
+      observacoes,
       anexos,
-    });
+    }) as unknown as React.ReactElement;
 
-    const out = await pdf(element).toBuffer();
+    const out = await (pdf as any)(doc).toBuffer();
 
     return new NextResponse(out, {
       status: 200,
