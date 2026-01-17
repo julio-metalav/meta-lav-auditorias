@@ -83,12 +83,17 @@ async function fetchReportJson(req: NextRequest, origin: string, auditoriaId: st
 }
 
 async function fetchLogo(origin: string): Promise<ImageSrcObj | null> {
-  // tenta exatamente os nomes que você tem no /public (do seu print)
-  const candidates = [
-    `${origin}/logo.png`,
-    `${origin}/logo.jpg`,
-    `${origin}/${encodeURI("logo Meta Lav.jpg")}`,
-  ];
+  const url = `${origin}/logo.png`;
+
+  const img = await fetchImageAsBuffer(url, 8000);
+  if (!img) {
+    console.error("LOGO NÃO ENCONTRADA:", url);
+    return null;
+  }
+
+  return img;
+}
+
 
   for (const url of candidates) {
     const img = await fetchImageAsBuffer(url, 8000);
