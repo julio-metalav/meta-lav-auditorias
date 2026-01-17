@@ -8,10 +8,10 @@ import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioF
 import { getUserAndRole, roleGte } from "@/lib/auth";
 
 /**
- * Gera o PDF final do relatório do condomínio
- * - Usa @react-pdf/renderer
- * - Conversão correta: toBlob() -> ArrayBuffer -> Uint8Array
- * - Não altera regras de negócio
+ * Geração do PDF final do relatório do condomínio
+ * ATENÇÃO:
+ * - NÃO usar JSX em route.ts
+ * - Usar React.createElement
  */
 
 type Role = "auditor" | "interno" | "gestor";
@@ -34,7 +34,7 @@ export async function GET(
 
   /**
    * Busca o JSON consolidado do relatório final
-   * (já validado e funcionando)
+   * (endpoint já existente e validado)
    */
   const baseUrl = new URL(req.url).origin;
   const jsonUrl = `${baseUrl}/api/relatorios/condominio/final/${auditoriaId}`;
@@ -55,9 +55,11 @@ export async function GET(
   const data = await jsonResp.json();
 
   /**
-   * Geração do PDF
+   * GERAÇÃO DO PDF
+   * ❌ NÃO usar JSX aqui
+   * ✅ React.createElement
    */
-  const doc = <RelatorioFinalPdf {...data} />;
+  const doc = React.createElement(RelatorioFinalPdf, data);
 
   const blob = await pdf(doc).toBlob();
   const arrayBuffer = await blob.arrayBuffer();
