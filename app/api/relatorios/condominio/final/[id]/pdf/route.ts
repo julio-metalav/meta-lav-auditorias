@@ -9,9 +9,11 @@ import { getUserAndRole, roleGte } from "@/lib/auth";
 
 /**
  * Geração do PDF final do relatório do condomínio
- * ATENÇÃO:
- * - NÃO usar JSX em route.ts
- * - Usar React.createElement
+ *
+ * IMPORTANTE:
+ * - route.ts NÃO aceita JSX
+ * - react-pdf exige ReactElement<DocumentProps>
+ * - cast explícito é necessário (limitação de tipagem)
  */
 
 type Role = "auditor" | "interno" | "gestor";
@@ -34,7 +36,6 @@ export async function GET(
 
   /**
    * Busca o JSON consolidado do relatório final
-   * (endpoint já existente e validado)
    */
   const baseUrl = new URL(req.url).origin;
   const jsonUrl = `${baseUrl}/api/relatorios/condominio/final/${auditoriaId}`;
@@ -55,11 +56,14 @@ export async function GET(
   const data = await jsonResp.json();
 
   /**
-   * GERAÇÃO DO PDF
-   * ❌ NÃO usar JSX aqui
-   * ✅ React.createElement
+   * Geração do PDF
+   * - SEM JSX
+   * - Cast explícito exigido pelo react-pdf
    */
-  const doc = React.createElement(RelatorioFinalPdf, data);
+  const doc = React.createElement(
+    RelatorioFinalPdf,
+    data
+  ) as React.ReactElement;
 
   const blob = await pdf(doc).toBlob();
   const arrayBuffer = await blob.arrayBuffer();
