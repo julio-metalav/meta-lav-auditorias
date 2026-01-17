@@ -38,7 +38,22 @@ function competencia(iso: any) {
   return `${s.slice(5, 7)}/${s.slice(0, 4)}`;
 }
 
-export async function GET(_: Request, { params }: { params: { id: string } }) {
+function getOriginFromRequest(req: Request) {
+  // Vercel/Proxy friendly
+  const h = req.headers;
+  const proto = h.get("x-forwarded-proto") || "https";
+  const host = h.get("x-forwarded-host") || h.get("host");
+  if (host) return `${proto}://${host}`;
+
+  // fallback
+  try {
+    return new URL(req.url).origin;
+  } catch {
+    return "http://localhost";
+  }
+}
+
+export async function GET(req: Request, { params }: { params: { id: string } }) {
   const { user, role } = await getUserAndRole();
   if (!user) return bad("Não autenticado", 401);
   if (!roleGte(role as Role, "interno")) return bad("Sem permissão", 403);
@@ -83,11 +98,18 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   if (condoErr) return bad(condoErr.message, 500);
   if (!condo) return bad("Condomínio não encontrado", 404);
 
-  // chama a rota existente de ciclos
-  const origin = new URL((globalThis as any).location?.href ?? "http://localhost").origin;
+  // chama a rota existente de ciclos (mesma origem) + repassa sessão do usuário
+  const origin = getOriginFromRequest(req);
+
+  const cookie = req.headers.get("cookie") || "";
+  const authorization = req.headers.get("authorization") || "";
 
   const ciclosRes = await fetch(`${origin}/api/auditorias/${auditoriaId}/ciclos`, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(cookie ? { cookie } : {}),
+      ...(authorization ? { authorization } : {}),
+    },
     cache: "no-store",
   });
 
