@@ -8,7 +8,7 @@ type Props = {
   logo?: ImageSrcObj | null;
 
   condominio: { nome: string };
-  periodo: string; // ex: 01/2026
+  periodo: string;
   gerado_em?: string;
 
   vendas: Array<{
@@ -64,7 +64,7 @@ function chunk<T>(arr: T[], size: number) {
   return out;
 }
 function fmtDateTime(v?: string) {
-  if (!v) return "";
+  if (!v) return "—";
   try {
     return new Date(v).toLocaleString("pt-BR");
   } catch {
@@ -72,16 +72,17 @@ function fmtDateTime(v?: string) {
   }
 }
 
-/* ================= THEME ================= */
+/* ================= STYLE (corporate) ================= */
 
 const C = {
   ink: "#0B1F35",
   muted: "#5B6B7E",
   line: "#D9E2EC",
-  bg: "#F5F8FB",
+  bg: "#F4F7FB",
   white: "#FFFFFF",
   brand: "#0B4A78",
-  accent: "#F59E0B",
+  soft: "#EEF5FB",
+  head: "#F1F5F9",
 };
 
 const S = StyleSheet.create({
@@ -106,19 +107,19 @@ const S = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 14,
+    marginBottom: 10,
   },
 
-  brandBlock: {
+  brandLeft: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    maxWidth: 360,
+    maxWidth: 380,
   },
 
   logo: {
-    width: 132,
-    height: 44,
+    width: 140,
+    height: 46,
     objectFit: "contain",
   },
 
@@ -126,26 +127,26 @@ const S = StyleSheet.create({
     flexDirection: "column",
   },
 
-  docTitle: {
+  title: {
     fontSize: 18,
     fontWeight: 700,
-    color: C.ink,
     letterSpacing: 0.2,
+    color: C.ink,
   },
 
-  docSub: {
+  subtitle: {
     marginTop: 2,
     fontSize: 9.5,
     color: C.muted,
   },
 
-  docTag: {
+  badge: {
     marginTop: 8,
     alignSelf: "flex-start",
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 999,
-    backgroundColor: "#EAF2F8",
+    backgroundColor: C.soft,
     borderWidth: 1,
     borderColor: "#CFE2F1",
     fontSize: 8.5,
@@ -154,11 +155,11 @@ const S = StyleSheet.create({
   },
 
   metaCard: {
-    width: 240,
+    width: 245,
     backgroundColor: C.white,
     borderWidth: 1,
     borderColor: C.line,
-    borderRadius: 12,
+    borderRadius: 10,
     padding: 10,
   },
 
@@ -181,22 +182,74 @@ const S = StyleSheet.create({
   },
 
   hr: {
-    height: 2,
-    backgroundColor: "#E6EEF6",
-    borderRadius: 2,
-    marginBottom: 14,
+    height: 1,
+    backgroundColor: C.line,
+    marginBottom: 12,
+  },
+
+  kpiRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 12,
+  },
+
+  kpi: {
+    flexGrow: 1,
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 10,
+    padding: 10,
+  },
+
+  kpiLabel: {
+    fontSize: 8.5,
+    color: C.muted,
+  },
+
+  kpiValue: {
+    marginTop: 4,
+    fontSize: 13,
+    fontWeight: 700,
+    color: C.ink,
+  },
+
+  kpiHint: {
+    marginTop: 3,
+    fontSize: 8.5,
+    color: C.muted,
+  },
+
+  kpiTotal: {
+    flexGrow: 1.3,
+    backgroundColor: C.brand,
+    borderRadius: 10,
+    padding: 10,
+  },
+
+  kpiTotalLabel: {
+    fontSize: 8.5,
+    color: "#DCEAF6",
+    fontWeight: 700,
+  },
+
+  kpiTotalValue: {
+    marginTop: 4,
+    fontSize: 16,
+    fontWeight: 700,
+    color: C.white,
   },
 
   card: {
     backgroundColor: C.white,
     borderWidth: 1,
     borderColor: C.line,
-    borderRadius: 14,
+    borderRadius: 10,
     padding: 12,
     marginBottom: 12,
   },
 
-  sectionTitleRow: {
+  sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
@@ -204,17 +257,17 @@ const S = StyleSheet.create({
   },
 
   sectionIndex: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: "#EAF2F8",
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    backgroundColor: C.soft,
     borderWidth: 1,
     borderColor: "#CFE2F1",
     color: C.brand,
     fontSize: 10,
     fontWeight: 700,
     textAlign: "center",
-    paddingTop: 4,
+    paddingTop: 3,
   },
 
   sectionTitle: {
@@ -232,13 +285,13 @@ const S = StyleSheet.create({
   table: {
     borderWidth: 1,
     borderColor: C.line,
-    borderRadius: 12,
+    borderRadius: 10,
     overflow: "hidden",
   },
 
   trHead: {
     flexDirection: "row",
-    backgroundColor: "#F2F6FA",
+    backgroundColor: C.head,
     borderBottomWidth: 1,
     borderBottomColor: C.line,
   },
@@ -270,33 +323,21 @@ const S = StyleSheet.create({
 
   r: { textAlign: "right" },
 
-  noteLine: {
+  note: {
     marginTop: 8,
     fontSize: 9.5,
     color: C.ink,
   },
 
-  noteStrong: { fontWeight: 700 },
+  strong: { fontWeight: 700 },
 
-  totalCard: {
-    backgroundColor: C.brand,
-    borderRadius: 14,
-    padding: 14,
+  financeBox: {
     marginTop: 10,
-  },
-
-  totalLabel: {
-    fontSize: 9,
-    color: "#DCEAF6",
-    fontWeight: 700,
-    letterSpacing: 0.2,
-  },
-
-  totalValue: {
-    marginTop: 4,
-    fontSize: 20,
-    fontWeight: 700,
-    color: C.white,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 10,
+    padding: 10,
   },
 
   obsText: {
@@ -319,13 +360,7 @@ const S = StyleSheet.create({
     color: C.muted,
   },
 
-  anexoHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 12,
-  },
-
+  /* ANEXOS */
   anexoTitle: {
     fontSize: 14,
     fontWeight: 700,
@@ -336,7 +371,7 @@ const S = StyleSheet.create({
     backgroundColor: C.white,
     borderWidth: 1,
     borderColor: C.line,
-    borderRadius: 14,
+    borderRadius: 10,
     padding: 10,
     marginBottom: 12,
   },
@@ -348,33 +383,34 @@ const S = StyleSheet.create({
     color: C.ink,
   },
 
+  // 2 por pagina: altura calibrada pra caber bem
   anexoImg: {
     width: "100%",
-    height: 310,
+    height: 290,
     objectFit: "contain",
   },
 });
 
-/* ================= PDF ================= */
-
 export default function RelatorioFinalPdf(p: Props) {
   const logoUri = p.logo?.data ? img(p.logo) : null;
+
   const obs = (p.observacoes || "").trim();
-  const obsCompact = obs ? (obs.length > 260 ? obs.slice(0, 257) + "…" : obs) : "—";
+  const obsCompact = obs ? (obs.length > 220 ? obs.slice(0, 217) + "…" : obs) : "—";
 
   return (
     <Document>
+      {/* ================= PAGE 1 ================= */}
       <Page size="A4" style={S.page}>
         <View style={S.topBar} />
 
+        {/* Header */}
         <View style={S.headerRow}>
-          <View style={S.brandBlock}>
+          <View style={S.brandLeft}>
             {logoUri ? <Image src={logoUri} style={S.logo} /> : null}
-
             <View style={S.titleBlock}>
-              <Text style={S.docTitle}>Prestação de Contas</Text>
-              <Text style={S.docSub}>Lavanderia Compartilhada — Relatório final</Text>
-              <Text style={S.docTag}>DOCUMENTO OFICIAL</Text>
+              <Text style={S.title}>Prestação de Contas</Text>
+              <Text style={S.subtitle}>Lavanderia Compartilhada — Relatório final</Text>
+              <Text style={S.badge}>DOCUMENTO OFICIAL</Text>
             </View>
           </View>
 
@@ -387,21 +423,42 @@ export default function RelatorioFinalPdf(p: Props) {
             <Text style={S.metaLabel}>Competência</Text>
             <Text style={S.metaValue}>{p.periodo || "—"}</Text>
 
-            {p.gerado_em ? (
-              <>
-                <View style={S.metaDivider} />
-                <Text style={S.metaLabel}>Gerado em</Text>
-                <Text style={[S.metaValue, { fontSize: 9.5 }]}>{fmtDateTime(p.gerado_em)}</Text>
-              </>
-            ) : null}
+            <View style={S.metaDivider} />
+
+            <Text style={S.metaLabel}>Gerado em</Text>
+            <Text style={[S.metaValue, { fontSize: 9.5 }]}>{fmtDateTime(p.gerado_em)}</Text>
           </View>
         </View>
 
         <View style={S.hr} />
 
+        {/* Resumo Executivo (B) */}
+        <View style={S.kpiRow}>
+          <View style={S.kpi}>
+            <Text style={S.kpiLabel}>Receita bruta</Text>
+            <Text style={S.kpiValue}>{brl(p.kpis.receita_bruta)}</Text>
+          </View>
+
+          <View style={S.kpi}>
+            <Text style={S.kpiLabel}>Cashback</Text>
+            <Text style={S.kpiValue}>{brl(p.kpis.cashback_valor)}</Text>
+            <Text style={S.kpiHint}>{n(p.kpis.cashback_percentual)}% sobre receita</Text>
+          </View>
+
+          <View style={S.kpi}>
+            <Text style={S.kpiLabel}>Repasse de consumo</Text>
+            <Text style={S.kpiValue}>{brl(p.total_consumo)}</Text>
+          </View>
+
+          <View style={S.kpiTotal}>
+            <Text style={S.kpiTotalLabel}>TOTAL A PAGAR AO CONDOMÍNIO</Text>
+            <Text style={S.kpiTotalValue}>{brl(p.total_pagar)}</Text>
+          </View>
+        </View>
+
         {/* 1. VENDAS */}
         <View style={S.card}>
-          <View style={S.sectionTitleRow}>
+          <View style={S.sectionHeader}>
             <Text style={S.sectionIndex}>1</Text>
             <View>
               <Text style={S.sectionTitle}>Vendas</Text>
@@ -427,16 +484,16 @@ export default function RelatorioFinalPdf(p: Props) {
             ))}
           </View>
 
-          <Text style={S.noteLine}>
-            Receita bruta: <Text style={S.noteStrong}>{brl(p.kpis.receita_bruta)}</Text> · Cashback:{" "}
-            <Text style={S.noteStrong}>{n(p.kpis.cashback_percentual)}%</Text> (
-            <Text style={S.noteStrong}>{brl(p.kpis.cashback_valor)}</Text>)
+          <Text style={S.note}>
+            Receita bruta: <Text style={S.strong}>{brl(p.kpis.receita_bruta)}</Text> · Cashback:{" "}
+            <Text style={S.strong}>{n(p.kpis.cashback_percentual)}%</Text> (
+            <Text style={S.strong}>{brl(p.kpis.cashback_valor)}</Text>)
           </Text>
         </View>
 
         {/* 2. INSUMOS */}
         <View style={S.card}>
-          <View style={S.sectionTitleRow}>
+          <View style={S.sectionHeader}>
             <Text style={S.sectionIndex}>2</Text>
             <View>
               <Text style={S.sectionTitle}>Insumos</Text>
@@ -464,35 +521,37 @@ export default function RelatorioFinalPdf(p: Props) {
             ))}
           </View>
 
-          <Text style={S.noteLine}>
-            Total do repasse de consumo: <Text style={S.noteStrong}>{brl(p.total_consumo)}</Text>
+          <Text style={S.note}>
+            Total do repasse de consumo: <Text style={S.strong}>{brl(p.total_consumo)}</Text>
           </Text>
         </View>
 
         {/* 3. FINANCEIRO */}
         <View style={S.card}>
-          <View style={S.sectionTitleRow}>
+          <View style={S.sectionHeader}>
             <Text style={S.sectionIndex}>3</Text>
             <View>
               <Text style={S.sectionTitle}>Financeiro</Text>
-              <Text style={S.sectionSub}>Consolidação final do mês</Text>
+              <Text style={S.sectionSub}>Composição do valor final</Text>
             </View>
           </View>
 
-          <Text style={S.noteLine}>
-            Cashback: <Text style={S.noteStrong}>{brl(p.total_cashback)}</Text> · Repasse de consumo:{" "}
-            <Text style={S.noteStrong}>{brl(p.total_consumo)}</Text>
-          </Text>
-
-          <View style={S.totalCard}>
-            <Text style={S.totalLabel}>TOTAL A PAGAR AO CONDOMÍNIO</Text>
-            <Text style={S.totalValue}>{brl(p.total_pagar)}</Text>
+          <View style={S.financeBox}>
+            <Text style={S.note}>
+              Cashback: <Text style={S.strong}>{brl(p.total_cashback)}</Text>
+            </Text>
+            <Text style={S.note}>
+              Repasse de consumo: <Text style={S.strong}>{brl(p.total_consumo)}</Text>
+            </Text>
+            <Text style={[S.note, { marginTop: 10 }]}>
+              Total a pagar ao condomínio: <Text style={[S.strong, { fontSize: 12 }]}>{brl(p.total_pagar)}</Text>
+            </Text>
           </View>
         </View>
 
         {/* 4. OBS */}
         <View style={S.card}>
-          <View style={S.sectionTitleRow}>
+          <View style={S.sectionHeader}>
             <Text style={S.sectionIndex}>4</Text>
             <View>
               <Text style={S.sectionTitle}>Observações</Text>
@@ -514,13 +573,13 @@ export default function RelatorioFinalPdf(p: Props) {
         <Page key={i} size="A4" style={S.page}>
           <View style={S.topBar} />
 
-          <View style={S.anexoHeader}>
-            <View style={S.brandBlock}>
+          <View style={S.headerRow}>
+            <View style={S.brandLeft}>
               {logoUri ? <Image src={logoUri} style={S.logo} /> : null}
               <View style={S.titleBlock}>
                 <Text style={S.anexoTitle}>Anexos</Text>
-                <Text style={S.docSub}>Evidências do fechamento — {p.periodo || "—"}</Text>
-                <Text style={S.docTag}>EVIDÊNCIAS</Text>
+                <Text style={S.subtitle}>Evidências do fechamento — {p.periodo || "—"}</Text>
+                <Text style={S.badge}>EVIDÊNCIAS</Text>
               </View>
             </View>
 
@@ -533,9 +592,12 @@ export default function RelatorioFinalPdf(p: Props) {
             </View>
           </View>
 
+          <View style={S.hr} />
+
           {pair.map((a, j) => (
             <View key={j} style={S.anexoCard}>
               <Text style={S.anexoName}>{a.tipo}</Text>
+
               {a?.src?.data ? (
                 <Image src={img(a.src)} style={S.anexoImg} />
               ) : (

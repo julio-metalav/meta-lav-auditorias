@@ -4,8 +4,6 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import React from "react";
 import { pdf } from "@react-pdf/renderer";
-import fs from "node:fs/promises";
-import path from "node:path";
 
 import { getUserAndRole, roleGte } from "@/lib/auth";
 import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
@@ -28,10 +26,7 @@ function safeNumber(v: any) {
 type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
 type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
-async function fetchImageAsBuffer(
-  url: string,
-  timeoutMs = 12000
-): Promise<ImageSrcObj | null> {
+async function fetchImageAsBuffer(url: string, timeoutMs = 12000): Promise<ImageSrcObj | null> {
   const u = safeText(url).trim();
   if (!u) return null;
 
@@ -48,14 +43,13 @@ async function fetchImageAsBuffer(
     if (!res.ok) return null;
 
     const ct = (res.headers.get("content-type") || "").toLowerCase();
-    const format: "png" | "jpg" =
-      ct.includes("jpeg") || ct.includes("jpg") ? "jpg" : "png";
+    const format: "png" | "jpg" = ct.includes("jpeg") || ct.includes("jpg") ? "jpg" : "png";
 
     const ab = await res.arrayBuffer();
     const buf = Buffer.from(ab);
 
-    // segurança: evita PDF gigante
-    if (buf.length > 6 * 1024 * 1024) return null;
+    // segurança: evita PDF gigante por acidente
+    if (buf.length > 8 * 1024 * 1024) return null;
 
     return { data: buf, format };
   } catch {
@@ -71,59 +65,51 @@ function getOrigin(req: NextRequest) {
   return `${proto}://${host}`;
 }
 
-async function fetchReportJson(
-  req: NextRequest,
-  origin: string,
-  auditoriaId: string
-) {
+async function fetchReportJson(req: NextRequest, origin: string, auditoriaId: string) {
   const cookie = req.headers.get("cookie") || "";
 
-  const res = await fetch(
-    `${origin}/api/relatorios/condominio/final/${auditoriaId}`,
-    {
-      cache: "no-store",
-      headers: { "Content-Type": "application/json", cookie },
-    }
-  );
+  const res = await fetch(`${origin}/api/relatorios/condominio/final/${auditoriaId}`, {
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", cookie },
+  });
 
   const json = await res.json().catch(() => null);
   if (!res.ok) {
-    const msg = json?.error
-      ? safeText(json.error)
-      : "Falha ao obter dados do relatório.";
+    const msg = json?.error ? safeText(json.error) : "Falha ao obter dados do relatório.";
     throw new Error(msg);
   }
   return json?.data ?? null;
 }
 
 /**
- * LOGO OFICIAL (SEM FETCH HTTP)
- * Lê diretamente de /public/logo.png via FS
+ * Logo: tenta vários nomes no /public.
+ * IMPORTANTE: se existir /public/logo.png (recomendado), pega ele.
  */
-async function fetchLogo(): Promise<ImageSrcObj | null> {
-  try {
-    const p = path.join(process.cwd(), "public", "logo.png");
-    const buf = await fs.readFile(p);
+async function fetchLogo(origin: string): Promise<ImageSrcObj | null> {
+  const candidates = [
+    `${origin}/logo.png`,
+    `${origin}/logo.jpg`,
+    `${origin}/logo.jpeg`,
+    `${origin}/logo%20Meta%20Lav.jpg`,
+    `${origin}/logo%20Meta%20Lav.jpeg`,
+    `${origin}/logo%20Meta%20Lav.png`,
+  ];
 
-    if (!buf || buf.length === 0) return null;
-    if (buf.length > 6 * 1024 * 1024) return null;
-
-    return { data: buf, format: "png" };
-  } catch (e) {
-    console.error("ERRO AO LER LOGO EM /public/logo.png:", e);
-    return null;
+  for (const url of candidates) {
+    const img = await fetchImageAsBuffer(url, 12000);
+    if (img) return img;
   }
+
+  console.error("LOGO NÃO ENCONTRADA (candidates):", candidates);
+  return null;
 }
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const { user, role } = await getUserAndRole();
   if (!user) return bad("Não autenticado", 401);
   if (!roleGte(role as Role, "interno")) return bad("Sem permissão", 403);
 
-  const auditoriaId = safeText(params?.id);
+  const auditoriaId = safeText(params?.id).trim();
   if (!auditoriaId) return bad("ID inválido", 400);
 
   const origin = getOrigin(req);
@@ -134,8 +120,9 @@ export async function GET(
 
     const condominioNome = safeText(data?.meta?.condominio_nome);
     const periodo = safeText(data?.meta?.competencia);
-    const geradoEm = safeText(data?.meta?.gerado_em);
+    const geradoEm = safeText(data?.meta?.gerado_em || data?.meta?.geradoEm || "");
 
+    // 1) VENDAS
     const vendas = Array.isArray(data?.vendas_por_maquina?.itens)
       ? data.vendas_por_maquina.itens.map((v: any) => ({
           maquina: safeText(v?.maquina),
@@ -146,43 +133,36 @@ export async function GET(
       : [];
 
     const kpis = {
-      receita_bruta: safeNumber(
-        data?.vendas_por_maquina?.receita_bruta_total
-      ),
-      cashback_percentual: safeNumber(
-        data?.vendas_por_maquina?.cashback_percent
-      ),
-      cashback_valor: safeNumber(
-        data?.vendas_por_maquina?.valor_cashback
-      ),
+      receita_bruta: safeNumber(data?.vendas_por_maquina?.receita_bruta_total),
+      cashback_percentual: safeNumber(data?.vendas_por_maquina?.cashback_percent),
+      cashback_valor: safeNumber(data?.vendas_por_maquina?.valor_cashback),
     };
 
+    // 2) INSUMOS (garante anterior/atual/consumo/repasse)
     const consumos = Array.isArray(data?.consumo_insumos?.itens)
       ? data.consumo_insumos.itens.map((c: any) => ({
           nome: safeText(c?.insumo),
           anterior: safeNumber(c?.leitura_anterior),
           atual: safeNumber(c?.leitura_atual),
           consumo: safeNumber(c?.consumo),
-          valor_unitario: safeNumber(c?.valor_unitario),
           valor_total: safeNumber(c?.valor_total),
         }))
       : [];
 
-    const total_consumo = safeNumber(
-      data?.consumo_insumos?.total_repasse_consumo
-    );
-    const total_cashback = safeNumber(
-      data?.totalizacao_final?.cashback
-    );
-    const total_pagar = safeNumber(
-      data?.totalizacao_final?.total_a_pagar_condominio
-    );
+    const total_consumo = safeNumber(data?.consumo_insumos?.total_repasse_consumo);
 
+    // 3) FINANCEIRO
+    const total_cashback = safeNumber(data?.totalizacao_final?.cashback);
+    const total_pagar = safeNumber(data?.totalizacao_final?.total_a_pagar_condominio);
+
+    // 4) OBS
     const obs = safeText(data?.observacoes || "");
-    const observacoes = obs.trim() ? obs : "";
+    const observacoes = obs.trim() ? obs.trim() : "";
 
-    const logo = await fetchLogo();
+    // LOGO
+    const logo = await fetchLogo(origin);
 
+    // ANEXOS
     const anexosRaw = data?.anexos || {};
     const candidates: Array<{ tipo: string; url: string }> = [
       { tipo: "Foto do medidor de Água", url: safeText(anexosRaw?.foto_agua_url) },
