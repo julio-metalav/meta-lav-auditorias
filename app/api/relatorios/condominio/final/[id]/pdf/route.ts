@@ -4,6 +4,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import React from "react";
 import { pdf } from "@react-pdf/renderer";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 import { getUserAndRole, roleGte } from "@/lib/auth";
 import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
@@ -26,7 +28,7 @@ function safeNumber(v: any) {
 type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
 type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
-async function fetchImageAsBuffer(url: string, timeoutMs = 12000): Promise<ImageSrcObj | null> {
+async function fetchImageAsBuffer(url: string, timeoutMs = 20000): Promise<ImageSrcObj | null> {
   const u = safeText(url).trim();
   if (!u) return null;
 
@@ -39,7 +41,6 @@ async function fetchImageAsBuffer(url: string, timeoutMs = 12000): Promise<Image
       signal: controller.signal,
       headers: { Accept: "image/*" },
     });
-
     if (!res.ok) return null;
 
     const ct = (res.headers.get("content-type") || "").toLowerCase();
@@ -48,8 +49,8 @@ async function fetchImageAsBuffer(url: string, timeoutMs = 12000): Promise<Image
     const ab = await res.arrayBuffer();
     const buf = Buffer.from(ab);
 
-    // segurança: evita PDF gigante por acidente
-    if (buf.length > 8 * 1024 * 1024) return null;
+    // evita PDF gigante
+    if (buf.length > 10 * 1024 * 1024) return null;
 
     return { data: buf, format };
   } catch {
@@ -81,26 +82,27 @@ async function fetchReportJson(req: NextRequest, origin: string, auditoriaId: st
   return json?.data ?? null;
 }
 
-/**
- * Logo: tenta vários nomes no /public.
- * IMPORTANTE: se existir /public/logo.png (recomendado), pega ele.
- */
-async function fetchLogo(origin: string): Promise<ImageSrcObj | null> {
-  const candidates = [
-    `${origin}/logo.png`,
-    `${origin}/logo.jpg`,
-    `${origin}/logo.jpeg`,
-    `${origin}/logo%20Meta%20Lav.jpg`,
-    `${origin}/logo%20Meta%20Lav.jpeg`,
-    `${origin}/logo%20Meta%20Lav.png`,
-  ];
+// ✅ SOLUÇÃO DEFINITIVA: lê do /public, sem HTTP, sem host, sem Vercel doida.
+async function fetchLogoFromPublic(): Promise<ImageSrcObj | null> {
+  const candidates = ["logo.png", "logo.jpg", "logo.jpeg", "logo Meta Lav.jpg", "logo Meta Lav.png"];
 
-  for (const url of candidates) {
-    const img = await fetchImageAsBuffer(url, 12000);
-    if (img) return img;
+  for (const name of candidates) {
+    try {
+      const p = path.join(process.cwd(), "public", name);
+      const buf = await fs.readFile(p);
+      if (!buf || buf.length === 0) continue;
+
+      const lower = name.toLowerCase();
+      const format: "png" | "jpg" =
+        lower.endsWith(".jpg") || lower.endsWith(".jpeg") ? "jpg" : "png";
+
+      return { data: buf, format };
+    } catch {
+      // tenta o próximo
+    }
   }
 
-  console.error("LOGO NÃO ENCONTRADA (candidates):", candidates);
+  console.error("LOGO NAO ENCONTRADA em /public (tente deixar apenas public/logo.png)");
   return null;
 }
 
@@ -120,9 +122,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     const condominioNome = safeText(data?.meta?.condominio_nome);
     const periodo = safeText(data?.meta?.competencia);
-    const geradoEm = safeText(data?.meta?.gerado_em || data?.meta?.geradoEm || "");
+    const geradoEm = safeText(data?.meta?.gerado_em || "");
 
-    // 1) VENDAS
+    // 1) Vendas
     const vendas = Array.isArray(data?.vendas_por_maquina?.itens)
       ? data.vendas_por_maquina.itens.map((v: any) => ({
           maquina: safeText(v?.maquina),
@@ -138,12 +140,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       cashback_valor: safeNumber(data?.vendas_por_maquina?.valor_cashback),
     };
 
-    // 2) INSUMOS (garante anterior/atual/consumo/repasse)
+    // 2) Insumos (com anterior/atual/consumo/repasse)
     const consumos = Array.isArray(data?.consumo_insumos?.itens)
       ? data.consumo_insumos.itens.map((c: any) => ({
           nome: safeText(c?.insumo),
-          anterior: safeNumber(c?.leitura_anterior),
-          atual: safeNumber(c?.leitura_atual),
+          anterior: c?.leitura_anterior ?? null,
+          atual: c?.leitura_atual ?? null,
           consumo: safeNumber(c?.consumo),
           valor_total: safeNumber(c?.valor_total),
         }))
@@ -151,18 +153,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     const total_consumo = safeNumber(data?.consumo_insumos?.total_repasse_consumo);
 
-    // 3) FINANCEIRO
+    // 3) Financeiro
     const total_cashback = safeNumber(data?.totalizacao_final?.cashback);
     const total_pagar = safeNumber(data?.totalizacao_final?.total_a_pagar_condominio);
 
-    // 4) OBS
-    const obs = safeText(data?.observacoes || "");
-    const observacoes = obs.trim() ? obs.trim() : "";
+    // 4) Observações
+    const observacoes = safeText(data?.observacoes || "").trim();
 
-    // LOGO
-    const logo = await fetchLogo(origin);
+    // Logo
+    const logo = await fetchLogoFromPublic();
 
-    // ANEXOS
+    // Anexos
     const anexosRaw = data?.anexos || {};
     const candidates: Array<{ tipo: string; url: string }> = [
       { tipo: "Foto do medidor de Água", url: safeText(anexosRaw?.foto_agua_url) },
@@ -173,7 +174,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     const anexos: AnexoPdf[] = [];
     for (const c of candidates) {
-      const src = await fetchImageAsBuffer(c.url, 20000);
+      const src = await fetchImageAsBuffer(c.url);
       if (src) anexos.push({ tipo: c.tipo, src, isImagem: true });
       else anexos.push({ tipo: c.tipo, isImagem: false });
     }

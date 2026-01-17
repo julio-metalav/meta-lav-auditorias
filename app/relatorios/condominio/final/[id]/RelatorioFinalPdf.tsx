@@ -11,23 +11,13 @@ type Props = {
   periodo: string;
   gerado_em?: string;
 
-  vendas: Array<{
-    maquina: string;
-    ciclos: number;
-    valor_unitario: number;
-    valor_total: number;
-  }>;
-
-  kpis: {
-    receita_bruta: number;
-    cashback_percentual: number;
-    cashback_valor: number;
-  };
+  vendas: Array<{ maquina: string; ciclos: number; valor_unitario: number; valor_total: number }>;
+  kpis: { receita_bruta: number; cashback_percentual: number; cashback_valor: number };
 
   consumos: Array<{
     nome: string;
-    anterior: number;
-    atual: number;
+    anterior: number | null;
+    atual: number | null;
     consumo: number;
     valor_total: number;
   }>;
@@ -39,40 +29,6 @@ type Props = {
   observacoes?: string;
   anexos: AnexoPdf[];
 };
-
-/* ================= UTIL ================= */
-
-function brl(v: number) {
-  return Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
-function n(v: any) {
-  const x = Number(v);
-  return Number.isFinite(x) ? x.toLocaleString("pt-BR") : "—";
-}
-function leitura(v: any) {
-  if (v === null || v === undefined) return "—";
-  const x = Number(v);
-  return Number.isFinite(x) ? x.toLocaleString("pt-BR") : "—";
-}
-function img(src: ImageSrcObj) {
-  const mime = src.format === "jpg" ? "image/jpeg" : "image/png";
-  return `data:${mime};base64,${src.data.toString("base64")}`;
-}
-function chunk<T>(arr: T[], size: number) {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
-function fmtDateTime(v?: string) {
-  if (!v) return "—";
-  try {
-    return new Date(v).toLocaleString("pt-BR");
-  } catch {
-    return String(v);
-  }
-}
-
-/* ================= STYLE (corporate) ================= */
 
 const C = {
   ink: "#0B1F35",
@@ -95,50 +51,15 @@ const S = StyleSheet.create({
     color: C.ink,
     backgroundColor: C.bg,
   },
+  topBar: { height: 6, backgroundColor: C.brand, borderRadius: 6, marginBottom: 14 },
 
-  topBar: {
-    height: 6,
-    backgroundColor: C.brand,
-    borderRadius: 6,
-    marginBottom: 14,
-  },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 },
+  brandLeft: { flexDirection: "row", alignItems: "center", gap: 12, maxWidth: 380 },
+  logo: { width: 150, height: 52, objectFit: "contain" },
 
-  headerRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 10,
-  },
-
-  brandLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    maxWidth: 380,
-  },
-
-  logo: {
-    width: 140,
-    height: 46,
-    objectFit: "contain",
-  },
-
-  titleBlock: {
-    flexDirection: "column",
-  },
-
-  title: {
-    fontSize: 18,
-    fontWeight: 700,
-    letterSpacing: 0.2,
-    color: C.ink,
-  },
-
-  subtitle: {
-    marginTop: 2,
-    fontSize: 9.5,
-    color: C.muted,
-  },
+  titleBlock: { flexDirection: "column" },
+  title: { fontSize: 18, fontWeight: 700, letterSpacing: 0.2, color: C.ink },
+  subtitle: { marginTop: 2, fontSize: 9.5, color: C.muted },
 
   badge: {
     marginTop: 8,
@@ -154,108 +75,26 @@ const S = StyleSheet.create({
     fontWeight: 700,
   },
 
-  metaCard: {
-    width: 245,
-    backgroundColor: C.white,
-    borderWidth: 1,
-    borderColor: C.line,
-    borderRadius: 10,
-    padding: 10,
-  },
+  metaCard: { width: 245, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 10 },
+  metaLabel: { fontSize: 8, color: C.muted },
+  metaValue: { marginTop: 2, fontSize: 10.5, fontWeight: 700, color: C.ink },
+  metaDivider: { height: 1, backgroundColor: C.line, marginVertical: 8 },
 
-  metaLabel: {
-    fontSize: 8,
-    color: C.muted,
-  },
+  hr: { height: 1, backgroundColor: C.line, marginBottom: 12 },
 
-  metaValue: {
-    marginTop: 2,
-    fontSize: 10.5,
-    fontWeight: 700,
-    color: C.ink,
-  },
+  kpiRow: { flexDirection: "row", gap: 10, marginBottom: 12 },
+  kpi: { flexGrow: 1, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 10 },
+  kpiLabel: { fontSize: 8.5, color: C.muted },
+  kpiValue: { marginTop: 4, fontSize: 13, fontWeight: 700, color: C.ink },
+  kpiHint: { marginTop: 3, fontSize: 8.5, color: C.muted },
 
-  metaDivider: {
-    height: 1,
-    backgroundColor: C.line,
-    marginVertical: 8,
-  },
+  kpiTotal: { flexGrow: 1.3, backgroundColor: C.brand, borderRadius: 10, padding: 10 },
+  kpiTotalLabel: { fontSize: 8.5, color: "#DCEAF6", fontWeight: 700 },
+  kpiTotalValue: { marginTop: 4, fontSize: 16, fontWeight: 700, color: C.white },
 
-  hr: {
-    height: 1,
-    backgroundColor: C.line,
-    marginBottom: 12,
-  },
+  card: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 12, marginBottom: 12 },
 
-  kpiRow: {
-    flexDirection: "row",
-    gap: 10,
-    marginBottom: 12,
-  },
-
-  kpi: {
-    flexGrow: 1,
-    backgroundColor: C.white,
-    borderWidth: 1,
-    borderColor: C.line,
-    borderRadius: 10,
-    padding: 10,
-  },
-
-  kpiLabel: {
-    fontSize: 8.5,
-    color: C.muted,
-  },
-
-  kpiValue: {
-    marginTop: 4,
-    fontSize: 13,
-    fontWeight: 700,
-    color: C.ink,
-  },
-
-  kpiHint: {
-    marginTop: 3,
-    fontSize: 8.5,
-    color: C.muted,
-  },
-
-  kpiTotal: {
-    flexGrow: 1.3,
-    backgroundColor: C.brand,
-    borderRadius: 10,
-    padding: 10,
-  },
-
-  kpiTotalLabel: {
-    fontSize: 8.5,
-    color: "#DCEAF6",
-    fontWeight: 700,
-  },
-
-  kpiTotalValue: {
-    marginTop: 4,
-    fontSize: 16,
-    fontWeight: 700,
-    color: C.white,
-  },
-
-  card: {
-    backgroundColor: C.white,
-    borderWidth: 1,
-    borderColor: C.line,
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 12,
-  },
-
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 8,
-  },
-
+  sectionHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
   sectionIndex: {
     width: 20,
     height: 20,
@@ -269,82 +108,23 @@ const S = StyleSheet.create({
     textAlign: "center",
     paddingTop: 3,
   },
+  sectionTitle: { fontSize: 12.5, fontWeight: 700, color: C.ink },
+  sectionSub: { marginTop: 2, fontSize: 9, color: C.muted },
 
-  sectionTitle: {
-    fontSize: 12.5,
-    fontWeight: 700,
-    color: C.ink,
-  },
-
-  sectionSub: {
-    marginTop: 2,
-    fontSize: 9,
-    color: C.muted,
-  },
-
-  table: {
-    borderWidth: 1,
-    borderColor: C.line,
-    borderRadius: 10,
-    overflow: "hidden",
-  },
-
-  trHead: {
-    flexDirection: "row",
-    backgroundColor: C.head,
-    borderBottomWidth: 1,
-    borderBottomColor: C.line,
-  },
-
-  tr: {
-    flexDirection: "row",
-    borderBottomWidth: 1,
-    borderBottomColor: C.line,
-  },
-
-  trAlt: {
-    backgroundColor: "#FBFDFF",
-  },
-
-  th: {
-    paddingVertical: 7,
-    paddingHorizontal: 8,
-    fontSize: 9,
-    fontWeight: 700,
-    color: C.ink,
-  },
-
-  td: {
-    paddingVertical: 7,
-    paddingHorizontal: 8,
-    fontSize: 9.5,
-    color: C.ink,
-  },
-
+  table: { borderWidth: 1, borderColor: C.line, borderRadius: 10, overflow: "hidden" },
+  trHead: { flexDirection: "row", backgroundColor: C.head, borderBottomWidth: 1, borderBottomColor: C.line },
+  tr: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: C.line },
+  trAlt: { backgroundColor: "#FBFDFF" },
+  th: { paddingVertical: 7, paddingHorizontal: 8, fontSize: 9, fontWeight: 700, color: C.ink },
+  td: { paddingVertical: 7, paddingHorizontal: 8, fontSize: 9.5, color: C.ink },
   r: { textAlign: "right" },
 
-  note: {
-    marginTop: 8,
-    fontSize: 9.5,
-    color: C.ink,
-  },
-
+  note: { marginTop: 8, fontSize: 9.5, color: C.ink },
   strong: { fontWeight: 700 },
 
-  financeBox: {
-    marginTop: 10,
-    backgroundColor: "#F8FAFC",
-    borderWidth: 1,
-    borderColor: C.line,
-    borderRadius: 10,
-    padding: 10,
-  },
+  financeBox: { marginTop: 10, backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 10 },
 
-  obsText: {
-    fontSize: 9.5,
-    color: C.ink,
-    lineHeight: 1.35,
-  },
+  obsText: { fontSize: 9.5, color: C.ink, lineHeight: 1.35 },
 
   footer: {
     position: "absolute",
@@ -360,36 +140,43 @@ const S = StyleSheet.create({
     color: C.muted,
   },
 
-  /* ANEXOS */
-  anexoTitle: {
-    fontSize: 14,
-    fontWeight: 700,
-    color: C.ink,
-  },
-
-  anexoCard: {
-    backgroundColor: C.white,
-    borderWidth: 1,
-    borderColor: C.line,
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 12,
-  },
-
-  anexoName: {
-    fontSize: 10,
-    fontWeight: 700,
-    marginBottom: 6,
-    color: C.ink,
-  },
-
-  // 2 por pagina: altura calibrada pra caber bem
-  anexoImg: {
-    width: "100%",
-    height: 290,
-    objectFit: "contain",
-  },
+  // anexos: 2 por pagina
+  anexoGrid: { flexDirection: "row", gap: 10 },
+  anexoBox: { flexGrow: 1, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 8 },
+  anexoName: { fontSize: 9.5, fontWeight: 700, marginBottom: 6, color: C.ink },
+  // mais “cheio” e menos vazio
+  anexoImg: { width: "100%", height: 320, objectFit: "cover", borderRadius: 8 },
 });
+
+function brl(v: number) {
+  return Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+function n(v: any) {
+  const x = Number(v);
+  return Number.isFinite(x) ? x.toLocaleString("pt-BR") : "—";
+}
+function leitura(v: number | null) {
+  if (v === null || v === undefined) return "—";
+  const x = Number(v);
+  return Number.isFinite(x) ? x.toLocaleString("pt-BR") : "—";
+}
+function img(src: ImageSrcObj) {
+  const mime = src.format === "jpg" ? "image/jpeg" : "image/png";
+  return `data:${mime};base64,${src.data.toString("base64")}`;
+}
+function chunk<T>(arr: T[], size: number) {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+function fmtDateTime(v?: string) {
+  if (!v) return "—";
+  try {
+    return new Date(v).toLocaleString("pt-BR");
+  } catch {
+    return String(v);
+  }
+}
 
 export default function RelatorioFinalPdf(p: Props) {
   const logoUri = p.logo?.data ? img(p.logo) : null;
@@ -397,13 +184,14 @@ export default function RelatorioFinalPdf(p: Props) {
   const obs = (p.observacoes || "").trim();
   const obsCompact = obs ? (obs.length > 220 ? obs.slice(0, 217) + "…" : obs) : "—";
 
+  const anexosValidos = Array.isArray(p.anexos) ? p.anexos : [];
+  const anexosPaginas = chunk(anexosValidos, 2);
+
   return (
     <Document>
-      {/* ================= PAGE 1 ================= */}
       <Page size="A4" style={S.page}>
         <View style={S.topBar} />
 
-        {/* Header */}
         <View style={S.headerRow}>
           <View style={S.brandLeft}>
             {logoUri ? <Image src={logoUri} style={S.logo} /> : null}
@@ -432,7 +220,7 @@ export default function RelatorioFinalPdf(p: Props) {
 
         <View style={S.hr} />
 
-        {/* Resumo Executivo (B) */}
+        {/* Resumo executivo */}
         <View style={S.kpiRow}>
           <View style={S.kpi}>
             <Text style={S.kpiLabel}>Receita bruta</Text>
@@ -456,7 +244,7 @@ export default function RelatorioFinalPdf(p: Props) {
           </View>
         </View>
 
-        {/* 1. VENDAS */}
+        {/* 1 Vendas */}
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Text style={S.sectionIndex}>1</Text>
@@ -491,7 +279,7 @@ export default function RelatorioFinalPdf(p: Props) {
           </Text>
         </View>
 
-        {/* 2. INSUMOS */}
+        {/* 2 Insumos */}
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Text style={S.sectionIndex}>2</Text>
@@ -526,7 +314,7 @@ export default function RelatorioFinalPdf(p: Props) {
           </Text>
         </View>
 
-        {/* 3. FINANCEIRO */}
+        {/* 3 Financeiro */}
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Text style={S.sectionIndex}>3</Text>
@@ -549,7 +337,7 @@ export default function RelatorioFinalPdf(p: Props) {
           </View>
         </View>
 
-        {/* 4. OBS */}
+        {/* 4 Observações */}
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Text style={S.sectionIndex}>4</Text>
@@ -558,7 +346,6 @@ export default function RelatorioFinalPdf(p: Props) {
               <Text style={S.sectionSub}>Notas do auditor / conferência</Text>
             </View>
           </View>
-
           <Text style={S.obsText}>{obsCompact}</Text>
         </View>
 
@@ -568,16 +355,16 @@ export default function RelatorioFinalPdf(p: Props) {
         </View>
       </Page>
 
-      {/* ================= ANEXOS (2 POR PÁGINA) ================= */}
-      {chunk(p.anexos || [], 2).map((pair, i) => (
-        <Page key={i} size="A4" style={S.page}>
+      {/* Anexos — 2 por página */}
+      {anexosPaginas.map((pair, pageIdx) => (
+        <Page key={pageIdx} size="A4" style={S.page}>
           <View style={S.topBar} />
 
           <View style={S.headerRow}>
             <View style={S.brandLeft}>
               {logoUri ? <Image src={logoUri} style={S.logo} /> : null}
               <View style={S.titleBlock}>
-                <Text style={S.anexoTitle}>Anexos</Text>
+                <Text style={S.title}>Anexos</Text>
                 <Text style={S.subtitle}>Evidências do fechamento — {p.periodo || "—"}</Text>
                 <Text style={S.badge}>EVIDÊNCIAS</Text>
               </View>
@@ -594,19 +381,23 @@ export default function RelatorioFinalPdf(p: Props) {
 
           <View style={S.hr} />
 
-          {pair.map((a, j) => (
-            <View key={j} style={S.anexoCard}>
-              <Text style={S.anexoName}>{a.tipo}</Text>
+          <View style={S.anexoGrid}>
+            {pair.map((a, i) => (
+              <View key={i} style={S.anexoBox}>
+                <Text style={S.anexoName}>{a.tipo}</Text>
+                {a?.src?.data ? (
+                  <Image src={img(a.src)} style={S.anexoImg} />
+                ) : (
+                  <Text style={{ fontSize: 9, color: C.muted }}>
+                    Não foi possível incorporar este anexo no PDF.
+                  </Text>
+                )}
+              </View>
+            ))}
 
-              {a?.src?.data ? (
-                <Image src={img(a.src)} style={S.anexoImg} />
-              ) : (
-                <Text style={{ fontSize: 9, color: C.muted }}>
-                  Não foi possível incorporar este anexo no PDF.
-                </Text>
-              )}
-            </View>
-          ))}
+            {/* se vier só 1 anexo nessa página, cria o “slot” vazio pra manter o layout bancário */}
+            {pair.length === 1 ? <View style={S.anexoBox} /> : null}
+          </View>
 
           <View style={S.footer}>
             <Text>META LAV — Tecnologia em Lavanderia</Text>
