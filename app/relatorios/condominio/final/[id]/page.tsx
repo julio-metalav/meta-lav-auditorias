@@ -144,6 +144,17 @@ export default function RelatorioFinalPage() {
           <h1 className="mt-1 text-2xl font-semibold text-zinc-900">
             Prestação de Contas — Lavanderia Compartilhada
           </h1>
+<div className="mt-4">
+  <a
+    href={`/api/relatorios/condominio/final/${id}/pdf`}
+    target="_blank"
+    rel="noreferrer"
+    className="inline-flex items-center rounded-xl bg-black px-4 py-2 text-sm text-white"
+  >
+    Baixar PDF
+  </a>
+</div>
+
           <p className="mt-1 text-sm text-zinc-500">
             Visualização para conferência. (PDF entra no próximo passo)
           </p>
