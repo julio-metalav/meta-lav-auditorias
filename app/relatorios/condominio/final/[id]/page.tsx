@@ -4,14 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/app/components/AppShell";
 
-<a
-  href={`/api/relatorios/condominio/final/${id}/pdf`}
-  target="_blank"
-  className="rounded-xl bg-black px-4 py-2 text-sm text-white"
->
-  Baixar PDF
-</a>
-
 type ReportDTO = {
   meta: {
     auditoria_id: string;
@@ -141,23 +133,25 @@ export default function RelatorioFinalPage() {
       <div className="mx-auto max-w-5xl px-4 py-8">
         <div className="mb-6">
           <div className="text-sm text-zinc-500">Relatório final</div>
-          <h1 className="mt-1 text-2xl font-semibold text-zinc-900">
-            Prestação de Contas — Lavanderia Compartilhada
-          </h1>
-<div className="mt-4">
-  <a
-    href={`/api/relatorios/condominio/final/${id}/pdf`}
-    target="_blank"
-    rel="noreferrer"
-    className="inline-flex items-center rounded-xl bg-black px-4 py-2 text-sm text-white"
-  >
-    Baixar PDF
-  </a>
-</div>
 
-          <p className="mt-1 text-sm text-zinc-500">
-            Visualização para conferência. (PDF entra no próximo passo)
-          </p>
+          <div className="mt-1 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h1 className="text-2xl font-semibold text-zinc-900">
+                Prestação de Contas — Lavanderia Compartilhada
+              </h1>
+              <p className="mt-1 text-sm text-zinc-500">Visualização para conferência.</p>
+            </div>
+
+            {/* ✅ Botão PDF (dentro do componente, com id válido) */}
+            <a
+              href={`/api/relatorios/condominio/final/${id}/pdf`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center justify-center rounded-xl bg-black px-4 py-2 text-sm text-white"
+            >
+              Baixar PDF
+            </a>
+          </div>
         </div>
 
         {loading ? (
@@ -284,7 +278,7 @@ export default function RelatorioFinalPage() {
               </div>
             </Box>
 
-            {/* 3 TOTALIZAÇÃO */}
+            {/* 3 TOTAL */}
             <Box>
               <SectionTitle n="3" title="Totalização final" subtitle="Este é o número principal do relatório" />
 
@@ -304,7 +298,7 @@ export default function RelatorioFinalPage() {
                       </td>
                     </tr>
                     <tr className="bg-zinc-50">
-                      <td className="px-4 py-4 text-zinc-900 font-semibold">TOTAL A PAGAR AO CONDOMÍNIO</td>
+                      <td className="px-4 py-4 font-semibold text-zinc-900">TOTAL A PAGAR AO CONDOMÍNIO</td>
                       <td className="px-4 py-4 text-right text-lg font-semibold text-zinc-900">
                         {brl(data.totalizacao_final.total_a_pagar_condominio)}
                       </td>
@@ -324,7 +318,7 @@ export default function RelatorioFinalPage() {
 
             {/* 5 ANEXOS */}
             <Box>
-              <SectionTitle n="5" title="Anexos" subtitle="Fotos dos medidores e comprovante (quando aplicável)" />
+              <SectionTitle n="5" title="Anexos" subtitle="Links para conferência (o PDF embute as fotos de medidores)" />
 
               {anexos.length === 0 ? (
                 <div className="mt-3 text-sm text-zinc-600">Nenhum anexo disponível.</div>
