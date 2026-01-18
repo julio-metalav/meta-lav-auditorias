@@ -56,39 +56,14 @@ type Aud = {
   mes_ref: string | null;
   status: string | null;
 
-  agua_leitura?: number | null;
-  energia_leitura?: number | null;
-  gas_leitura?: number | null;
-
-  base_agua?: number | null;
-  base_energia?: number | null;
-  base_gas?: number | null;
-
   comprovante_fechamento_url?: string | null;
   fechamento_obs?: string | null;
 
   pagamento_metodo?: PagamentoMetodo | null;
 
-  cashback_percent?: number | null;
-  agua_valor_m3?: number | null;
-  energia_valor_kwh?: number | null;
-  gas_valor_m3?: number | null;
-
   condominios?: { nome?: string; cidade?: string; uf?: string } | null;
   condominio?: { nome?: string; cidade?: string; uf?: string } | null;
 };
-
-function monthISO(d = new Date()) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}-01`;
-}
-
-function prevMonthISO(iso: string) {
-  const d = new Date(iso);
-  d.setMonth(d.getMonth() - 1);
-  return monthISO(d);
-}
 
 function toLower(x: any) {
   return String(x ?? "").trim().toLowerCase();
@@ -119,12 +94,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   const [fechamentoObs, setFechamentoObs] = useState("");
   const [uploadingComprovante, setUploadingComprovante] = useState(false);
   const [finalizando, setFinalizando] = useState(false);
-
-  const role = me?.role ?? null;
-  const isStaff = role === "interno" || role === "gestor";
-
-  const mesRef = aud?.mes_ref ?? monthISO(new Date());
-  const mesPrev = prevMonthISO(mesRef);
 
   useEffect(() => {
     carregar();
@@ -255,6 +224,33 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               />
             </label>
           </div>
+
+          {/* 🔍 PREVIEW DO COMPROVANTE */}
+          {aud?.comprovante_fechamento_url && (
+            <div className="mt-4">
+              <div className="mb-2 text-sm font-semibold text-gray-700">
+                Pré-visualização do comprovante
+              </div>
+
+              <a
+                href={aud.comprovante_fechamento_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-block"
+              >
+                <img
+                  src={aud.comprovante_fechamento_url}
+                  alt="Comprovante de fechamento"
+                  loading="lazy"
+                  className="max-h-64 rounded-xl border border-gray-200 shadow-sm hover:opacity-90"
+                />
+              </a>
+
+              <div className="mt-1 text-xs text-gray-500">
+                Clique na imagem para abrir em tamanho original
+              </div>
+            </div>
+          )}
 
           <textarea
             className="mt-4 w-full rounded-xl border p-3 text-sm"
