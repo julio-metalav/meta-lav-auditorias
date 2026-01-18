@@ -5,7 +5,8 @@ type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
 type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
 type Props = {
-  logo?: ImageSrcObj | null;
+  // logo vem do route.ts (Buffer + format). Se quiser no futuro, pode mandar string (URL) também.
+  logo?: ImageSrcObj | string | null;
 
   condominio: { nome: string };
   periodo: string;
@@ -39,6 +40,7 @@ const C = {
   brand: "#0B4A78",
   soft: "#EEF5FB",
   head: "#F1F5F9",
+  altRow: "#FBFDFF",
 };
 
 const S = StyleSheet.create({
@@ -51,11 +53,17 @@ const S = StyleSheet.create({
     color: C.ink,
     backgroundColor: C.bg,
   },
+
   topBar: { height: 6, backgroundColor: C.brand, borderRadius: 6, marginBottom: 14 },
 
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 },
-  brandLeft: { flexDirection: "row", alignItems: "center", gap: 12, maxWidth: 380 },
-  logo: { width: 150, height: 52, objectFit: "contain" },
+
+  // sem gap (react-pdf é ruim com isso)
+  brandLeft: { flexDirection: "row", alignItems: "center", maxWidth: 380 },
+  brandSpacer: { width: 12 },
+
+  // logo proporcional e “corporativa”
+  logo: { width: 128, height: 42, objectFit: "contain" },
 
   titleBlock: { flexDirection: "column" },
   title: { fontSize: 18, fontWeight: 700, letterSpacing: 0.2, color: C.ink },
@@ -75,14 +83,23 @@ const S = StyleSheet.create({
     fontWeight: 700,
   },
 
-  metaCard: { width: 245, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 10 },
+  metaCard: {
+    width: 245,
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 10,
+    padding: 10,
+  },
   metaLabel: { fontSize: 8, color: C.muted },
   metaValue: { marginTop: 2, fontSize: 10.5, fontWeight: 700, color: C.ink },
   metaDivider: { height: 1, backgroundColor: C.line, marginVertical: 8 },
 
   hr: { height: 1, backgroundColor: C.line, marginBottom: 12 },
 
-  kpiRow: { flexDirection: "row", gap: 10, marginBottom: 12 },
+  kpiRow: { flexDirection: "row", marginBottom: 12 },
+  kpiSpacer: { width: 10 },
+
   kpi: { flexGrow: 1, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 10 },
   kpiLabel: { fontSize: 8.5, color: C.muted },
   kpiValue: { marginTop: 4, fontSize: 13, fontWeight: 700, color: C.ink },
@@ -94,7 +111,7 @@ const S = StyleSheet.create({
 
   card: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 12, marginBottom: 12 },
 
-  sectionHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  sectionHeader: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
   sectionIndex: {
     width: 20,
     height: 20,
@@ -108,13 +125,14 @@ const S = StyleSheet.create({
     textAlign: "center",
     paddingTop: 3,
   },
+  sectionHeaderSpacer: { width: 8 },
   sectionTitle: { fontSize: 12.5, fontWeight: 700, color: C.ink },
   sectionSub: { marginTop: 2, fontSize: 9, color: C.muted },
 
   table: { borderWidth: 1, borderColor: C.line, borderRadius: 10, overflow: "hidden" },
   trHead: { flexDirection: "row", backgroundColor: C.head, borderBottomWidth: 1, borderBottomColor: C.line },
   tr: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: C.line },
-  trAlt: { backgroundColor: "#FBFDFF" },
+  trAlt: { backgroundColor: C.altRow },
   th: { paddingVertical: 7, paddingHorizontal: 8, fontSize: 9, fontWeight: 700, color: C.ink },
   td: { paddingVertical: 7, paddingHorizontal: 8, fontSize: 9.5, color: C.ink },
   r: { textAlign: "right" },
@@ -122,7 +140,14 @@ const S = StyleSheet.create({
   note: { marginTop: 8, fontSize: 9.5, color: C.ink },
   strong: { fontWeight: 700 },
 
-  financeBox: { marginTop: 10, backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 10 },
+  financeBox: {
+    marginTop: 10,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 10,
+    padding: 10,
+  },
 
   obsText: { fontSize: 9.5, color: C.ink, lineHeight: 1.35 },
 
@@ -141,11 +166,11 @@ const S = StyleSheet.create({
   },
 
   // anexos: 2 por pagina
-  anexoGrid: { flexDirection: "row", gap: 10 },
+  anexoGrid: { flexDirection: "row" },
+  anexoColSpacer: { width: 10 },
   anexoBox: { flexGrow: 1, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 8 },
   anexoName: { fontSize: 9.5, fontWeight: 700, marginBottom: 6, color: C.ink },
-  // mais “cheio” e menos vazio
-  anexoImg: { width: "100%", height: 320, objectFit: "cover", borderRadius: 8 },
+  anexoImg: { width: "100%", height: 330, objectFit: "cover", borderRadius: 8 },
 });
 
 function brl(v: number) {
@@ -160,7 +185,7 @@ function leitura(v: number | null) {
   const x = Number(v);
   return Number.isFinite(x) ? x.toLocaleString("pt-BR") : "—";
 }
-function img(src: ImageSrcObj) {
+function imgDataUri(src: ImageSrcObj) {
   const mime = src.format === "jpg" ? "image/jpeg" : "image/png";
   return `data:${mime};base64,${src.data.toString("base64")}`;
 }
@@ -178,11 +203,19 @@ function fmtDateTime(v?: string) {
   }
 }
 
+function resolveLogoUri(logo?: Props["logo"]) {
+  if (!logo) return null;
+  if (typeof logo === "string") return logo;
+  if ((logo as ImageSrcObj)?.data) return imgDataUri(logo as ImageSrcObj);
+  return null;
+}
+
 export default function RelatorioFinalPdf(p: Props) {
-  const logoUri = p.logo?.data ? img(p.logo) : null;
+  const logoUri = resolveLogoUri(p.logo);
 
   const obs = (p.observacoes || "").trim();
-  const obsCompact = obs ? (obs.length > 220 ? obs.slice(0, 217) + "…" : obs) : "—";
+  // Observações compactas (não empurra seção pra outra página sem necessidade)
+  const obsCompact = obs ? (obs.length > 260 ? obs.slice(0, 257) + "…" : obs) : "—";
 
   const anexosValidos = Array.isArray(p.anexos) ? p.anexos : [];
   const anexosPaginas = chunk(anexosValidos, 2);
@@ -195,6 +228,7 @@ export default function RelatorioFinalPdf(p: Props) {
         <View style={S.headerRow}>
           <View style={S.brandLeft}>
             {logoUri ? <Image src={logoUri} style={S.logo} /> : null}
+            <View style={S.brandSpacer} />
             <View style={S.titleBlock}>
               <Text style={S.title}>Prestação de Contas</Text>
               <Text style={S.subtitle}>Lavanderia Compartilhada — Relatório final</Text>
@@ -224,23 +258,29 @@ export default function RelatorioFinalPdf(p: Props) {
         <View style={S.kpiRow}>
           <View style={S.kpi}>
             <Text style={S.kpiLabel}>Receita bruta</Text>
-            <Text style={S.kpiValue}>{brl(p.kpis.receita_bruta)}</Text>
+            <Text style={S.kpiValue}>{brl(p.kpis?.receita_bruta ?? 0)}</Text>
           </View>
+
+          <View style={S.kpiSpacer} />
 
           <View style={S.kpi}>
             <Text style={S.kpiLabel}>Cashback</Text>
-            <Text style={S.kpiValue}>{brl(p.kpis.cashback_valor)}</Text>
-            <Text style={S.kpiHint}>{n(p.kpis.cashback_percentual)}% sobre receita</Text>
+            <Text style={S.kpiValue}>{brl(p.kpis?.cashback_valor ?? 0)}</Text>
+            <Text style={S.kpiHint}>{n(p.kpis?.cashback_percentual ?? 0)}% sobre receita</Text>
           </View>
+
+          <View style={S.kpiSpacer} />
 
           <View style={S.kpi}>
             <Text style={S.kpiLabel}>Repasse de consumo</Text>
-            <Text style={S.kpiValue}>{brl(p.total_consumo)}</Text>
+            <Text style={S.kpiValue}>{brl(p.total_consumo ?? 0)}</Text>
           </View>
+
+          <View style={S.kpiSpacer} />
 
           <View style={S.kpiTotal}>
             <Text style={S.kpiTotalLabel}>TOTAL A PAGAR AO CONDOMÍNIO</Text>
-            <Text style={S.kpiTotalValue}>{brl(p.total_pagar)}</Text>
+            <Text style={S.kpiTotalValue}>{brl(p.total_pagar ?? 0)}</Text>
           </View>
         </View>
 
@@ -248,6 +288,7 @@ export default function RelatorioFinalPdf(p: Props) {
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Text style={S.sectionIndex}>1</Text>
+            <View style={S.sectionHeaderSpacer} />
             <View>
               <Text style={S.sectionTitle}>Vendas</Text>
               <Text style={S.sectionSub}>Vendas por máquina</Text>
@@ -262,7 +303,7 @@ export default function RelatorioFinalPdf(p: Props) {
               <Text style={[S.th, { width: "25%" }, S.r]}>Receita</Text>
             </View>
 
-            {p.vendas.map((v, i) => (
+            {(p.vendas || []).map((v, i) => (
               <View key={i} style={[S.tr, i % 2 === 1 ? S.trAlt : {}]} wrap={false}>
                 <Text style={[S.td, { width: "40%" }]}>{v.maquina || "—"}</Text>
                 <Text style={[S.td, { width: "15%" }, S.r]}>{n(v.ciclos)}</Text>
@@ -273,9 +314,9 @@ export default function RelatorioFinalPdf(p: Props) {
           </View>
 
           <Text style={S.note}>
-            Receita bruta: <Text style={S.strong}>{brl(p.kpis.receita_bruta)}</Text> · Cashback:{" "}
-            <Text style={S.strong}>{n(p.kpis.cashback_percentual)}%</Text> (
-            <Text style={S.strong}>{brl(p.kpis.cashback_valor)}</Text>)
+            Receita bruta: <Text style={S.strong}>{brl(p.kpis?.receita_bruta ?? 0)}</Text> · Cashback:{" "}
+            <Text style={S.strong}>{n(p.kpis?.cashback_percentual ?? 0)}%</Text> (
+            <Text style={S.strong}>{brl(p.kpis?.cashback_valor ?? 0)}</Text>)
           </Text>
         </View>
 
@@ -283,6 +324,7 @@ export default function RelatorioFinalPdf(p: Props) {
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Text style={S.sectionIndex}>2</Text>
+            <View style={S.sectionHeaderSpacer} />
             <View>
               <Text style={S.sectionTitle}>Insumos</Text>
               <Text style={S.sectionSub}>Leitura anterior, leitura atual, consumo e repasse</Text>
@@ -298,7 +340,7 @@ export default function RelatorioFinalPdf(p: Props) {
               <Text style={[S.th, { width: "24%" }, S.r]}>Repasse</Text>
             </View>
 
-            {p.consumos.map((c, i) => (
+            {(p.consumos || []).map((c, i) => (
               <View key={i} style={[S.tr, i % 2 === 1 ? S.trAlt : {}]} wrap={false}>
                 <Text style={[S.td, { width: "26%" }]}>{c.nome || "—"}</Text>
                 <Text style={[S.td, { width: "18%" }, S.r]}>{leitura(c.anterior)}</Text>
@@ -310,7 +352,7 @@ export default function RelatorioFinalPdf(p: Props) {
           </View>
 
           <Text style={S.note}>
-            Total do repasse de consumo: <Text style={S.strong}>{brl(p.total_consumo)}</Text>
+            Total do repasse de consumo: <Text style={S.strong}>{brl(p.total_consumo ?? 0)}</Text>
           </Text>
         </View>
 
@@ -318,6 +360,7 @@ export default function RelatorioFinalPdf(p: Props) {
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Text style={S.sectionIndex}>3</Text>
+            <View style={S.sectionHeaderSpacer} />
             <View>
               <Text style={S.sectionTitle}>Financeiro</Text>
               <Text style={S.sectionSub}>Composição do valor final</Text>
@@ -326,21 +369,22 @@ export default function RelatorioFinalPdf(p: Props) {
 
           <View style={S.financeBox}>
             <Text style={S.note}>
-              Cashback: <Text style={S.strong}>{brl(p.total_cashback)}</Text>
+              Cashback: <Text style={S.strong}>{brl(p.total_cashback ?? 0)}</Text>
             </Text>
             <Text style={S.note}>
-              Repasse de consumo: <Text style={S.strong}>{brl(p.total_consumo)}</Text>
+              Repasse de consumo: <Text style={S.strong}>{brl(p.total_consumo ?? 0)}</Text>
             </Text>
             <Text style={[S.note, { marginTop: 10 }]}>
-              Total a pagar ao condomínio: <Text style={[S.strong, { fontSize: 12 }]}>{brl(p.total_pagar)}</Text>
+              Total a pagar ao condomínio: <Text style={[S.strong, { fontSize: 12 }]}>{brl(p.total_pagar ?? 0)}</Text>
             </Text>
           </View>
         </View>
 
         {/* 4 Observações */}
-        <View style={S.card}>
+        <View style={[S.card, { marginBottom: 0 }]} wrap={false}>
           <View style={S.sectionHeader}>
             <Text style={S.sectionIndex}>4</Text>
+            <View style={S.sectionHeaderSpacer} />
             <View>
               <Text style={S.sectionTitle}>Observações</Text>
               <Text style={S.sectionSub}>Notas do auditor / conferência</Text>
@@ -363,6 +407,7 @@ export default function RelatorioFinalPdf(p: Props) {
           <View style={S.headerRow}>
             <View style={S.brandLeft}>
               {logoUri ? <Image src={logoUri} style={S.logo} /> : null}
+              <View style={S.brandSpacer} />
               <View style={S.titleBlock}>
                 <Text style={S.title}>Anexos</Text>
                 <Text style={S.subtitle}>Evidências do fechamento — {p.periodo || "—"}</Text>
@@ -382,21 +427,35 @@ export default function RelatorioFinalPdf(p: Props) {
           <View style={S.hr} />
 
           <View style={S.anexoGrid}>
-            {pair.map((a, i) => (
-              <View key={i} style={S.anexoBox}>
-                <Text style={S.anexoName}>{a.tipo}</Text>
-                {a?.src?.data ? (
-                  <Image src={img(a.src)} style={S.anexoImg} />
-                ) : (
-                  <Text style={{ fontSize: 9, color: C.muted }}>
-                    Não foi possível incorporar este anexo no PDF.
-                  </Text>
-                )}
-              </View>
-            ))}
+            {/* coluna 1 */}
+            <View style={S.anexoBox}>
+              {pair[0] ? (
+                <>
+                  <Text style={S.anexoName}>{pair[0].tipo}</Text>
+                  {pair[0]?.src?.data ? (
+                    <Image src={imgDataUri(pair[0].src!)} style={S.anexoImg} />
+                  ) : (
+                    <Text style={{ fontSize: 9, color: C.muted }}>Não foi possível incorporar este anexo no PDF.</Text>
+                  )}
+                </>
+              ) : null}
+            </View>
 
-            {/* se vier só 1 anexo nessa página, cria o “slot” vazio pra manter o layout bancário */}
-            {pair.length === 1 ? <View style={S.anexoBox} /> : null}
+            <View style={S.anexoColSpacer} />
+
+            {/* coluna 2 */}
+            <View style={S.anexoBox}>
+              {pair[1] ? (
+                <>
+                  <Text style={S.anexoName}>{pair[1].tipo}</Text>
+                  {pair[1]?.src?.data ? (
+                    <Image src={imgDataUri(pair[1].src!)} style={S.anexoImg} />
+                  ) : (
+                    <Text style={{ fontSize: 9, color: C.muted }}>Não foi possível incorporar este anexo no PDF.</Text>
+                  )}
+                </>
+              ) : null}
+            </View>
           </View>
 
           <View style={S.footer}>
