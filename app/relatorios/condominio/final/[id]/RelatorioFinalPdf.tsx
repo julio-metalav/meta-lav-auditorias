@@ -8,7 +8,7 @@ type Props = {
   // logo vem do route.ts (Buffer + format). Se quiser no futuro, pode mandar string (URL) também.
   logo?: ImageSrcObj | string | null;
 
-  condominio: { nome: string };
+  condominio: { nome: string; pagamento_texto?: string | null };
   periodo: string;
   gerado_em?: string;
 
@@ -220,6 +220,8 @@ export default function RelatorioFinalPdf(p: Props) {
   const anexosValidos = Array.isArray(p.anexos) ? p.anexos : [];
   const anexosPaginas = chunk(anexosValidos, 2);
 
+  const pagamentoTexto = (p.condominio?.pagamento_texto || "").trim() || "—";
+
   return (
     <Document>
       <Page size="A4" style={S.page}>
@@ -249,6 +251,11 @@ export default function RelatorioFinalPdf(p: Props) {
 
             <Text style={S.metaLabel}>Gerado em</Text>
             <Text style={[S.metaValue, { fontSize: 9.5 }]}>{fmtDateTime(p.gerado_em)}</Text>
+
+            <View style={S.metaDivider} />
+
+            <Text style={S.metaLabel}>Forma de pagamento</Text>
+            <Text style={[S.metaValue, { fontSize: 9.2 }]}>{pagamentoTexto}</Text>
           </View>
         </View>
 
@@ -272,7 +279,7 @@ export default function RelatorioFinalPdf(p: Props) {
           <View style={S.kpiSpacer} />
 
           <View style={S.kpi}>
-            <Text style={S.kpiLabel}>Repasse de consumo</Text>
+            <Text style={S.kpiLabel}>Repasse de consumo (insumos)</Text>
             <Text style={S.kpiValue}>{brl(p.total_consumo ?? 0)}</Text>
           </View>
 
@@ -314,7 +321,7 @@ export default function RelatorioFinalPdf(p: Props) {
           </View>
 
           <Text style={S.note}>
-            Receita bruta: <Text style={S.strong}>{brl(p.kpis?.receita_bruta ?? 0)}</Text> · Cashback:{" "}
+            Receita bruta: <Text style={S.strong}>{brl(p.kpis?.receita_bruta ?? 0)}</Text> • Cashback:{" "}
             <Text style={S.strong}>{n(p.kpis?.cashback_percentual ?? 0)}%</Text> (
             <Text style={S.strong}>{brl(p.kpis?.cashback_valor ?? 0)}</Text>)
           </Text>
@@ -372,12 +379,16 @@ export default function RelatorioFinalPdf(p: Props) {
               Cashback: <Text style={S.strong}>{brl(p.total_cashback ?? 0)}</Text>
             </Text>
             <Text style={S.note}>
-              Repasse de consumo: <Text style={S.strong}>{brl(p.total_consumo ?? 0)}</Text>
+              Repasse de consumo (insumos): <Text style={S.strong}>{brl(p.total_consumo ?? 0)}</Text>
             </Text>
             <Text style={[S.note, { marginTop: 10 }]}>
               Total a pagar ao condomínio: <Text style={[S.strong, { fontSize: 12 }]}>{brl(p.total_pagar ?? 0)}</Text>
             </Text>
           </View>
+
+          <Text style={[S.note, { marginTop: 10 }]}>
+            Forma de pagamento: <Text style={S.strong}>{pagamentoTexto}</Text>
+          </Text>
         </View>
 
         {/* 4 Observações */}
@@ -421,6 +432,9 @@ export default function RelatorioFinalPdf(p: Props) {
               <View style={S.metaDivider} />
               <Text style={S.metaLabel}>Competência</Text>
               <Text style={S.metaValue}>{p.periodo || "—"}</Text>
+              <View style={S.metaDivider} />
+              <Text style={S.metaLabel}>Forma de pagamento</Text>
+              <Text style={[S.metaValue, { fontSize: 9.2 }]}>{pagamentoTexto}</Text>
             </View>
           </View>
 
