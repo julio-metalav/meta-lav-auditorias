@@ -11,11 +11,11 @@ import { getUserAndRole, roleGte } from "@/lib/auth";
 /**
  * PDF final do relatório do condomínio
  *
- * Regras:
  * - route.ts NÃO usa JSX
  * - usamos React.createElement
- * - no Node/Vercel, prefira toBuffer() (toBlob() costuma dar dor de cabeça)
- * - seu endpoint geralmente retorna { ok: true, data: {...} } => passamos apenas o .data
+ * - endpoint /api/relatorios/condominio/final/[id] retorna { ok: true, data: {...} }
+ * - no Node/Vercel: gerar via toBuffer()
+ * - NextResponse tipado não aceita Buffer direto -> convertemos para Uint8Array
  */
 
 type Role = "auditor" | "interno" | "gestor";
@@ -62,7 +62,6 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   }
 
   // Seu endpoint costuma responder { ok: true, data: {...} }
-  // Se não vier assim, usamos o json bruto como fallback.
   const payload = json?.data ?? json;
   if (!payload) {
     return NextResponse.json({ error: "Relatório sem dados" }, { status: 404 });
@@ -72,7 +71,10 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const doc = React.createElement(RelatorioFinalPdf as any, payload) as React.ReactElement;
 
   // No Node: usar toBuffer()
-  const out: Buffer = await (pdf as any)(doc).toBuffer();
+  const outBuf: Buffer = await (pdf as any)(doc).toBuffer();
+
+  // NextResponse não aceita Buffer tipado -> converte para Uint8Array
+  const out = new Uint8Array(outBuf);
 
   return new NextResponse(out, {
     status: 200,
