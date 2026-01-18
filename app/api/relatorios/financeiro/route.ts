@@ -55,25 +55,45 @@ function pickFirst(obj: any, keys: string[]) {
 }
 
 function buildPagamentoTexto(condo: any) {
-  const pix = pickFirst(condo, ["pix", "pix_chave", "chave_pix", "pix_key", "pixkey"]);
   const doc = pickFirst(condo, ["cnpj", "cpf", "documento", "doc", "cnpj_cpf", "cpf_cnpj"]);
-  if (pix) return `PIX: ${String(pix)}${doc ? ` • CNPJ/CPF: ${String(doc)}` : ""}`;
 
+  // 1️⃣ TENTA DADOS BANCÁRIOS PRIMEIRO
   const bancoNome = pickFirst(condo, ["banco_nome", "banco", "nome_banco"]);
   const bancoCod = pickFirst(condo, ["banco_codigo", "codigo_banco", "banco_cod"]);
   const agencia = pickFirst(condo, ["agencia", "agencia_num", "agencia_banco"]);
   const conta = pickFirst(condo, ["conta", "conta_num", "numero_conta"]);
   const titular = pickFirst(condo, ["titular", "titular_conta", "nome_titular"]);
-  const bancoLabel =
-    bancoNome && bancoCod ? `${bancoNome} (${bancoCod})` : bancoNome ? String(bancoNome) : bancoCod ? `Banco ${bancoCod}` : "Banco";
 
-  const parts: string[] = [];
-  parts.push(bancoLabel);
-  if (agencia) parts.push(`Agência: ${String(agencia)}`);
-  if (conta) parts.push(`Conta: ${String(conta)}`);
-  if (titular) parts.push(`Titular: ${String(titular)}`);
-  if (doc) parts.push(`CNPJ/CPF: ${String(doc)}`);
-  return parts.join(" • ");
+  const temDadosBancarios = bancoNome || bancoCod || agencia || conta;
+
+  if (temDadosBancarios) {
+    const bancoLabel =
+      bancoNome && bancoCod
+        ? `${bancoNome} (${bancoCod})`
+        : bancoNome
+        ? String(bancoNome)
+        : bancoCod
+        ? `Banco ${bancoCod}`
+        : "Banco";
+
+    const parts: string[] = [];
+    parts.push(bancoLabel);
+    if (agencia) parts.push(`Agência: ${String(agencia)}`);
+    if (conta) parts.push(`Conta: ${String(conta)}`);
+    if (titular) parts.push(`Titular: ${String(titular)}`);
+    if (doc) parts.push(`CNPJ/CPF: ${String(doc)}`);
+
+    return parts.join(" • ");
+  }
+
+  // 2️⃣ FALLBACK PARA PIX (SÓ SE NÃO TIVER CONTA)
+  const pix = pickFirst(condo, ["pix", "pix_chave", "chave_pix", "pix_key", "pixkey"]);
+  if (pix) {
+    return `PIX: ${String(pix)}${doc ? ` • CNPJ/CPF: ${String(doc)}` : ""}`;
+  }
+
+  // 3️⃣ NADA CADASTRADO
+  return "Forma de pagamento não cadastrada";
 }
 
 async function fetchJsonWithCookie(url: string, cookie: string | null) {
