@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-import { getUserAndRole, roleGte } from "@/lib/auth";
+import { getUserAndRole, roleGte, supabaseAdmin } from "@/lib/auth";
 
 type Role = "auditor" | "interno" | "gestor";
 
@@ -36,9 +36,9 @@ function fmtLeitura(v: any) {
 }
 
 function getOrigin(req: NextRequest) {
-  const host = req.headers.get("host") || "";
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
   const proto = req.headers.get("x-forwarded-proto") || "https";
-  return `${proto}://${host}`;
+  return host ? `${proto}://${host}` : "http://localhost";
 }
 
 /**
@@ -58,10 +58,10 @@ function toCp1252Bytes(str: string): Uint8Array {
   const out: number[] = [];
   for (const ch of str) {
     const code = ch.charCodeAt(0);
-    if (code <= 0x7F) out.push(code);
-    else if (code >= 0xA0 && code <= 0xFF) out.push(code);
+    if (code <= 0x7f) out.push(code);
+    else if (code >= 0xa0 && code <= 0xff) out.push(code);
     else if (map[ch] !== undefined) out.push(map[ch]);
-    else out.push(0x3F); // '?'
+    else out.push(0x3f); // '?'
   }
   return Uint8Array.from(out);
 }
@@ -114,7 +114,10 @@ function getJpegSize(bytes: Uint8Array): { w: number; h: number } | null {
     if (!isJpeg(bytes)) return null;
     i += 2; // SOI
     while (i < bytes.length) {
-      if (bytes[i] !== 0xff) { i++; continue; }
+      if (bytes[i] !== 0xff) {
+        i++;
+        continue;
+      }
       const marker = bytes[i + 1];
       i += 2;
       if (marker === 0xd9 || marker === 0xda) break; // EOI/SOS
@@ -159,16 +162,81 @@ function readLogoJpegFromPublic(): { bytes: Uint8Array; w: number; h: number } |
   return null;
 }
 
-async function fetchImageAsJpeg(url: string, timeoutMs = 15000): Promise<{ bytes: Uint8Array; w: number; h: number } | null> {
+/**
+ * ============ SUPABASE STORAGE (ROBUSTO) ============
+ * Se a URL apontar para o Storage do Supabase, baixamos via supabaseAdmin().storage.download()
+ * Isso resolve Storage privado / signed URL / etc.
+ */
+function parseSupabaseStorageUrl(u: string): { bucket: string; objectPath: string } | null {
+  try {
+    const url = new URL(u);
+    const p = url.pathname || "";
+
+    // Ex.: /storage/v1/object/public/<bucket>/<path...>
+    // Ex.: /storage/v1/object/sign/<bucket>/<path...>
+    // Ex.: /storage/v1/object/<bucket>/<path...> (variações)
+    const idx = p.indexOf("/storage/v1/object/");
+    if (idx === -1) return null;
+
+    const rest = p.slice(idx + "/storage/v1/object/".length); // "public/<bucket>/<path...>" ou "sign/<bucket>/<path...>"
+    const parts = rest.split("/").filter(Boolean);
+
+    if (parts.length < 2) return null;
+
+    // remove prefix (public|sign) se existir
+    let offset = 0;
+    if (parts[0] === "public" || parts[0] === "sign" || parts[0] === "authenticated") {
+      offset = 1;
+    }
+
+    const bucket = parts[offset];
+    const objectPath = parts.slice(offset + 1).join("/");
+
+    if (!bucket || !objectPath) return null;
+    return { bucket, objectPath };
+  } catch {
+    return null;
+  }
+}
+
+async function downloadViaSupabaseStorage(url: string): Promise<Uint8Array | null> {
+  const parsed = parseSupabaseStorageUrl(url);
+  if (!parsed) return null;
+
+  try {
+    const admin = supabaseAdmin();
+    const { data, error } = await admin.storage.from(parsed.bucket).download(parsed.objectPath);
+    if (error || !data) return null;
+
+    const ab = await data.arrayBuffer();
+    return new Uint8Array(ab);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchImageAsJpeg(
+  url: string,
+  timeoutMs = 15000
+): Promise<{ bytes: Uint8Array; w: number; h: number } | null> {
   const u = safeText(url).trim();
   if (!u) return null;
 
+  // 1) Tenta via Supabase Storage (service role) — mais confiável
+  const viaStorage = await downloadViaSupabaseStorage(u);
+  if (viaStorage && isJpeg(viaStorage) && viaStorage.length <= 6 * 1024 * 1024) {
+    const sz = getJpegSize(viaStorage);
+    if (sz) return { bytes: viaStorage, w: sz.w, h: sz.h };
+  }
+
+  // 2) Fallback: fetch direto da URL (caso seja externa)
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetch(u, {
       cache: "no-store",
+      redirect: "follow",
       signal: controller.signal,
       headers: { Accept: "image/*" },
     });
@@ -177,7 +245,7 @@ async function fetchImageAsJpeg(url: string, timeoutMs = 15000): Promise<{ bytes
     const ab = await res.arrayBuffer();
     const bytes = new Uint8Array(ab);
 
-    // só JPEG (DCTDecode) — PNG não entra aqui
+    // só JPEG (DCTDecode) — PNG/PDF não entra aqui
     if (!isJpeg(bytes)) return null;
 
     // segurança (evita PDF gigante)
@@ -194,7 +262,9 @@ async function fetchImageAsJpeg(url: string, timeoutMs = 15000): Promise<{ bytes
   }
 }
 
-function buildPdf(pages: { content: string; xobjects: Record<string, { bytes: Uint8Array; w: number; h: number }> }[]) {
+function buildPdf(
+  pages: { content: string; xobjects: Record<string, { bytes: Uint8Array; w: number; h: number }> }[]
+) {
   // A4 points
   const W = 595.28;
   const H = 841.89;
@@ -394,7 +464,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     const obs = compactObs(data?.observacoes);
 
-    // anexos (tentaremos embutir somente JPEG; PNG vira “não incorporado”)
+    // anexos (embutimos somente JPEG; PNG/PDF continua sem embutir neste gerador)
     const anexosRaw = data?.anexos || {};
     const candidates: Array<{ tipo: string; url: string }> = [
       { tipo: "Foto do medidor de Água", url: safeText(anexosRaw?.foto_agua_url) },
@@ -488,7 +558,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     kpiBox(2, "Repasse (consumo)", fmtBRL(totalConsumo));
     kpiBox(3, "TOTAL A PAGAR", fmtBRL(totalPagar));
 
-    y -= (boxH + 18);
+    y -= boxH + 18;
 
     function ensureSpace(need: number) {
       if (y - need < bottom + 40) {
@@ -528,7 +598,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     body += pdfRect(tX, y - rowH, tW, rowH, 0.8);
     body += pdfText("F2", 9, tX + 8, y - 12, "Máquina");
     body += pdfText("F2", 9, tX + tW * 0.55, y - 12, "Ciclos");
-    body += pdfText("F2", 9, tX + tW * 0.70, y - 12, "V. unit.");
+    body += pdfText("F2", 9, tX + tW * 0.7, y - 12, "V. unit.");
     body += pdfText("F2", 9, tX + tW * 0.86, y - 12, "Receita");
     y -= rowH;
 
@@ -537,7 +607,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       body += pdfRect(tX, y - rowH, tW, rowH, 0.6);
       body += pdfText("F1", 9.5, tX + 8, y - 12, safeText(v.maquina) || "—");
       body += pdfText("F1", 9.5, tX + tW * 0.55, y - 12, fmtNum(v.ciclos));
-      body += pdfText("F1", 9.5, tX + tW * 0.70, y - 12, fmtBRL(v.valor_unitario));
+      body += pdfText("F1", 9.5, tX + tW * 0.7, y - 12, fmtBRL(v.valor_unitario));
       body += pdfText("F2", 9.5, tX + tW * 0.84, y - 12, fmtBRL(v.valor_total));
       y -= rowH;
     }
@@ -572,7 +642,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       body += pdfText("F1", 9.5, tX + tW * 0.42, y - 12, fmtLeitura(c.anterior));
       body += pdfText("F1", 9.5, tX + tW * 0.56, y - 12, fmtLeitura(c.atual));
       body += pdfText("F1", 9.5, tX + tW * 0.68, y - 12, fmtNum(c.consumo));
-      body += pdfText("F2", 9.5, tX + tW * 0.80, y - 12, fmtBRL(c.valor_total));
+      body += pdfText("F2", 9.5, tX + tW * 0.8, y - 12, fmtBRL(c.valor_total));
       y -= rowH;
     }
 
@@ -590,7 +660,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     body += pdfText("F1", 10, left + 10, boxYTop - 18, `Cashback: ${fmtBRL(totalCashback)}`);
     body += pdfText("F1", 10, left + 10, boxYTop - 34, `Repasse de consumo: ${fmtBRL(totalConsumo)}`);
     body += pdfText("F2", 12, left + 10, boxYTop - 52, `TOTAL A PAGAR AO CONDOMÍNIO: ${fmtBRL(totalPagar)}`);
-    y -= (boxHeight + 18);
+    y -= boxHeight + 18;
 
     // 4. Observações
     sectionTitle(4, "Observações", "Notas do auditor / conferência");
@@ -605,7 +675,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     pages.push({ content: body, xobjects: page1XObjects });
 
     // ======= ANEXOS: 2 por página (somente JPEG embutido)
-    // layout: 2 cards empilhados (top/bottom) para ficar “corporativo” e sempre caber
+    // layout: 2 cards empilhados (top/bottom)
     for (let i = 0; i < candidates.length; i += 2) {
       const pair = candidates.slice(i, i + 2);
 
@@ -623,7 +693,6 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       c += pdfLine(left, yy, right, yy, 0.6);
       yy -= 14;
 
-      // card helper
       async function renderAnexo(slot: number, a: { tipo: string; url: string }) {
         const cardH = 300;
         const cardW = right - left;
@@ -633,8 +702,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         c += pdfRect(cardX, cardY - cardH, cardW, cardH, 0.8);
         c += pdfText("F2", 10.5, cardX + 10, cardY - 18, a.tipo);
 
-        // tenta embutir jpeg
         const img = await fetchImageAsJpeg(a.url, 20000);
+
         if (img) {
           const name = `A${i + slot + 1}`;
           xobjects[name] = { bytes: img.bytes, w: img.w, h: img.h };
@@ -656,16 +725,15 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         } else {
           c += pdfText("F1", 9.5, cardX + 10, cardY - 40, "Não foi possível incorporar este anexo no PDF (somente JPG).");
           c += pdfText("F1", 8.5, cardX + 10, cardY - 56, `Arquivo disponível no sistema:`);
-          // evita estourar linha: mostra início
+
           const u = safeText(a.url);
           const short = u.length > 90 ? u.slice(0, 87) + "..." : u;
           c += pdfText("F1", 8.2, cardX + 10, cardY - 70, short);
         }
 
-        yy -= (cardH + 18);
+        yy -= cardH + 18;
       }
 
-      // render 1º e 2º anexo
       // eslint-disable-next-line no-await-in-loop
       if (pair[0]) await renderAnexo(0, pair[0]);
       // eslint-disable-next-line no-await-in-loop
@@ -674,7 +742,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       pages.push({ content: c, xobjects });
     }
 
-    // ======= aplica header/footer em todas as páginas (com paginação real)
+    // ======= aplica header/footer em todas as páginas
     const totalPages = pages.length;
     const withHeader = pages.map((pg, idx) => {
       const hasLogo = !!pg.xobjects["Logo"];
