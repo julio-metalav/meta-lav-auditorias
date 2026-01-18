@@ -2,6 +2,37 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/app/components/AppShell";
+async function pdfFirstPageToJpeg(file: File): Promise<File> {
+  // carrega pdfjs só no client
+  const pdfjsLib: any = await import("pdfjs-dist/build/pdf");
+  // worker (sem isso costuma quebrar)
+  const workerSrc = await import("pdfjs-dist/build/pdf.worker.mjs");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc.default;
+
+  const ab = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+  const page = await pdf.getPage(1);
+
+  // escala boa p/ leitura, sem explodir tamanho
+  const viewport = page.getViewport({ scale: 2.0 });
+
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas não disponível");
+
+  canvas.width = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  const blob: Blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Falha ao gerar JPG"))), "image/jpeg", 0.9);
+  });
+
+  const nameBase = (file.name || "comprovante").replace(/\.pdf$/i, "");
+  return new File([blob], `${nameBase}.jpg`, { type: "image/jpeg" });
+}
+
 
 type Role = "auditor" | "interno" | "gestor";
 type PagamentoMetodo = "direto" | "boleto";
@@ -366,7 +397,12 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     setCiclosEditMode(false);
   }
 
-  async function uploadComprovante(file: File) {
+// Comprovante precisa ser imagem (PDF não entra no PDF final)
+if (!file?.type?.startsWith("image/")) {
+  throw new Error("Anexe o comprovante como IMAGEM (JPG/PNG). PDF não é suportado no relatório.");
+}
+  
+async function uploadComprovante(file: File) {
     const audId = String(aud?.id ?? id).trim();
     if (!audId) return;
 
@@ -542,7 +578,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       await salvarObsFinanceiro();
 
       if (exigeComprovante && !aud?.comprovante_fechamento_url) {
-        throw new Error("Pagamento direto: anexe o comprovante para finalizar.");
+        throw new Error("Pagamento direto: anexe o comprovante (IMAGEM JPG/JPEG) para conseguir finalizar");
       }
 
       await fetchJSON(`/api/auditorias/${audId}/finalizar`, { method: "POST" });
@@ -665,7 +701,13 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 <input
                   type="file"
                   className="hidden"
-                  accept="image/*,application/pdf"
+                  <input
+  type="file"
+  accept="image/jpeg,image/jpg,image/jpeg"
+  ...
+/>
+
+
                   disabled={uploadingComprovante || isFinal}
                   onChange={(e) => {
                     const f = e.target.files?.[0];

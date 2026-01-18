@@ -112,6 +112,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const form = await req.formData();
     const kind = String(form.get("kind") ?? "");
     const file = form.get("file") as File | null;
+const mime = (file as any)?.type ? String((file as any).type) : "";
+
+if (kind === "comprovante_fechamento" && !mime.startsWith("image/")) {
+  return bad("Comprovante deve ser IMAGEM (JPG/JPEG). PDF não é suportado no relatório.", 400);
+}
+
 
     // opcional (somente para comprovante)
     const fechamentoObs = toShortText(form.get("fechamento_obs"));
