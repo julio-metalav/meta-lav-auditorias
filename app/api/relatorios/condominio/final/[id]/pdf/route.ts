@@ -45,39 +45,15 @@ function getOrigin(req: NextRequest) {
  * ============ PDF MINIMAL (IGUAL AO FINANCEIRO) ============
  * - fontes Type1 base (Helvetica / Helvetica-Bold)
  * - texto em CP1252/WinAnsi (hex)
- * - imagem: JPEG via DCTDecode
- * - agora: se vier PNG/WebP/etc, tenta converter para JPEG com sharp (se disponível)
+ * - imagem: SOMENTE JPEG via DCTDecode (logo e anexos jpg)
  */
 
 function toCp1252Bytes(str: string): Uint8Array {
   const map: Record<string, number> = {
-    "€": 0x80,
-    "‚": 0x82,
-    "ƒ": 0x83,
-    "„": 0x84,
-    "…": 0x85,
-    "†": 0x86,
-    "‡": 0x87,
-    "ˆ": 0x88,
-    "‰": 0x89,
-    "Š": 0x8a,
-    "‹": 0x8b,
-    "Œ": 0x8c,
-    "Ž": 0x8e,
-    "‘": 0x91,
-    "’": 0x92,
-    "“": 0x93,
-    "”": 0x94,
-    "•": 0x95,
-    "–": 0x96,
-    "—": 0x97,
-    "˜": 0x98,
-    "™": 0x99,
-    "š": 0x9a,
-    "›": 0x9b,
-    "œ": 0x9c,
-    "ž": 0x9e,
-    "Ÿ": 0x9f,
+    "€": 0x80, "‚": 0x82, "ƒ": 0x83, "„": 0x84, "…": 0x85, "†": 0x86, "‡": 0x87,
+    "ˆ": 0x88, "‰": 0x89, "Š": 0x8a, "‹": 0x8b, "Œ": 0x8c, "Ž": 0x8e,
+    "‘": 0x91, "’": 0x92, "“": 0x93, "”": 0x94, "•": 0x95, "–": 0x96, "—": 0x97,
+    "˜": 0x98, "™": 0x99, "š": 0x9a, "›": 0x9b, "œ": 0x9c, "ž": 0x9e, "Ÿ": 0x9f,
   };
   const out: number[] = [];
   for (const ch of str) {
@@ -121,6 +97,7 @@ function pdfLine(x1: number, y1: number, x2: number, y2: number, w = 0.7) {
   return `${w.toFixed(2)} w ${x1.toFixed(2)} ${y1.toFixed(2)} m ${x2.toFixed(2)} ${y2.toFixed(2)} l S\n`;
 }
 function pdfRect(x: number, y: number, w: number, h: number, lineW = 0.7) {
+  // apenas stroke (sem fill)
   return `${lineW.toFixed(2)} w ${x.toFixed(2)} ${y.toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re S\n`;
 }
 function pdfImage(x: number, y: number, w: number, h: number, name: string) {
@@ -186,19 +163,18 @@ function readLogoJpegFromPublic(): { bytes: Uint8Array; w: number; h: number } |
 }
 
 /**
- * ============ SUPABASE STORAGE (ROBUSTO) ============
+ * ============ SUPABASE STORAGE ============
+ * Baixa via service role (resolve signed/private/public)
  */
 function parseSupabaseStorageUrl(u: string): { bucket: string; objectPath: string } | null {
   try {
     const url = new URL(u);
     const p = url.pathname || "";
-
     const idx = p.indexOf("/storage/v1/object/");
     if (idx === -1) return null;
 
     const rest = p.slice(idx + "/storage/v1/object/".length);
     const parts = rest.split("/").filter(Boolean);
-
     if (parts.length < 2) return null;
 
     let offset = 0;
@@ -208,7 +184,6 @@ function parseSupabaseStorageUrl(u: string): { bucket: string; objectPath: strin
 
     const bucket = parts[offset];
     const objectPath = parts.slice(offset + 1).join("/");
-
     if (!bucket || !objectPath) return null;
     return { bucket, objectPath };
   } catch {
@@ -232,25 +207,6 @@ async function downloadViaSupabaseStorage(url: string): Promise<Uint8Array | nul
   }
 }
 
-/**
- * Converte bytes (PNG/WebP/etc) -> JPEG quando "sharp" estiver disponível.
- * Se sharp não existir no projeto, volta null e seguimos o fluxo normal.
- */
-async function tryConvertToJpeg(bytes: Uint8Array): Promise<Uint8Array | null> {
-  try {
-    const mod: any = await import("sharp");
-    const sharp = mod?.default || mod;
-
-    const out = await sharp(Buffer.from(bytes))
-      .jpeg({ quality: 85, mozjpeg: true })
-      .toBuffer();
-
-    return new Uint8Array(out);
-  } catch {
-    return null;
-  }
-}
-
 async function fetchImageAsJpeg(
   url: string,
   timeoutMs = 15000
@@ -261,23 +217,13 @@ async function fetchImageAsJpeg(
   const normalize = async (
     raw: Uint8Array
   ): Promise<{ bytes: Uint8Array; w: number; h: number } | null> => {
-    // já é JPEG
-    if (isJpeg(raw)) {
-      const sz = getJpegSize(raw);
-      if (sz) return { bytes: raw, w: sz.w, h: sz.h };
-    }
-
-    // tenta converter (PNG/WebP/etc) -> JPEG
-    const converted = await tryConvertToJpeg(raw);
-    if (converted && isJpeg(converted)) {
-      const sz2 = getJpegSize(converted);
-      if (sz2) return { bytes: converted, w: sz2.w, h: sz2.h };
-    }
-
-    return null;
+    if (!isJpeg(raw)) return null;
+    const sz = getJpegSize(raw);
+    if (!sz) return null;
+    return { bytes: raw, w: sz.w, h: sz.h };
   };
 
-  // 1) via Supabase Storage (service role)
+  // 1) via Supabase Storage
   const viaStorage = await downloadViaSupabaseStorage(u);
   if (viaStorage && viaStorage.length <= 6 * 1024 * 1024) {
     const ok = await normalize(viaStorage);
@@ -361,7 +307,11 @@ function buildPdf(
   for (const pg of pages) {
     const cid = newObjId();
     const data = strBytes(pg.content);
-    const stream = concatBytes([strBytes(`<< /Length ${data.length} >>\nstream\n`), data, strBytes(`\nendstream`)]);
+    const stream = concatBytes([
+      strBytes(`<< /Length ${data.length} >>\nstream\n`),
+      data,
+      strBytes(`\nendstream`),
+    ]);
     objs.push({ id: cid, body: stream });
     contentIds.push(cid);
   }
@@ -493,7 +443,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const cashbackPct = n(data?.vendas_por_maquina?.cashback_percent);
     const cashbackValor = n(data?.vendas_por_maquina?.valor_cashback);
 
-    // consumos (insumos)
+    // consumos
     const consumos = Array.isArray(data?.consumo_insumos?.itens)
       ? data.consumo_insumos.itens.map((c: any) => ({
           nome: safeText(c?.insumo),
@@ -510,7 +460,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     const obs = compactObs(data?.observacoes);
 
-    // anexos (agora converte PNG/etc -> JPG quando possível)
+    // anexos (embutimos JPEG; outros formatos caem no fallback sem quebrar layout)
     const anexosRaw = data?.anexos || {};
     const candidates: Array<{ tipo: string; url: string }> = [
       { tipo: "Foto do medidor de Água", url: safeText(anexosRaw?.foto_agua_url) },
@@ -519,11 +469,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       { tipo: "Comprovante de pagamento", url: safeText(anexosRaw?.comprovante_fechamento_url) },
     ].filter((x) => x.url);
 
-    // logo (JPEG local do /public)
     const logo = readLogoJpegFromPublic();
 
     /**
-     * ============ LAYOUT (BANCO) ============
+     * ============ LAYOUT ============
      */
     const left = 48;
     const right = 547;
@@ -531,58 +480,46 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const bottom = 60;
     const footerY = 28;
 
+    const titleX = left + 150;
+
     function header(pageNo: number, totalPages: number, hasLogo: boolean) {
       let s = "";
       const y0 = top;
 
-      // topo
+      // linha topo
       s += pdfLine(left, y0, right, y0, 1.2);
 
-      // logo
-      if (hasLogo && logo) {
+      // logo (não empurra mais nada, porque o título tem X fixo)
+      if (hasLogo) {
         const targetH = 34;
-        const scale = targetH / (logo.h || 34);
-        const w = (logo.w || 120) * scale;
+        const scale = targetH / (logo?.h || 34);
+        const w = (logo?.w || 120) * scale;
         const h = targetH;
         s += pdfImage(left, y0 - 48, w, h, "Logo");
       }
 
-      // título (mesma posição de antes)
-      const titleX = hasLogo ? left + 150 : left;
+      // títulos
       s += pdfText("F2", 16, titleX, y0 - 18, "Prestação de Contas");
       s += pdfText("F1", 10, titleX, y0 - 34, "Lavanderia Compartilhada — Relatório final");
 
-      // card meta (menor e sem invadir linha)
-      const cardW = 220;
-      const cardH = 46;
+      // card compacto (SÓ competência + gerado em) — menor e sem invadir linhas
+      const cardW = 190;
+      const cardH = 40;
       const cx = right - cardW;
-      const cyTop = y0 - 52;
+      const cyTop = y0 - 58; // topo do card
       const cy = cyTop - cardH;
 
       s += pdfRect(cx, cy, cardW, cardH, 0.8);
 
-      // textos DENTRO do card (somente competência + gerado em)
-      const pad = 10;
-      s += pdfText("F1", 8.5, cx + pad, cyTop - 18, "Competência");
-      s += pdfText("F2", 10.5, cx + pad + 70, cyTop - 20, periodo);
+      s += pdfText("F1", 8.5, cx + 10, cyTop - 16, "Competência");
+      s += pdfText("F2", 10.5, cx + 10, cyTop - 30, periodo);
 
-      s += pdfText("F1", 8.2, cx + pad, cyTop - 34, "Gerado em");
-      s += pdfText(
-        "F2",
-        9,
-        cx + pad + 70,
-        cyTop - 34,
-        geradoEm ? new Date(geradoEm).toLocaleString("pt-BR") : "—"
-      );
+      s += pdfText("F1", 8.2, cx + 90, cyTop - 16, "Gerado em");
+      const geradoTxt = geradoEm ? new Date(geradoEm).toLocaleString("pt-BR") : "—";
+      s += pdfText("F2", 8.5, cx + 90, cyTop - 30, geradoTxt);
 
-      // linha separadora
+      // linha separadora header
       s += pdfLine(left, y0 - 95, right, y0 - 95, 0.8);
-
-      // linha extra com condomínio (fora do card, em destaque)
-      s += pdfText("F2", 12, left, y0 - 120, `Condomínio: ${condominioNome}`);
-
-      // linha abaixo do condomínio
-      s += pdfLine(left, y0 - 130, right, y0 - 130, 0.8);
 
       // footer
       s += pdfLine(left, footerY + 18, right, footerY + 18, 0.6);
@@ -592,14 +529,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       return s;
     }
 
-    // monta páginas com content + imagens por página
+    // páginas
     const pages: { content: string; xobjects: Record<string, { bytes: Uint8Array; w: number; h: number }> }[] = [];
 
-    // ======= PAGE 1 (conteúdo principal)
-    let y = top - 170; // ajustado porque agora mostramos "Condomínio:" no header
+    // ======= PAGE 1
+    let y = top - 120;
     let body = "";
 
-    // KPIs (4 caixas)
+    // Condomínio em destaque (fora do card, do jeito certo)
+    body += pdfText("F2", 12.5, left, y + 26, `Condomínio: ${condominioNome}`);
+    body += pdfLine(left, y + 16, right, y + 16, 0.6);
+
+    // KPIs
     const boxH = 54;
     const gap = 10;
     const totalW = right - left;
@@ -623,7 +564,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       if (y - need < bottom + 40) {
         pages.push({ content: body, xobjects: {} });
         body = "";
-        y = top - 170;
+        y = top - 120;
       }
     }
 
@@ -639,10 +580,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       y -= 14;
     }
 
-    // 1. Vendas
+    // 1 Vendas
     sectionTitle(1, "Vendas", "Vendas por máquina");
 
-    // tabela vendas
     ensureSpace(90);
     const tX = left;
     const tW = right - left;
@@ -675,7 +615,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     );
     y -= 18;
 
-    // 2. Insumos
+    // 2 Insumos
     sectionTitle(2, "Insumos", "Leitura anterior, leitura atual, consumo e repasse");
 
     ensureSpace(110);
@@ -702,7 +642,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     body += pdfText("F1", 9.5, left, y, `Total do repasse de consumo: ${fmtBRL(totalConsumo)}`);
     y -= 18;
 
-    // 3. Financeiro
+    // 3 Financeiro
     sectionTitle(3, "Financeiro", "Composição do valor final");
 
     ensureSpace(75);
@@ -714,7 +654,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     body += pdfText("F2", 12, left + 10, boxYTop - 52, `TOTAL A PAGAR AO CONDOMÍNIO: ${fmtBRL(totalPagar)}`);
     y -= boxHeight + 18;
 
-    // 4. Observações
+    // 4 Observações
     sectionTitle(4, "Observações", "Notas do auditor / conferência");
     ensureSpace(50);
     body += pdfText("F1", 10, left, y, obs);
@@ -725,55 +665,73 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     if (logo) page1XObjects["Logo"] = { bytes: logo.bytes, w: logo.w, h: logo.h };
     pages.push({ content: body, xobjects: page1XObjects });
 
-    // ======= ANEXOS: 2 por página (tentando embutir tudo via JPG/convert)
-    for (let i = 0; i < candidates.length; i += 2) {
-      const pair = candidates.slice(i, i + 2);
+    // ======= ANEXOS: 4 por página (2x2)
+    // Cada célula com título + imagem "contain" dentro do quadrado
+    const perPage = 4;
+    for (let base = 0; base < candidates.length; base += perPage) {
+      const batch = candidates.slice(base, base + perPage);
 
       let c = "";
-      let yy = top - 160;
-
       const xobjects: Record<string, { bytes: Uint8Array; w: number; h: number }> = {};
       if (logo) xobjects["Logo"] = { bytes: logo.bytes, w: logo.w, h: logo.h };
 
+      // título
+      let yy = top - 120;
       c += pdfText("F2", 12, left, yy, "Anexos");
       yy -= 14;
       c += pdfText("F1", 9.5, left, yy, `Evidências do fechamento — ${periodo}`);
       yy -= 10;
       c += pdfLine(left, yy, right, yy, 0.6);
-      yy -= 14;
 
-      async function renderAnexo(slot: number, a: { tipo: string; url: string }) {
-        const cardH = 300;
-        const cardW = right - left;
-        const cardX = left;
-        const cardYTop = yy;
+      // grid
+      const gridTop = yy - 16;
+      const gridW = right - left;
+      const gridH = 620;
 
-        c += pdfRect(cardX, cardYTop - cardH, cardW, cardH, 0.8);
-        c += pdfText("F2", 10.5, cardX + 10, cardYTop - 18, a.tipo);
+      const colGap = 12;
+      const rowGap = 12;
+      const cols = 2;
+      const rows = 2;
+
+      const cellW = (gridW - colGap) / 2;
+      const cellH = (gridH - rowGap) / 2;
+
+      async function renderCell(slot: number, a: { tipo: string; url: string }) {
+        const col = slot % 2;
+        const row = Math.floor(slot / 2);
+
+        const x = left + col * (cellW + colGap);
+        const yTop = gridTop - row * (cellH + rowGap);
+
+        // caixa
+        c += pdfRect(x, yTop - cellH, cellW, cellH, 0.8);
+
+        // título
+        c += pdfText("F2", 10.5, x + 10, yTop - 18, a.tipo);
 
         const img = await fetchImageAsJpeg(a.url, 20000);
 
+        // área interna de imagem
+        const innerX = x + 10;
+        const innerY = yTop - cellH + 12;
+        const innerW = cellW - 20;
+        const innerH = cellH - 38;
+
         if (img) {
-          const name = `A${i + slot + 1}`;
+          const name = `A${base + slot + 1}`;
           xobjects[name] = { bytes: img.bytes, w: img.w, h: img.h };
 
-          // área imagem dentro do card (usa mais altura útil)
-          const imgX = cardX + 10;
-          const imgY = cardYTop - cardH + 10;
-          const imgW = cardW - 20;
-          const imgH = cardH - 28;
-
-          // contain (sem cortar)
-          const scale = Math.min(imgW / img.w, imgH / img.h);
+          // contain
+          const scale = Math.min(innerW / img.w, innerH / img.h);
           const w = img.w * scale;
           const h = img.h * scale;
-          const px = imgX + (imgW - w) / 2;
-          const py = imgY + (imgH - h) / 2;
+          const px = innerX + (innerW - w) / 2;
+          const py = innerY + (innerH - h) / 2;
 
           c += pdfImage(px, py, w, h, name);
         } else {
-          c += pdfText("F1", 9.5, cardX + 10, cardYTop - 40, "Não foi possível incorporar este anexo no PDF.");
-          c += pdfText("F1", 8.5, cardX + 10, cardYTop - 56, `Arquivo no sistema:`);
+          c += pdfText("F1", 9.2, innerX, yTop - 44, "Não foi possível incorporar este anexo no PDF (somente JPG).");
+          c += pdfText("F1", 8.5, innerX, yTop - 58, "Arquivo no sistema:");
 
           const u = safeText(a.url);
           const short = u.length > 140 ? u.slice(0, 137) + "..." : u;
@@ -781,20 +739,20 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
           const line1 = short.slice(0, 70);
           const line2 = short.slice(70, 140);
 
-          c += pdfText("F1", 8.2, cardX + 10, cardYTop - 70, line1);
-          if (line2.trim()) c += pdfText("F1", 8.2, cardX + 10, cardYTop - 82, line2);
+          c += pdfText("F1", 8.0, innerX, yTop - 72, line1);
+          if (line2.trim()) c += pdfText("F1", 8.0, innerX, yTop - 84, line2);
         }
-
-        yy -= cardH + 18;
       }
 
-      if (pair[0]) await renderAnexo(0, pair[0]);
-      if (pair[1]) await renderAnexo(1, pair[1]);
+      for (let i = 0; i < batch.length; i++) {
+        // eslint-disable-next-line no-await-in-loop
+        await renderCell(i, batch[i]);
+      }
 
       pages.push({ content: c, xobjects });
     }
 
-    // ======= aplica header/footer em todas as páginas
+    // ======= aplica header/footer
     const totalPages = pages.length;
     const withHeader = pages.map((pg, idx) => {
       const hasLogo = !!pg.xobjects["Logo"];
