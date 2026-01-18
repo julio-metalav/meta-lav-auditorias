@@ -73,6 +73,9 @@ export function AppShell({
       { href: "/auditorias", label: "Auditorias", minRole: "auditor" },
       { href: "/condominios", label: "Pontos", minRole: "interno" },
       { href: "/atribuicoes", label: "Atribuições", minRole: "interno" },
+
+      // Gestor
+      { href: "/usuarios", label: "Usuários", minRole: "gestor" },
       // Relatórios: você já tem /admin/relatorios/mes-atual e também a seção de relatório financeiro dentro de Auditorias
       { href: "/admin/relatorios/mes-atual", label: "Relatórios", minRole: "gestor" },
     ],
