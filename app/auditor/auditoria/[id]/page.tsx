@@ -536,14 +536,17 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
   return (
     <AppShell title="Auditoria (Campo)">
-      <div className="mx-auto max-w-4xl p-6">
+      {/* ✅ Mobile-first padding + evita scroll horizontal */}
+      <div className="mx-auto w-full max-w-4xl px-3 py-4 sm:px-6 sm:py-6 overflow-x-hidden">
         {/* Header */}
-        <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-semibold">Auditoria (Campo)</h1>
+              <h1 className="text-xl font-semibold sm:text-2xl">Auditoria (Campo)</h1>
 
-              <span className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${mePill.cls}`}>
+              <span
+                className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${mePill.cls}`}
+              >
                 {mePill.label}
               </span>
 
@@ -555,17 +558,17 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             <div className="mt-1 text-sm text-gray-600 truncate">{titulo}</div>
 
             <div className="mt-2 rounded-xl border bg-white p-3 text-xs">
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-gray-700">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-gray-700 break-words">
                   <b>Logado como:</b> {meLabel}
                 </div>
-                <div className="text-gray-700">
+                <div className="text-gray-700 break-words">
                   <b>Auditoria atribuída a:</b> {assignedAuditorLabel}
                 </div>
               </div>
             </div>
 
-            <div className="mt-2 text-xs text-gray-500">
+            <div className="mt-2 text-xs text-gray-500 break-words">
               Mês: <b>{aud ? pickMonth(aud) : "-"}</b> • ID: <span className="font-mono text-gray-400">{id}</span>
             </div>
 
@@ -584,7 +587,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           </div>
 
           <button
-            className="shrink-0 rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+            className="w-full shrink-0 rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 sm:w-auto"
             onClick={carregarTudo}
             disabled={loading || saving}
             title="Recarregar dados"
@@ -610,9 +613,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           </div>
         )}
 
-        {err && (
-          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>
-        )}
+        {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
         {ok && (
           <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>
         )}
@@ -680,7 +681,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
               )}
             </div>
 
-            <div className="shrink-0">
+            {/* ✅ mobile: ação principal fixa no topo do card sem estourar largura */}
+            <div className="shrink-0 sm:text-right">
               <button
                 className={`w-full rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 sm:w-auto ${
                   concluida ? "bg-green-300" : checklistUi.prontoCampo ? "bg-green-600 hover:bg-green-700" : "bg-gray-400"
@@ -693,7 +695,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
               </button>
 
               {!!concludeDisabledReason && !concluida && (
-                <div className="mt-2 text-xs text-gray-500 max-w-[260px]">{concludeDisabledReason}</div>
+                <div className="mt-2 text-xs text-gray-500 sm:max-w-[260px]">{concludeDisabledReason}</div>
               )}
             </div>
           </div>
@@ -702,14 +704,14 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         {/* Histórico (somente leitura p/ interno/gestor) */}
         {canSeeHistorico && (
           <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
               <div>
                 <div className="text-sm font-semibold text-gray-800">Histórico de status</div>
                 <div className="mt-1 text-xs text-gray-500">Somente leitura.</div>
               </div>
 
               <button
-                className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                className="w-full rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 sm:w-auto"
                 onClick={carregarHistorico}
                 disabled={histLoading}
                 title="Atualizar histórico"
@@ -727,48 +729,75 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             )}
 
             {histData.length > 0 && (
-              <div className="mt-3 overflow-hidden rounded-xl border">
-                <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600">
-                  <div className="col-span-4">Data/Hora</div>
-                  <div className="col-span-4">Status</div>
-                  <div className="col-span-4">Quem</div>
+              <>
+                {/* ✅ Desktop: mantém a tabela */}
+                <div className="mt-3 hidden overflow-hidden rounded-xl border sm:block">
+                  <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600">
+                    <div className="col-span-4">Data/Hora</div>
+                    <div className="col-span-4">Status</div>
+                    <div className="col-span-4">Quem</div>
+                  </div>
+
+                  <div className="divide-y">
+                    {histData.map((h, idx) => {
+                      const de = (h.de_status ?? "-").toString();
+                      const para = (h.para_status ?? "-").toString();
+                      const who = h.actor?.email ?? h.actor?.id ?? "-";
+                      const whoRole = h.actor?.role ? ` - ${h.actor.role}` : "";
+                      return (
+                        <div key={`${h.created_at}-${idx}`} className="grid grid-cols-12 px-3 py-2 text-sm">
+                          <div className="col-span-4 text-gray-700">{fmtBR(h.created_at)}</div>
+                          <div className="col-span-4 text-gray-800">
+                            <span className="font-mono text-xs text-gray-600">{de}</span> {"->"}{" "}
+                            <span className="font-mono text-xs text-gray-600">{para}</span>
+                          </div>
+                          <div className="col-span-4 text-gray-700">
+                            {who}
+                            <span className="text-xs text-gray-500">{whoRole}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                <div className="divide-y">
+                {/* ✅ Mobile: cards (sem scroll horizontal) */}
+                <div className="mt-3 sm:hidden space-y-2">
                   {histData.map((h, idx) => {
                     const de = (h.de_status ?? "-").toString();
                     const para = (h.para_status ?? "-").toString();
                     const who = h.actor?.email ?? h.actor?.id ?? "-";
                     const whoRole = h.actor?.role ? ` - ${h.actor.role}` : "";
                     return (
-                      <div key={`${h.created_at}-${idx}`} className="grid grid-cols-12 px-3 py-2 text-sm">
-                        <div className="col-span-4 text-gray-700">{fmtBR(h.created_at)}</div>
-                        <div className="col-span-4 text-gray-800">
-                          <span className="font-mono text-xs text-gray-600">{de}</span> {"->"}{" "}
-                          <span className="font-mono text-xs text-gray-600">{para}</span>
+                      <div key={`${h.created_at}-${idx}`} className="rounded-xl border bg-gray-50 p-3">
+                        <div className="text-xs text-gray-600">{fmtBR(h.created_at)}</div>
+                        <div className="mt-1 text-sm text-gray-900">
+                          <span className="font-mono text-xs text-gray-700">{de}</span>{" "}
+                          <span className="text-xs text-gray-500">→</span>{" "}
+                          <span className="font-mono text-xs text-gray-700">{para}</span>
                         </div>
-                        <div className="col-span-4 text-gray-700">
+                        <div className="mt-1 text-xs text-gray-700 break-words">
                           {who}
-                          <span className="text-xs text-gray-500">{whoRole}</span>
+                          <span className="text-gray-500">{whoRole}</span>
                         </div>
                       </div>
                     );
                   })}
                 </div>
-              </div>
+              </>
             )}
           </div>
         )}
 
         {/* Conteúdo: Leituras + Observações + Fotos */}
-        <div className="rounded-2xl border bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-5">
           <div className="mb-3 text-sm font-semibold text-gray-700">Leituras</div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <div>
               <label className="mb-1 block text-xs text-gray-600">Leitura Água</label>
               <input
-                className="w-full rounded-xl border px-3 py-2"
+                className="w-full rounded-xl border px-3 py-2 text-base sm:text-sm"
                 value={agua_leitura}
                 onChange={(e) => {
                   setAguaLeitura(e.target.value);
@@ -783,7 +812,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             <div>
               <label className="mb-1 block text-xs text-gray-600">Leitura Energia</label>
               <input
-                className="w-full rounded-xl border px-3 py-2"
+                className="w-full rounded-xl border px-3 py-2 text-base sm:text-sm"
                 value={energia_leitura}
                 onChange={(e) => {
                   setEnergiaLeitura(e.target.value);
@@ -798,7 +827,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             <div>
               <label className="mb-1 block text-xs text-gray-600">Leitura Gás (opcional)</label>
               <input
-                className="w-full rounded-xl border px-3 py-2"
+                className="w-full rounded-xl border px-3 py-2 text-base sm:text-sm"
                 value={gas_leitura}
                 onChange={(e) => {
                   setGasLeitura(e.target.value);
@@ -815,7 +844,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           <div className="mt-4">
             <label className="mb-1 block text-xs text-gray-600">Observações</label>
             <textarea
-              className="w-full rounded-xl border px-3 py-2"
+              className="w-full rounded-xl border px-3 py-2 text-base sm:text-sm"
               value={obs}
               onChange={(e) => {
                 setObs(e.target.value);
@@ -868,7 +897,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                       )}
 
                       {pend && (
-                        <div className="mt-1 text-xs text-gray-600">
+                        <div className="mt-1 text-xs text-gray-600 break-words">
                           Selecionada: <b>{pendingFile[item.kind]?.name ?? "foto.jpg"}</b>
                           {pUrl && (
                             <>
@@ -883,9 +912,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                       )}
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
+                    {/* ✅ Mobile: botões em grid 2 col (sem “colunas espremidas”) */}
+                    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:gap-2">
                       <label
-                        className={`cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
+                        className={`cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white text-center ${
                           disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
                         }`}
                         title={disableAll ? "Somente leitura" : mismatch ? "Sem permissão" : "Abrir câmera"}
@@ -905,7 +935,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                       </label>
 
                       <label
-                        className={`cursor-pointer rounded-xl border px-4 py-2 text-sm ${
+                        className={`cursor-pointer rounded-xl border px-4 py-2 text-sm text-center ${
                           disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
                         }`}
                         title="Selecionar da galeria"
@@ -926,7 +956,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                       {pend && (
                         <>
                           <button
-                            className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                            className={`col-span-2 rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 sm:col-auto ${
                               disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
                             }`}
                             disabled={disableAll || mismatch || busy}
@@ -937,7 +967,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                           </button>
 
                           <button
-                            className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                            className="col-span-2 rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 sm:col-auto"
                             disabled={disableAll || mismatch || busy}
                             onClick={() => cancelPending(item.kind)}
                             title="Descartar esta seleção"
@@ -952,15 +982,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
               })}
             </div>
 
-            {!concluida && (
-              <div className="mt-3 text-xs text-gray-500">
-                Dica: o ideal é salvar todas as fotos obrigatórias antes de concluir.
-              </div>
-            )}
+            {!concluida && <div className="mt-3 text-xs text-gray-500">Dica: o ideal é salvar todas as fotos obrigatórias antes de concluir.</div>}
           </div>
 
           {/* Ações */}
-          <div className="mt-4 flex flex-wrap gap-3">
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:flex sm:flex-wrap sm:gap-3">
             <button
               className={`rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
                 dirty ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-300"
@@ -972,7 +998,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
               {saving ? "Salvando..." : dirty ? "Salvar" : "Sem alterações"}
             </button>
 
-            <a className="rounded-xl border px-5 py-2 text-sm hover:bg-gray-50" href="/auditorias">
+            <a className="rounded-xl border px-5 py-2 text-sm hover:bg-gray-50 text-center" href="/auditorias">
               Voltar
             </a>
           </div>
@@ -982,10 +1008,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         {previewKind && pendingUrl[previewKind] && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="w-full max-w-lg rounded-2xl bg-white p-4">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">{FOTO_ITEMS.find((x) => x.kind === previewKind)?.label}</div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 text-sm font-semibold truncate">
+                  {FOTO_ITEMS.find((x) => x.kind === previewKind)?.label}
+                </div>
                 <button
-                  className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
+                  className="shrink-0 rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
                   onClick={() => setPreviewKind(null)}
                 >
                   Fechar
