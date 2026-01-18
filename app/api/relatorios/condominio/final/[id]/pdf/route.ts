@@ -732,17 +732,15 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       s += pdfText("F1", 10, titleX, y0 - 34, "Lavanderia Compartilhada — Relatório final");
 
       // card meta MAIS BAIXO (para não invadir o título)
-      const cardW = 240;
-      const cardH = 78;
+      const cardW = 220;
+const cardH = 46;
       const cx = right - cardW;
       const cyTop = y0 - 52; // topo do card (mais baixo)
       const cy = cyTop - cardH; // bottom-left y
 
       s += pdfRect(cx, cy, cardW, cardH, 0.8);
 
-      s += pdfText("F1", 8.5, cx + 10, cyTop - 16, "Condomínio");
-      s += pdfText("F2", 10.5, cx + 10, cyTop - 30, condominioNome);
-
+ 
       s += pdfText("F1", 8.5, cx + 10, cyTop - 46, "Competência");
       s += pdfText("F2", 10.5, cx + 10, cyTop - 60, periodo);
 
