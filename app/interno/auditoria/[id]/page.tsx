@@ -96,13 +96,26 @@ type FotoBlockProps = {
   kind: FotoKind;
   url: string | null | undefined;
   disabled: boolean;
+  isUploading?: boolean;
+  isRemoving?: boolean;
   onPickFile: (kind: FotoKind, file: File) => void;
   onRemove: (column: keyof Aud) => void;
   column: keyof Aud;
 };
 
-function FotoBlock({ title, kind, url, disabled, onPickFile, onRemove, column }: FotoBlockProps) {
+function FotoBlock({
+  title,
+  kind,
+  url,
+  disabled,
+  isUploading,
+  isRemoving,
+  onPickFile,
+  onRemove,
+  column,
+}: FotoBlockProps) {
   const has = !!url;
+  const statusText = isUploading ? "Enviando..." : isRemoving ? "Removendo..." : null;
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-white p-4">
@@ -111,6 +124,11 @@ function FotoBlock({ title, kind, url, disabled, onPickFile, onRemove, column }:
           <div className="text-sm font-semibold text-gray-900">{title}</div>
           <div className="mt-1 text-xs text-gray-500">
             {has ? "Imagem anexada" : "Nenhuma imagem anexada"}
+            {statusText ? (
+              <span className="ml-2 inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                {statusText}
+              </span>
+            ) : null}
           </div>
         </div>
 
@@ -121,7 +139,7 @@ function FotoBlock({ title, kind, url, disabled, onPickFile, onRemove, column }:
             }`}
             title={has ? "Substituir imagem" : "Anexar imagem"}
           >
-            {has ? "Substituir" : "Anexar"}
+            {isUploading ? "Enviando..." : has ? "Substituir" : "Anexar"}
             <input
               type="file"
               className="hidden"
@@ -144,7 +162,7 @@ function FotoBlock({ title, kind, url, disabled, onPickFile, onRemove, column }:
               disabled={disabled}
               title="Remover (limpa o campo no banco; não apaga do storage)"
             >
-              Remover
+              {isRemoving ? "Removendo..." : "Remover"}
             </button>
           ) : null}
         </div>
@@ -157,7 +175,9 @@ function FotoBlock({ title, kind, url, disabled, onPickFile, onRemove, column }:
               src={String(url)}
               alt={title}
               loading="lazy"
-              className="max-h-64 rounded-xl border border-gray-200 shadow-sm hover:opacity-90"
+              className={`max-h-64 rounded-xl border border-gray-200 shadow-sm hover:opacity-90 ${
+                statusText ? "opacity-60" : ""
+              }`}
             />
           </a>
           <div className="mt-1 text-xs text-gray-500">Clique para abrir em tamanho original</div>
@@ -226,7 +246,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       form.append("kind", kind);
       form.append("file", sendFile);
 
-      // Só o comprovante leva observação junto (como você já tinha definido)
       if (kind === "comprovante_fechamento" && String(fechamentoObs ?? "").trim()) {
         form.append("fechamento_obs", String(fechamentoObs).trim());
       }
@@ -263,7 +282,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     setErr(null);
 
     try {
-      // Remover = limpar campo no banco (não apaga do Storage)
       await fetchJSON(`/api/auditorias/${audId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -320,9 +338,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 Anexe, substitua ou remova as fotos de água/energia/gás.{" "}
                 {isFinal ? "Auditoria finalizada: edição bloqueada." : null}
               </div>
-              {uploadingAny && uploadingAny !== "comprovante_fechamento" ? (
-                <div className="mt-2 text-xs text-gray-500">Enviando: {uploadingAny}...</div>
-              ) : null}
             </div>
           </div>
 
@@ -332,6 +347,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               kind="agua"
               url={aud?.foto_agua_url}
               disabled={!canEdit || busy}
+              isUploading={uploadingAny === "agua"}
+              isRemoving={removingAny === "foto_agua_url"}
               onPickFile={uploadFoto}
               onRemove={removerColuna}
               column="foto_agua_url"
@@ -341,6 +358,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               kind="energia"
               url={aud?.foto_energia_url}
               disabled={!canEdit || busy}
+              isUploading={uploadingAny === "energia"}
+              isRemoving={removingAny === "foto_energia_url"}
               onPickFile={uploadFoto}
               onRemove={removerColuna}
               column="foto_energia_url"
@@ -350,6 +369,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               kind="gas"
               url={aud?.foto_gas_url}
               disabled={!canEdit || busy}
+              isUploading={uploadingAny === "gas"}
+              isRemoving={removingAny === "foto_gas_url"}
               onPickFile={uploadFoto}
               onRemove={removerColuna}
               column="foto_gas_url"
@@ -366,9 +387,6 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 {exigeComprovante
                   ? "Pagamento direto: é obrigatório anexar o comprovante (imagem)."
                   : "Boleto: comprovante não é obrigatório."}
-                {uploadingAny === "comprovante_fechamento" ? (
-                  <span className="ml-2 text-xs text-gray-500">Enviando comprovante...</span>
-                ) : null}
               </div>
             </div>
           </div>
@@ -379,6 +397,8 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               kind="comprovante_fechamento"
               url={aud?.comprovante_fechamento_url}
               disabled={!canEdit || busy}
+              isUploading={uploadingAny === "comprovante_fechamento"}
+              isRemoving={removingAny === "comprovante_fechamento_url"}
               onPickFile={uploadFoto}
               onRemove={removerColuna}
               column="comprovante_fechamento_url"
