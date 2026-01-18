@@ -76,7 +76,6 @@ export function AppShell({
 
       // Gestor
       { href: "/usuarios", label: "Usuários", minRole: "gestor" },
-      // Relatórios: você já tem /admin/relatorios/mes-atual e também a seção de relatório financeiro dentro de Auditorias
       { href: "/admin/relatorios/mes-atual", label: "Relatórios", minRole: "gestor" },
     ],
     []
@@ -88,8 +87,6 @@ export function AppShell({
   }, [navAll, me?.role]);
 
   async function onLogout() {
-    // não vou presumir sua rota de logout.
-    // tento um endpoint padrão; se não existir, pelo menos redireciono pro login.
     try {
       await fetch("/api/logout", { method: "POST" });
     } catch {}
@@ -97,6 +94,26 @@ export function AppShell({
   }
 
   const showBack = pathname !== "/";
+
+  function handleBack() {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const back = sp.get("back");
+      if (back) {
+        router.push(back);
+        return;
+      }
+    } catch {}
+
+    router.back();
+
+    // fallback: se não houver histórico (aba nova)
+    setTimeout(() => {
+      if (window.history.length <= 1) {
+        router.push("/auditorias");
+      }
+    }, 50);
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -129,7 +146,7 @@ export function AppShell({
               {showBack && (
                 <button
                   type="button"
-                  onClick={() => router.back()}
+                  onClick={handleBack}
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
                   title="Voltar"
                 >
@@ -150,7 +167,9 @@ export function AppShell({
           {/* Nav */}
           <nav className="flex flex-wrap items-center gap-2 pb-3">
             {nav.map((it) => {
-              const active = pathname === it.href || (it.href !== "/" && pathname?.startsWith(it.href));
+              const active =
+                pathname === it.href ||
+                (it.href !== "/" && pathname?.startsWith(it.href));
               return (
                 <Link
                   key={it.href}
