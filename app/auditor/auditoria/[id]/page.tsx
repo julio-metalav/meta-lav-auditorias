@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AppShell } from "@/app/components/AppShell";
 
 type FotoKind = "agua" | "energia" | "gas" | "quimicos" | "bombonas" | "conector_bala";
 
@@ -350,7 +351,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
       setOkMsg(extra?.status ? "Concluída em campo ✅" : "Salvo ✅");
 
-      // garante refletir status/joins do backend sem F5
       if (extra?.status) {
         await carregarTudo();
       } else {
@@ -416,14 +416,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         throw new Error((json?.error ?? "Erro ao enviar foto") + raw);
       }
 
-      // ✅ a rota /fotos retorna { updated: {col: url}, url, kind }
       const updated = (json?.updated ?? null) as Record<string, any> | null;
       if (updated && typeof updated === "object") {
         setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...(updated as any) }));
       } else if (json?.auditoria) {
         setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...(json.auditoria as Aud) }));
       } else if (json?.url) {
-        // fallback mínimo (por segurança)
         const map: Record<FotoKind, keyof Aud> = {
           agua: "foto_agua_url",
           energia: "foto_energia_url",
@@ -460,12 +458,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
-  /**
-   * ✅ Checklist UX (visual) alinhado ao backend:
-   * - leituras: água + energia
-   * - fotos obrigatórias: água + energia + químicos + bombonas + conector
-   * - gás é opcional (backend decide pelo condomínio)
-   */
   const checklistUi = useMemo(() => {
     const a = aud;
 
@@ -486,7 +478,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       { label: "Foto proveta (químicos)", ok: fotoQuimicosOk, required: true },
       { label: "Foto bombonas", ok: fotoBombonasOk, required: true },
       { label: "Foto conector bala", ok: fotoConectorOk, required: true },
-      // gás opcional (não entra no bloqueio)
       { label: "Leitura de gás (opcional)", ok: (gas_leitura ?? "").trim().length > 0, required: false },
       { label: "Foto do medidor de gás (opcional)", ok: !!a?.foto_gas_url, required: false },
     ];
@@ -496,9 +487,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     const totalReq = required.length;
 
     const faltas = required.filter((i) => !i.ok).map((i) => i.label);
-
     const prontoCampo = faltas.length === 0;
-
     const pct = totalReq === 0 ? 0 : Math.round((doneReq / totalReq) * 100);
 
     return { items, faltas, prontoCampo, doneReq, totalReq, pct };
@@ -524,9 +513,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     ? `${aud.condominios.nome} - ${aud.condominios.cidade}/${aud.condominios.uf}`
     : aud?.condominio_id ?? "";
 
-  // interno/gestor podem editar mesmo se mismatch, mas se auditoria concluída não
   const disableAll = loading || saving || !aud || concluida;
-
   const busyAnyUpload = useMemo(() => Object.values(uploading).some(Boolean), [uploading]);
 
   const concludeDisabledReason = useMemo(() => {
@@ -540,7 +527,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   }, [aud, loading, saving, busyAnyUpload, mismatch, concluida, checklistUi]);
 
   async function concluirEmCampo() {
-    // confirmação simples (evita erro humano)
     const okConfirm = window.confirm(
       "Após concluir, você não poderá mais alterar leituras e fotos como auditor. Deseja continuar?"
     );
@@ -549,471 +535,474 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   }
 
   return (
-    <div className="mx-auto max-w-4xl p-6">
-      {/* Header */}
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-semibold">Auditoria (Campo)</h1>
-
-            <span className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${mePill.cls}`}>
-              {mePill.label}
-            </span>
-
-            <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${concluidaBanner.cls}`}>
-              {concluidaBanner.label}
-            </span>
-          </div>
-
-          <div className="mt-1 text-sm text-gray-600 truncate">{titulo}</div>
-
-          <div className="mt-2 rounded-xl border bg-white p-3 text-xs">
-            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-              <div className="text-gray-700">
-                <b>Logado como:</b> {meLabel}
-              </div>
-              <div className="text-gray-700">
-                <b>Auditoria atribuída a:</b> {assignedAuditorLabel}
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-2 text-xs text-gray-500">
-            Mês: <b>{aud ? pickMonth(aud) : "-"}</b> • ID: <span className="font-mono text-gray-400">{id}</span>
-          </div>
-
-          {/* ✅ UX: volta clara quando já concluiu */}
-          {concluida && isAuditor && (
-            <div className="mt-3">
-              <a
-                className="inline-flex items-center rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-gray-50"
-                href="/auditorias"
-                title="Voltar para a lista das suas auditorias"
-              >
-                ← Voltar para minhas auditorias
-              </a>
-            </div>
-          )}
-        </div>
-
-        <button
-          className="shrink-0 rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-          onClick={carregarTudo}
-          disabled={loading || saving}
-          title="Recarregar dados"
-        >
-          {loading ? "Carregando..." : "Recarregar"}
-        </button>
-      </div>
-
-      {/* Mensagens */}
-      {mismatch && (
-        <div className="mb-4 rounded-2xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
-          <b>Atenção:</b> você está logado como <b>{meLabel}</b>, mas a auditoria pertence a <b>{assignedAuditorLabel}</b>.
-          <div className="mt-1 text-xs text-red-700">
-            Para lançar dados como auditor, faça login com o usuário do auditor atribuído.
-          </div>
-          <div className="mt-1 text-xs text-red-700">Obs: interno/gestor não são bloqueados por isso.</div>
-        </div>
-      )}
-
-      {concluida && (
-        <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
-          Esta auditoria já foi concluída e está em <b>{concluidaBanner.label}</b>. (Somente leitura nesta tela)
-        </div>
-      )}
-
-      {err && (
-        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>
-      )}
-      {ok && (
-        <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>
-      )}
-
-      {/* Checklist + Progresso + Ação principal */}
-      <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <AppShell title="Auditoria (Campo)">
+      <div className="mx-auto max-w-4xl p-6">
+        {/* Header */}
+        <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-gray-800">Checklist de campo</div>
-            <div className="mt-1 text-xs text-gray-500">
-              Para concluir, complete os itens obrigatórios. (Gás é opcional — o sistema decide por condomínio)
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-2xl font-semibold">Auditoria (Campo)</h1>
+
+              <span className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${mePill.cls}`}>
+                {mePill.label}
+              </span>
+
+              <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${concluidaBanner.cls}`}>
+                {concluidaBanner.label}
+              </span>
             </div>
 
-            {/* Progresso */}
-            <div className="mt-3">
-              <div className="flex items-center justify-between text-xs text-gray-600">
-                <div>
-                  Progresso:{" "}
-                  <b>
-                    {checklistUi.doneReq}/{checklistUi.totalReq}
-                  </b>
+            <div className="mt-1 text-sm text-gray-600 truncate">{titulo}</div>
+
+            <div className="mt-2 rounded-xl border bg-white p-3 text-xs">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-gray-700">
+                  <b>Logado como:</b> {meLabel}
                 </div>
-                <div>
-                  <b>{checklistUi.pct}%</b>
+                <div className="text-gray-700">
+                  <b>Auditoria atribuída a:</b> {assignedAuditorLabel}
                 </div>
               </div>
-              <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-gray-100">
-                <div
-                  className="h-2 rounded-full bg-green-500"
-                  style={{ width: `${checklistUi.pct}%` }}
+            </div>
+
+            <div className="mt-2 text-xs text-gray-500">
+              Mês: <b>{aud ? pickMonth(aud) : "-"}</b> • ID: <span className="font-mono text-gray-400">{id}</span>
+            </div>
+
+            {/* ✅ UX: volta clara quando já concluiu */}
+            {concluida && isAuditor && (
+              <div className="mt-3">
+                <a
+                  className="inline-flex items-center rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-gray-50"
+                  href="/auditorias"
+                  title="Voltar para a lista das suas auditorias"
+                >
+                  ← Voltar para minhas auditorias
+                </a>
+              </div>
+            )}
+          </div>
+
+          <button
+            className="shrink-0 rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+            onClick={carregarTudo}
+            disabled={loading || saving}
+            title="Recarregar dados"
+          >
+            {loading ? "Carregando..." : "Recarregar"}
+          </button>
+        </div>
+
+        {/* Mensagens */}
+        {mismatch && (
+          <div className="mb-4 rounded-2xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
+            <b>Atenção:</b> você está logado como <b>{meLabel}</b>, mas a auditoria pertence a <b>{assignedAuditorLabel}</b>.
+            <div className="mt-1 text-xs text-red-700">
+              Para lançar dados como auditor, faça login com o usuário do auditor atribuído.
+            </div>
+            <div className="mt-1 text-xs text-red-700">Obs: interno/gestor não são bloqueados por isso.</div>
+          </div>
+        )}
+
+        {concluida && (
+          <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+            Esta auditoria já foi concluída e está em <b>{concluidaBanner.label}</b>. (Somente leitura nesta tela)
+          </div>
+        )}
+
+        {err && (
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>
+        )}
+        {ok && (
+          <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>
+        )}
+
+        {/* Checklist + Progresso + Ação principal */}
+        <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-gray-800">Checklist de campo</div>
+              <div className="mt-1 text-xs text-gray-500">
+                Para concluir, complete os itens obrigatórios. (Gás é opcional — o sistema decide por condomínio)
+              </div>
+
+              {/* Progresso */}
+              <div className="mt-3">
+                <div className="flex items-center justify-between text-xs text-gray-600">
+                  <div>
+                    Progresso:{" "}
+                    <b>
+                      {checklistUi.doneReq}/{checklistUi.totalReq}
+                    </b>
+                  </div>
+                  <div>
+                    <b>{checklistUi.pct}%</b>
+                  </div>
+                </div>
+                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-gray-100">
+                  <div className="h-2 rounded-full bg-green-500" style={{ width: `${checklistUi.pct}%` }} />
+                </div>
+              </div>
+
+              {/* Lista */}
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {checklistUi.items.map((it) => (
+                  <div
+                    key={it.label}
+                    className={`flex items-center justify-between rounded-xl border px-3 py-2 text-sm ${
+                      it.ok ? "bg-green-50 border-green-200" : it.required ? "bg-red-50 border-red-200" : "bg-gray-50"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate">
+                        {it.ok ? "✅ " : "⬜ "}
+                        {it.label}
+                      </div>
+                      {!it.required && <div className="text-xs text-gray-500">Opcional</div>}
+                    </div>
+                    <div className="text-xs font-semibold">
+                      {it.ok ? (
+                        <span className="text-green-700">OK</span>
+                      ) : it.required ? (
+                        <span className="text-red-700">Falta</span>
+                      ) : (
+                        <span className="text-gray-600">—</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {!checklistUi.prontoCampo && !concluida && (
+                <div className="mt-3 rounded-xl border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">
+                  Falta concluir: <b>{checklistUi.faltas.join(", ")}</b>
+                </div>
+              )}
+            </div>
+
+            <div className="shrink-0">
+              <button
+                className={`w-full rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 sm:w-auto ${
+                  concluida ? "bg-green-300" : checklistUi.prontoCampo ? "bg-green-600 hover:bg-green-700" : "bg-gray-400"
+                }`}
+                disabled={!!concludeDisabledReason}
+                onClick={concluirEmCampo}
+                title={concludeDisabledReason || "Concluir em campo"}
+              >
+                {saving ? "Salvando..." : concluida ? "Concluída" : "Concluir em campo"}
+              </button>
+
+              {!!concludeDisabledReason && !concluida && (
+                <div className="mt-2 text-xs text-gray-500 max-w-[260px]">{concludeDisabledReason}</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Histórico (somente leitura p/ interno/gestor) */}
+        {canSeeHistorico && (
+          <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-gray-800">Histórico de status</div>
+                <div className="mt-1 text-xs text-gray-500">Somente leitura.</div>
+              </div>
+
+              <button
+                className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                onClick={carregarHistorico}
+                disabled={histLoading}
+                title="Atualizar histórico"
+              >
+                {histLoading ? "Carregando..." : "Atualizar"}
+              </button>
+            </div>
+
+            {histErr && (
+              <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{histErr}</div>
+            )}
+
+            {!histErr && !histLoading && histData.length === 0 && (
+              <div className="mt-3 text-sm text-gray-600">Ainda não há registros de mudança de status.</div>
+            )}
+
+            {histData.length > 0 && (
+              <div className="mt-3 overflow-hidden rounded-xl border">
+                <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600">
+                  <div className="col-span-4">Data/Hora</div>
+                  <div className="col-span-4">Status</div>
+                  <div className="col-span-4">Quem</div>
+                </div>
+
+                <div className="divide-y">
+                  {histData.map((h, idx) => {
+                    const de = (h.de_status ?? "-").toString();
+                    const para = (h.para_status ?? "-").toString();
+                    const who = h.actor?.email ?? h.actor?.id ?? "-";
+                    const whoRole = h.actor?.role ? ` - ${h.actor.role}` : "";
+                    return (
+                      <div key={`${h.created_at}-${idx}`} className="grid grid-cols-12 px-3 py-2 text-sm">
+                        <div className="col-span-4 text-gray-700">{fmtBR(h.created_at)}</div>
+                        <div className="col-span-4 text-gray-800">
+                          <span className="font-mono text-xs text-gray-600">{de}</span> {"->"}{" "}
+                          <span className="font-mono text-xs text-gray-600">{para}</span>
+                        </div>
+                        <div className="col-span-4 text-gray-700">
+                          {who}
+                          <span className="text-xs text-gray-500">{whoRole}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Conteúdo: Leituras + Observações + Fotos */}
+        <div className="rounded-2xl border bg-white p-5 shadow-sm">
+          <div className="mb-3 text-sm font-semibold text-gray-700">Leituras</div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs text-gray-600">Leitura Água</label>
+              <input
+                className="w-full rounded-xl border px-3 py-2"
+                value={agua_leitura}
+                onChange={(e) => {
+                  setAguaLeitura(e.target.value);
+                  setDirty(true);
+                }}
+                placeholder="ex: 12345"
+                disabled={disableAll || mismatch}
+                inputMode="decimal"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-gray-600">Leitura Energia</label>
+              <input
+                className="w-full rounded-xl border px-3 py-2"
+                value={energia_leitura}
+                onChange={(e) => {
+                  setEnergiaLeitura(e.target.value);
+                  setDirty(true);
+                }}
+                placeholder="ex: 67890"
+                disabled={disableAll || mismatch}
+                inputMode="decimal"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-gray-600">Leitura Gás (opcional)</label>
+              <input
+                className="w-full rounded-xl border px-3 py-2"
+                value={gas_leitura}
+                onChange={(e) => {
+                  setGasLeitura(e.target.value);
+                  setDirty(true);
+                }}
+                placeholder="se não tiver, deixe vazio"
+                disabled={disableAll || mismatch}
+                inputMode="decimal"
+              />
+              <div className="mt-1 text-[11px] text-gray-500">Se o condomínio não usa gás, deixe vazio.</div>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <label className="mb-1 block text-xs text-gray-600">Observações</label>
+            <textarea
+              className="w-full rounded-xl border px-3 py-2"
+              value={obs}
+              onChange={(e) => {
+                setObs(e.target.value);
+                setDirty(true);
+              }}
+              rows={3}
+              placeholder="anote ocorrências, etc."
+              disabled={disableAll || mismatch}
+            />
+          </div>
+
+          <div className="mt-6 rounded-2xl border p-4">
+            <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (checklist)</div>
+            <div className="text-xs text-gray-500">Tocar em “Tirar” → depois “Salvar”.</div>
+
+            <div className="mt-3 divide-y rounded-xl border">
+              {FOTO_ITEMS.map((item) => {
+                const savedUrl = fotoUrl(aud, item.kind);
+                const saved = !!savedUrl;
+                const pend = !!pendingFile[item.kind];
+                const busy = uploading[item.kind];
+                const pUrl = pendingUrl[item.kind];
+
+                const badge = saved ? (
+                  <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">Feita</span>
+                ) : pend ? (
+                  <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">Pendente</span>
+                ) : item.required ? (
+                  <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">Obrigatória</span>
+                ) : (
+                  <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-700">Opcional</span>
+                );
+
+                return (
+                  <div key={item.kind} className="flex flex-col gap-2 p-3 md:flex-row md:items-center md:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-sm font-semibold text-gray-800">{item.label}</div>
+                        {badge}
+                      </div>
+
+                      {item.help && <div className="mt-1 text-xs text-gray-500">{item.help}</div>}
+
+                      {saved && savedUrl && (
+                        <div className="mt-1">
+                          <a className="text-xs underline text-gray-600" href={savedUrl} target="_blank" rel="noreferrer">
+                            Abrir arquivo
+                          </a>
+                        </div>
+                      )}
+
+                      {pend && (
+                        <div className="mt-1 text-xs text-gray-600">
+                          Selecionada: <b>{pendingFile[item.kind]?.name ?? "foto.jpg"}</b>
+                          {pUrl && (
+                            <>
+                              {" "}
+                              -{" "}
+                              <button className="underline" onClick={() => setPreviewKind(item.kind)}>
+                                Ver
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <label
+                        className={`cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
+                          disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
+                        }`}
+                        title={disableAll ? "Somente leitura" : mismatch ? "Sem permissão" : "Abrir câmera"}
+                      >
+                        Tirar
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="hidden"
+                          onChange={(e) => {
+                            onPick(item.kind, e.target.files?.[0]);
+                            e.currentTarget.value = "";
+                          }}
+                          disabled={disableAll || mismatch || busy}
+                        />
+                      </label>
+
+                      <label
+                        className={`cursor-pointer rounded-xl border px-4 py-2 text-sm ${
+                          disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
+                        }`}
+                        title="Selecionar da galeria"
+                      >
+                        Galeria
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            onPick(item.kind, e.target.files?.[0]);
+                            e.currentTarget.value = "";
+                          }}
+                          disabled={disableAll || mismatch || busy}
+                        />
+                      </label>
+
+                      {pend && (
+                        <>
+                          <button
+                            className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                              disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
+                            }`}
+                            disabled={disableAll || mismatch || busy}
+                            onClick={() => uploadFoto(item.kind, pendingFile[item.kind] as File)}
+                            title="Enviar e salvar no sistema"
+                          >
+                            {busy ? "Enviando..." : "Salvar"}
+                          </button>
+
+                          <button
+                            className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                            disabled={disableAll || mismatch || busy}
+                            onClick={() => cancelPending(item.kind)}
+                            title="Descartar esta seleção"
+                          >
+                            Refazer
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {!concluida && (
+              <div className="mt-3 text-xs text-gray-500">
+                Dica: o ideal é salvar todas as fotos obrigatórias antes de concluir.
+              </div>
+            )}
+          </div>
+
+          {/* Ações */}
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button
+              className={`rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                dirty ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-300"
+              }`}
+              onClick={() => salvarRascunho()}
+              disabled={disableAll || mismatch || !dirty}
+              title={dirty ? "Salvar alterações" : "Sem alterações"}
+            >
+              {saving ? "Salvando..." : dirty ? "Salvar" : "Sem alterações"}
+            </button>
+
+            <a className="rounded-xl border px-5 py-2 text-sm hover:bg-gray-50" href="/auditorias">
+              Voltar
+            </a>
+          </div>
+        </div>
+
+        {/* Preview modal */}
+        {previewKind && pendingUrl[previewKind] && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-lg rounded-2xl bg-white p-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold">{FOTO_ITEMS.find((x) => x.kind === previewKind)?.label}</div>
+                <button
+                  className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
+                  onClick={() => setPreviewKind(null)}
+                >
+                  Fechar
+                </button>
+              </div>
+              <div className="mt-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={pendingUrl[previewKind] as string}
+                  alt="preview"
+                  className="max-h-[70vh] w-full rounded-xl object-contain"
                 />
               </div>
             </div>
-
-            {/* Lista */}
-            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {checklistUi.items.map((it) => (
-                <div
-                  key={it.label}
-                  className={`flex items-center justify-between rounded-xl border px-3 py-2 text-sm ${
-                    it.ok ? "bg-green-50 border-green-200" : it.required ? "bg-red-50 border-red-200" : "bg-gray-50"
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <div className="truncate">
-                      {it.ok ? "✅ " : "⬜ "}
-                      {it.label}
-                    </div>
-                    {!it.required && <div className="text-xs text-gray-500">Opcional</div>}
-                  </div>
-                  <div className="text-xs font-semibold">
-                    {it.ok ? <span className="text-green-700">OK</span> : it.required ? <span className="text-red-700">Falta</span> : <span className="text-gray-600">—</span>}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {!checklistUi.prontoCampo && !concluida && (
-              <div className="mt-3 rounded-xl border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">
-                Falta concluir: <b>{checklistUi.faltas.join(", ")}</b>
-              </div>
-            )}
           </div>
-
-          <div className="shrink-0">
-            <button
-              className={`w-full rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 sm:w-auto ${
-                concluida ? "bg-green-300" : checklistUi.prontoCampo ? "bg-green-600 hover:bg-green-700" : "bg-gray-400"
-              }`}
-              disabled={!!concludeDisabledReason}
-              onClick={concluirEmCampo}
-              title={concludeDisabledReason || "Concluir em campo"}
-            >
-              {saving ? "Salvando..." : concluida ? "Concluída" : "Concluir em campo"}
-            </button>
-
-            {!!concludeDisabledReason && !concluida && (
-              <div className="mt-2 text-xs text-gray-500 max-w-[260px]">
-                {concludeDisabledReason}
-              </div>
-            )}
-          </div>
-        </div>
+        )}
       </div>
-
-      {/* Histórico (somente leitura p/ interno/gestor) */}
-      {canSeeHistorico && (
-        <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-gray-800">Histórico de status</div>
-              <div className="mt-1 text-xs text-gray-500">Somente leitura.</div>
-            </div>
-
-            <button
-              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-              onClick={carregarHistorico}
-              disabled={histLoading}
-              title="Atualizar histórico"
-            >
-              {histLoading ? "Carregando..." : "Atualizar"}
-            </button>
-          </div>
-
-          {histErr && (
-            <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{histErr}</div>
-          )}
-
-          {!histErr && !histLoading && histData.length === 0 && (
-            <div className="mt-3 text-sm text-gray-600">Ainda não há registros de mudança de status.</div>
-          )}
-
-          {histData.length > 0 && (
-            <div className="mt-3 overflow-hidden rounded-xl border">
-              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600">
-                <div className="col-span-4">Data/Hora</div>
-                <div className="col-span-4">Status</div>
-                <div className="col-span-4">Quem</div>
-              </div>
-
-              <div className="divide-y">
-                {histData.map((h, idx) => {
-                  const de = (h.de_status ?? "-").toString();
-                  const para = (h.para_status ?? "-").toString();
-                  const who = h.actor?.email ?? h.actor?.id ?? "-";
-                  const whoRole = h.actor?.role ? ` - ${h.actor.role}` : "";
-                  return (
-                    <div key={`${h.created_at}-${idx}`} className="grid grid-cols-12 px-3 py-2 text-sm">
-                      <div className="col-span-4 text-gray-700">{fmtBR(h.created_at)}</div>
-                      <div className="col-span-4 text-gray-800">
-                        <span className="font-mono text-xs text-gray-600">{de}</span> {"->"}{" "}
-                        <span className="font-mono text-xs text-gray-600">{para}</span>
-                      </div>
-                      <div className="col-span-4 text-gray-700">
-                        {who}
-                        <span className="text-xs text-gray-500">{whoRole}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Conteúdo: Leituras + Observações + Fotos */}
-      <div className="rounded-2xl border bg-white p-5 shadow-sm">
-        <div className="mb-3 text-sm font-semibold text-gray-700">Leituras</div>
-
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div>
-            <label className="mb-1 block text-xs text-gray-600">Leitura Água</label>
-            <input
-              className="w-full rounded-xl border px-3 py-2"
-              value={agua_leitura}
-              onChange={(e) => {
-                setAguaLeitura(e.target.value);
-                setDirty(true);
-              }}
-              placeholder="ex: 12345"
-              disabled={disableAll || mismatch}
-              inputMode="decimal"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-gray-600">Leitura Energia</label>
-            <input
-              className="w-full rounded-xl border px-3 py-2"
-              value={energia_leitura}
-              onChange={(e) => {
-                setEnergiaLeitura(e.target.value);
-                setDirty(true);
-              }}
-              placeholder="ex: 67890"
-              disabled={disableAll || mismatch}
-              inputMode="decimal"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-gray-600">Leitura Gás (opcional)</label>
-            <input
-              className="w-full rounded-xl border px-3 py-2"
-              value={gas_leitura}
-              onChange={(e) => {
-                setGasLeitura(e.target.value);
-                setDirty(true);
-              }}
-              placeholder="se não tiver, deixe vazio"
-              disabled={disableAll || mismatch}
-              inputMode="decimal"
-            />
-            <div className="mt-1 text-[11px] text-gray-500">Se o condomínio não usa gás, deixe vazio.</div>
-          </div>
-        </div>
-
-        <div className="mt-4">
-          <label className="mb-1 block text-xs text-gray-600">Observações</label>
-          <textarea
-            className="w-full rounded-xl border px-3 py-2"
-            value={obs}
-            onChange={(e) => {
-              setObs(e.target.value);
-              setDirty(true);
-            }}
-            rows={3}
-            placeholder="anote ocorrências, etc."
-            disabled={disableAll || mismatch}
-          />
-        </div>
-
-        <div className="mt-6 rounded-2xl border p-4">
-          <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (checklist)</div>
-          <div className="text-xs text-gray-500">Tocar em “Tirar” → depois “Salvar”.</div>
-
-          <div className="mt-3 divide-y rounded-xl border">
-            {FOTO_ITEMS.map((item) => {
-              const savedUrl = fotoUrl(aud, item.kind);
-              const saved = !!savedUrl;
-              const pend = !!pendingFile[item.kind];
-              const busy = uploading[item.kind];
-              const pUrl = pendingUrl[item.kind];
-
-              const badge = saved ? (
-                <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">Feita</span>
-              ) : pend ? (
-                <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">Pendente</span>
-              ) : item.required ? (
-                <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">Obrigatória</span>
-              ) : (
-                <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-700">Opcional</span>
-              );
-
-              return (
-                <div key={item.kind} className="flex flex-col gap-2 p-3 md:flex-row md:items-center md:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="text-sm font-semibold text-gray-800">{item.label}</div>
-                      {badge}
-                    </div>
-
-                    {item.help && <div className="mt-1 text-xs text-gray-500">{item.help}</div>}
-
-                    {saved && savedUrl && (
-                      <div className="mt-1">
-                        <a className="text-xs underline text-gray-600" href={savedUrl} target="_blank" rel="noreferrer">
-                          Abrir arquivo
-                        </a>
-                      </div>
-                    )}
-
-                    {pend && (
-                      <div className="mt-1 text-xs text-gray-600">
-                        Selecionada: <b>{pendingFile[item.kind]?.name ?? "foto.jpg"}</b>
-                        {pUrl && (
-                          <>
-                            {" "}
-                            -{" "}
-                            <button className="underline" onClick={() => setPreviewKind(item.kind)}>
-                              Ver
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <label
-                      className={`cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
-                        disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
-                      }`}
-                      title={disableAll ? "Somente leitura" : mismatch ? "Sem permissão" : "Abrir câmera"}
-                    >
-                      Tirar
-                      <input
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        className="hidden"
-                        onChange={(e) => {
-                          onPick(item.kind, e.target.files?.[0]);
-                          e.currentTarget.value = "";
-                        }}
-                        disabled={disableAll || mismatch || busy}
-                      />
-                    </label>
-
-                    <label
-                      className={`cursor-pointer rounded-xl border px-4 py-2 text-sm ${
-                        disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
-                      }`}
-                      title="Selecionar da galeria"
-                    >
-                      Galeria
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          onPick(item.kind, e.target.files?.[0]);
-                          e.currentTarget.value = "";
-                        }}
-                        disabled={disableAll || mismatch || busy}
-                      />
-                    </label>
-
-                    {pend && (
-                      <>
-                        <button
-                          className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
-                            disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
-                          }`}
-                          disabled={disableAll || mismatch || busy}
-                          onClick={() => uploadFoto(item.kind, pendingFile[item.kind] as File)}
-                          title="Enviar e salvar no sistema"
-                        >
-                          {busy ? "Enviando..." : "Salvar"}
-                        </button>
-
-                        <button
-                          className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-                          disabled={disableAll || mismatch || busy}
-                          onClick={() => cancelPending(item.kind)}
-                          title="Descartar esta seleção"
-                        >
-                          Refazer
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {!concluida && (
-            <div className="mt-3 text-xs text-gray-500">
-              Dica: o ideal é salvar todas as fotos obrigatórias antes de concluir.
-            </div>
-          )}
-        </div>
-
-        {/* Ações */}
-        <div className="mt-4 flex flex-wrap gap-3">
-          <button
-            className={`rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
-              dirty ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-300"
-            }`}
-            onClick={() => salvarRascunho()}
-            disabled={disableAll || mismatch || !dirty}
-            title={dirty ? "Salvar alterações" : "Sem alterações"}
-          >
-            {saving ? "Salvando..." : dirty ? "Salvar" : "Sem alterações"}
-          </button>
-
-          <a className="rounded-xl border px-5 py-2 text-sm hover:bg-gray-50" href="/auditorias">
-            Voltar
-          </a>
-        </div>
-      </div>
-
-      {/* Preview modal */}
-      {previewKind && pendingUrl[previewKind] && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-4">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold">{FOTO_ITEMS.find((x) => x.kind === previewKind)?.label}</div>
-              <button
-                className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
-                onClick={() => setPreviewKind(null)}
-              >
-                Fechar
-              </button>
-            </div>
-            <div className="mt-3">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={pendingUrl[previewKind] as string}
-                alt="preview"
-                className="max-h-[70vh] w-full rounded-xl object-contain"
-              />
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+    </AppShell>
   );
 }
