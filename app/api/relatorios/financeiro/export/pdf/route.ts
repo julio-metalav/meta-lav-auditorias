@@ -36,8 +36,18 @@ function monthNamePt(isoYYYYMMDD: string) {
   const month = d.getUTCMonth();
   const year = d.getUTCFullYear();
   const nomes = [
-    "JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
-    "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO",
+    "JANEIRO",
+    "FEVEREIRO",
+    "MARÇO",
+    "ABRIL",
+    "MAIO",
+    "JUNHO",
+    "JULHO",
+    "AGOSTO",
+    "SETEMBRO",
+    "OUTUBRO",
+    "NOVEMBRO",
+    "DEZEMBRO",
   ];
   return `${nomes[month]} DE ${year}`;
 }
@@ -52,12 +62,36 @@ function addMonths(isoYYYYMMDD: string, delta: number) {
   return `${yy}-${mm}-01`;
 }
 
+/**
+ * Parse robusto para números no formato BR.
+ * Aceita: 3240, "3240", "3.240,00", "R$ 3.240,00", " 63,00 ", "-1.234,56"
+ */
+function numBR(v: any): number {
+  if (v === null || v === undefined) return 0;
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+
+  const s0 = String(v).trim();
+  if (!s0) return 0;
+
+  // remove moeda e espaços “estranhos”
+  let s = s0.replace(/\s+/g, " ").trim();
+  s = s.replace(/R\$\s?/gi, "");
+  s = s.replace(/\./g, ""); // milhares
+  s = s.replace(/,/g, "."); // decimal
+  s = s.replace(/[^\d.-]/g, ""); // remove qualquer coisa que não seja número
+
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function formatMoney(n: number) {
-  return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const x = Number.isFinite(n) ? n : 0;
+  return x.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function formatPct(n: number) {
-  return (n * 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%";
+  const x = Number.isFinite(n) ? n : 0;
+  return (x * 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%";
 }
 
 /**
@@ -68,18 +102,41 @@ function formatPct(n: number) {
 
 function toCp1252Bytes(str: string): Uint8Array {
   const map: Record<string, number> = {
-    "€": 0x80, "‚": 0x82, "ƒ": 0x83, "„": 0x84, "…": 0x85, "†": 0x86, "‡": 0x87,
-    "ˆ": 0x88, "‰": 0x89, "Š": 0x8A, "‹": 0x8B, "Œ": 0x8C, "Ž": 0x8E,
-    "‘": 0x91, "’": 0x92, "“": 0x93, "”": 0x94, "•": 0x95, "–": 0x96, "—": 0x97,
-    "˜": 0x98, "™": 0x99, "š": 0x9A, "›": 0x9B, "œ": 0x9C, "ž": 0x9E, "Ÿ": 0x9F,
+    "€": 0x80,
+    "‚": 0x82,
+    "ƒ": 0x83,
+    "„": 0x84,
+    "…": 0x85,
+    "†": 0x86,
+    "‡": 0x87,
+    "ˆ": 0x88,
+    "‰": 0x89,
+    "Š": 0x8a,
+    "‹": 0x8b,
+    "Œ": 0x8c,
+    "Ž": 0x8e,
+    "‘": 0x91,
+    "’": 0x92,
+    "“": 0x93,
+    "”": 0x94,
+    "•": 0x95,
+    "–": 0x96,
+    "—": 0x97,
+    "˜": 0x98,
+    "™": 0x99,
+    "š": 0x9a,
+    "›": 0x9b,
+    "œ": 0x9c,
+    "ž": 0x9e,
+    "Ÿ": 0x9f,
   };
   const out: number[] = [];
   for (const ch of str) {
     const code = ch.charCodeAt(0);
-    if (code <= 0x7F) out.push(code);
-    else if (code >= 0xA0 && code <= 0xFF) out.push(code);
+    if (code <= 0x7f) out.push(code);
+    else if (code >= 0xa0 && code <= 0xff) out.push(code);
     else if (map[ch] !== undefined) out.push(map[ch]);
-    else out.push(0x3F); // '?'
+    else out.push(0x3f); // '?'
   }
   return Uint8Array.from(out);
 }
@@ -112,22 +169,25 @@ function readLogoJpegBytes(): Uint8Array | null {
 function getJpegSize(bytes: Uint8Array): { w: number; h: number } | null {
   try {
     let i = 0;
-    if (bytes[i] !== 0xFF || bytes[i + 1] !== 0xD8) return null; // SOI
+    if (bytes[i] !== 0xff || bytes[i + 1] !== 0xd8) return null; // SOI
     i += 2;
     while (i < bytes.length) {
-      if (bytes[i] !== 0xFF) { i++; continue; }
+      if (bytes[i] !== 0xff) {
+        i++;
+        continue;
+      }
       const marker = bytes[i + 1];
       i += 2;
       // EOI / SOS
-      if (marker === 0xD9 || marker === 0xDA) break;
+      if (marker === 0xd9 || marker === 0xda) break;
       const len = (bytes[i] << 8) + bytes[i + 1];
       if (len < 2) return null;
       // SOF0..SOF3, SOF2
       const isSOF =
-        (marker >= 0xC0 && marker <= 0xC3) ||
-        (marker >= 0xC5 && marker <= 0xC7) ||
-        (marker >= 0xC9 && marker <= 0xCB) ||
-        (marker >= 0xCD && marker <= 0xCF);
+        (marker >= 0xc0 && marker <= 0xc3) ||
+        (marker >= 0xc5 && marker <= 0xc7) ||
+        (marker >= 0xc9 && marker <= 0xcb) ||
+        (marker >= 0xcd && marker <= 0xcf);
       if (isSOF) {
         const h = (bytes[i + 3] << 8) + bytes[i + 4];
         const w = (bytes[i + 5] << 8) + bytes[i + 6];
@@ -147,7 +207,10 @@ function concatBytes(chunks: Uint8Array[]) {
   const total = chunks.reduce((a, b) => a + b.length, 0);
   const out = new Uint8Array(total);
   let off = 0;
-  for (const c of chunks) { out.set(c, off); off += c.length; }
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.length;
+  }
   return out;
 }
 
@@ -197,11 +260,7 @@ function buildPdf(pages: string[], logo?: { bytes: Uint8Array; w: number; h: num
   for (const p of pages) {
     const cid = newObjId();
     const data = strBytes(p);
-    const stream = concatBytes([
-      strBytes(`<< /Length ${data.length} >>\nstream\n`),
-      data,
-      strBytes(`\nendstream`),
-    ]);
+    const stream = concatBytes([strBytes(`<< /Length ${data.length} >>\nstream\n`), data, strBytes(`\nendstream`)]);
     objs.push({ id: cid, body: stream });
     contentIds.push(cid);
   }
@@ -230,7 +289,9 @@ function buildPdf(pages: string[], logo?: { bytes: Uint8Array; w: number; h: num
 
   objs.push({
     id: pagesId,
-    body: strBytes(`<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] >>`),
+    body: strBytes(
+      `<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] >>`
+    ),
   });
 
   // Catalog
@@ -254,6 +315,7 @@ function buildPdf(pages: string[], logo?: { bytes: Uint8Array; w: number; h: num
 
   const xrefStart = offset;
   const maxId = objs.reduce((m, o) => Math.max(m, o.id), 0);
+
   let xrefText = `xref\n0 ${maxId + 1}\n`;
   xrefText += `0000000000 65535 f \n`;
   for (let i = 1; i <= maxId; i++) {
@@ -273,7 +335,6 @@ function escapeHexText(s: string) {
 }
 
 function pdfText(font: "F1" | "F2", size: number, x: number, y: number, s: string) {
-  // uses hex string, so no escaping parentheses needed
   return `BT /${font} ${size} Tf ${x.toFixed(2)} ${y.toFixed(2)} Td ${escapeHexText(s)} Tj ET\n`;
 }
 
@@ -282,7 +343,6 @@ function pdfLine(x1: number, y1: number, x2: number, y2: number, w = 0.7) {
 }
 
 function pdfImage(x: number, y: number, w: number, h: number) {
-  // /Im1 Do
   return `q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm /Im1 Do Q\n`;
 }
 
@@ -298,6 +358,7 @@ async function fetchBaseJson(req: Request, mes_ref: string) {
     headers: cookie ? { cookie } : undefined,
     cache: "no-store",
   });
+
   const text = await res.text();
   let json: any = null;
   try {
@@ -327,10 +388,10 @@ export async function GET(req: Request) {
     const mesX = monthNamePt(mes_ref);
     const mesY = monthNamePt(addMonths(mes_ref, -1));
 
-    // Totais gerais
-    const totalRepasse = itens.reduce((acc, it) => acc + Number(it?.repasse ?? 0), 0);
-    const totalCashback = itens.reduce((acc, it) => acc + Number(it?.cashback ?? 0), 0);
-    const totalGeral = itens.reduce((acc, it) => acc + Number(it?.total ?? 0), 0);
+    // Totais gerais (recalculados: total = repasse + cashback)
+    const totalRepasse = itens.reduce((acc, it) => acc + numBR(it?.repasse), 0);
+    const totalCashback = itens.reduce((acc, it) => acc + numBR(it?.cashback), 0);
+    const totalGeral = itens.reduce((acc, it) => acc + (numBR(it?.repasse) + numBR(it?.cashback)), 0);
 
     // Layout constants
     const left = 50;
@@ -338,15 +399,12 @@ export async function GET(req: Request) {
     const top = 800;
     const bottom = 55;
     const footerH = 22; // reserved
-    const pageW = 595.28;
-    const pageH = 841.89;
 
     // Logo load
     const logoBytes = readLogoJpegBytes();
     const logoSize = logoBytes ? getJpegSize(logoBytes) : null;
     const logo = logoBytes && logoSize ? { bytes: logoBytes, w: logoSize.w, h: logoSize.h } : null;
 
-    // Build pages (without footer). We'll append footer after we know total pages.
     const pages: string[] = [];
     let content = "";
     let y = top;
@@ -356,6 +414,7 @@ export async function GET(req: Request) {
         pages.push(content);
         content = "";
         y = top;
+
         // header repeated on new page (small)
         content += pdfText("F2", 10, left, y, "META-LAV | RELATORIO DE PAGAMENTOS A CONDOMINIOS");
         y -= 14;
@@ -370,7 +429,6 @@ export async function GET(req: Request) {
     const headerY = y;
 
     if (logo) {
-      // fit logo height ~ 28
       const targetH = 28;
       const scale = targetH / logo.h;
       const w = logo.w * scale;
@@ -393,10 +451,16 @@ export async function GET(req: Request) {
 
       const nome = String(it?.condominio_nome ?? "").trim() || "CONDOMINIO";
       const pagamento = String(it?.pagamento_texto ?? "").trim();
-      const repasse = Number(it?.repasse ?? 0);
-      const cashback = Number(it?.cashback ?? 0);
-      const total = Number(it?.total ?? 0);
-      const variacao = Number(it?.variacao ?? 0);
+
+      const repasse = numBR(it?.repasse);
+      const cashback = numBR(it?.cashback);
+
+      // TOTAL DO PDF: sempre recalculado (não usa it.total)
+      const total = repasse + cashback;
+
+      // variacao: pode vir como 0.05 (5%) ou "5,00" (5%) ou "5,00%"
+      let variacao = numBR(it?.variacao);
+      if (Math.abs(variacao) > 1.5) variacao = variacao / 100;
 
       content += pdfText("F2", 10, left, y, `CONDOMINIO: ${nome}`);
       y -= 14;
@@ -437,14 +501,13 @@ export async function GET(req: Request) {
       y -= 18;
     }
 
-    // Elegant total line at end
+    // Total line at end
     ensureSpace(70);
     content += pdfText("F2", 10, left, y, "TOTAIS DO MES");
     y -= 12;
     content += pdfLine(left, y, right, y, 0.8);
     y -= 14;
 
-    // Elegant single-line totals (label + values aligned)
     content += pdfText("F1", 9, left, y, "Repasse:");
     content += pdfText("F2", 9, left + 55, y, `R$ ${formatMoney(totalRepasse)}`);
     content += pdfText("F1", 9, left + 210, y, "Cashback:");
@@ -458,7 +521,7 @@ export async function GET(req: Request) {
 
     pages.push(content);
 
-    // Now append footer with page numbers to each page (we know total pages)
+    // Footer com paginação
     const totalPages = pages.length;
 
     const pagesWithFooter = pages.map((p, idx) => {
@@ -467,9 +530,7 @@ export async function GET(req: Request) {
       let f = p;
       f += pdfLine(left, footerY + 18, right, footerY + 18, 0.6);
       f += pdfText("F1", 8, left, footerY + 6, "Meta-Lav • Relatorio gerado automaticamente");
-      const rightText = `Pagina ${pageNo} de ${totalPages}`;
-      // approximate right align by positioning near right edge
-      f += pdfText("F1", 8, right - 80, footerY + 6, rightText);
+      f += pdfText("F1", 8, right - 80, footerY + 6, `Pagina ${pageNo} de ${totalPages}`);
       return f;
     });
 
