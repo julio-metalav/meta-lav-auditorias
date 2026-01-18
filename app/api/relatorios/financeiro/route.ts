@@ -18,7 +18,6 @@ function bad(message: string, status = 400, extra?: any) {
 function parseMesRef(input: string | null) {
   if (!input) return null;
   const s = String(input).trim();
-  // Aceita "2026-01-01" ou "2026-01"
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
   if (/^\d{4}-\d{2}$/.test(s)) return `${s}-01`;
   return null;
@@ -44,7 +43,6 @@ function safeNum(v: any) {
 }
 
 function money2(n: number) {
-  // mantém número, formatação é do export (xlsx/pdf)
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
@@ -57,12 +55,9 @@ function pickFirst(obj: any, keys: string[]) {
 }
 
 function buildPagamentoTexto(condo: any) {
-  // PIX tem prioridade
   const pix = pickFirst(condo, ["pix", "pix_chave", "chave_pix", "pix_key", "pixkey"]);
   const doc = pickFirst(condo, ["cnpj", "cpf", "documento", "doc", "cnpj_cpf", "cpf_cnpj"]);
-  if (pix) {
-    return `PIX: ${String(pix)}${doc ? ` • CNPJ/CPF: ${String(doc)}` : ""}`;
-  }
+  if (pix) return `PIX: ${String(pix)}${doc ? ` • CNPJ/CPF: ${String(doc)}` : ""}`;
 
   const bancoNome = pickFirst(condo, ["banco_nome", "banco", "nome_banco"]);
   const bancoCod = pickFirst(condo, ["banco_codigo", "codigo_banco", "banco_cod"]);
@@ -78,7 +73,6 @@ function buildPagamentoTexto(condo: any) {
   if (conta) parts.push(`Conta: ${String(conta)}`);
   if (titular) parts.push(`Titular: ${String(titular)}`);
   if (doc) parts.push(`CNPJ/CPF: ${String(doc)}`);
-
   return parts.join(" • ");
 }
 
@@ -101,51 +95,99 @@ async function fetchJsonWithCookie(url: string, cookie: string | null) {
 }
 
 function getBaseUrl(req: Request) {
-  // Vercel: usa host da request (mesmo domínio)
   const u = new URL(req.url);
   return `${u.protocol}//${u.host}`;
 }
 
-async function getTotaisDaAuditoria(req: Request, auditoriaId: string) {
+/**
+ * Tenta extrair o custo total de INSUMOS da auditoria.
+ * Ordem:
+ * 1) campos "totais" já prontos (total_insumos/consumos_total/etc)
+ * 2) soma de campos de custo (valor_agua, valor_energia, valor_gas, valor_produtos, etc)
+ * 3) cálculo por leitura * tarifa (se existir leitura anterior/base e tarifa)
+ */
+function extractInsumosTotal(a: any): number {
+  // 1) Totais prontos
+  const totalPronto = safeNum(
+    pickFirst(a, [
+      "total_insumos",
+      "insumos_total",
+      "total_consumos",
+      "consumos_total",
+      "repasse_consumos",
+      "repasse_insumos",
+      "valor_insumos",
+      "custo_insumos",
+      "custo_total_insumos",
+      "total_custos",
+    ])
+  );
+  if (totalPronto > 0) return money2(totalPronto);
+
+  // 2) Soma por componentes (se existirem)
+  const aguaV = safeNum(pickFirst(a, ["valor_agua", "agua_valor", "custo_agua", "agua_custo"]));
+  const energiaV = safeNum(pickFirst(a, ["valor_energia", "energia_valor", "custo_energia", "energia_custo"]));
+  const gasV = safeNum(pickFirst(a, ["valor_gas", "gas_valor", "custo_gas", "gas_custo"]));
+  const produtosV = safeNum(
+    pickFirst(a, ["valor_produtos", "produtos_valor", "custo_produtos", "quimicos_valor", "insumos_quimicos_valor"])
+  );
+  const outrosV = safeNum(pickFirst(a, ["valor_outros", "outros_valor", "custo_outros"]));
+
+  const somaComponentes = aguaV + energiaV + gasV + produtosV + outrosV;
+  if (somaComponentes > 0) return money2(somaComponentes);
+
+  // 3) Cálculo por leitura * tarifa (se tiver)
+  const aguaLeitura = safeNum(pickFirst(a, ["agua_leitura", "leitura_agua", "leitura_agua_atual"]));
+  const aguaBase = safeNum(pickFirst(a, ["agua_leitura_base", "base_agua", "leitura_agua_base", "leitura_agua_anterior"]));
+  const aguaTarifa = safeNum(pickFirst(a, ["agua_tarifa", "tarifa_agua", "valor_m3_agua", "agua_valor_m3", "agua_preco_m3"]));
+
+  const energiaLeitura = safeNum(pickFirst(a, ["energia_leitura", "leitura_energia", "leitura_energia_atual"]));
+  const energiaBase = safeNum(
+    pickFirst(a, ["energia_leitura_base", "base_energia", "leitura_energia_base", "leitura_energia_anterior"])
+  );
+  const energiaTarifa = safeNum(
+    pickFirst(a, ["energia_tarifa", "tarifa_energia", "valor_kwh", "energia_valor_kwh", "energia_preco_kwh"])
+  );
+
+  const gasLeitura = safeNum(pickFirst(a, ["gas_leitura", "leitura_gas", "leitura_gas_atual"]));
+  const gasBase = safeNum(pickFirst(a, ["gas_leitura_base", "base_gas", "leitura_gas_base", "leitura_gas_anterior"]));
+  const gasTarifa = safeNum(pickFirst(a, ["gas_tarifa", "tarifa_gas", "valor_m3_gas", "gas_valor_m3", "gas_preco_m3"]));
+
+  const aguaCons = Math.max(0, aguaLeitura - aguaBase);
+  const energiaCons = Math.max(0, energiaLeitura - energiaBase);
+  const gasCons = Math.max(0, gasLeitura - gasBase);
+
+  const calc = aguaCons * aguaTarifa + energiaCons * energiaTarifa + gasCons * gasTarifa;
+  if (calc > 0) return money2(calc);
+
+  return 0;
+}
+
+async function getReceitaBruta(req: Request, auditoriaId: string) {
   const base = getBaseUrl(req);
   const cookie = req.headers.get("cookie");
 
-  // 1) tenta /ciclos
   try {
     const j = await fetchJsonWithCookie(`${base}/api/auditorias/${auditoriaId}/ciclos`, cookie);
     const itens = j?.data?.itens ?? [];
-    // total_vendas (receita bruta) = soma(ciclos * valor_ciclo)
     const receita = itens.reduce((acc: number, it: any) => acc + safeNum(it?.ciclos) * safeNum(it?.valor_ciclo), 0);
-
-    // cashback: % sobre receita bruta pode estar vindo do backend da auditoria; se não, calculamos depois via condo
-    // repasse/total_a_pagar: neste sistema, pelo print, total a pagar = receita (cashback + repasse = receita)
-    // então repasse = receita - cashback
-    // (o cashback % está no condomínio. Vamos retornar receita e deixar o route principal quebrar em repasse/cashback)
-    return { receita_bruta: money2(receita) };
+    return money2(receita);
   } catch {
-    // segue pro fallback
+    return 0;
   }
+}
 
-  // 2) fallback /auditorias/[id]
+async function getInsumos(req: Request, auditoriaId: string) {
+  const base = getBaseUrl(req);
+  const cookie = req.headers.get("cookie");
+
   try {
     const j = await fetchJsonWithCookie(`${base}/api/auditorias/${auditoriaId}`, cookie);
     const a = j?.data ?? j;
-    // tenta pegar campos “defensivos”
-    const total = safeNum(pickFirst(a, ["total", "total_a_pagar", "total_a_pagar_rs", "total_a_pagar_brl"]));
-    const repasse = safeNum(pickFirst(a, ["total_repasse", "repasse_total", "repasse"]));
-    const cashback = safeNum(pickFirst(a, ["total_cashback", "cashback_total", "cashback"]));
-    if (total || repasse || cashback) {
-      return {
-        total_a_pagar: money2(total),
-        total_repasse: money2(repasse),
-        total_cashback: money2(cashback),
-      };
-    }
+    return extractInsumosTotal(a);
   } catch {
-    // ignore
+    return 0;
   }
-
-  return { receita_bruta: 0 };
 }
 
 export async function GET(req: Request) {
@@ -180,7 +222,7 @@ export async function GET(req: Request) {
 
     const condoById = new Map<string, any>((condos ?? []).map((c: any) => [c.id, c]));
 
-    // ✅ mês anterior para variação: considerar final + em_conferencia (senão vira sempre 0)
+    // ✅ mês anterior para variação: considerar final + em_conferencia
     const { data: audPrev, error: prevErr } = await supabaseAdmin()
       .from("auditorias")
       .select("id, condominio_id, mes_ref, status")
@@ -193,14 +235,14 @@ export async function GET(req: Request) {
     const prevByCondo = new Map<string, number>();
 
     for (const a of (audPrev ?? []) as any[]) {
-      const tid = String(a.id);
-      const totals = await getTotaisDaAuditoria(req, tid);
-      const condo = condoById.get(String(a.condominio_id));
+      const condo = condoById.get(String(a.condominio_id)) || {};
       const cashbackPct = safeNum(pickFirst(condo, ["cashback_percent", "cashback", "percent_cashback"])) || 0;
 
-      const receita = safeNum((totals as any).receita_bruta);
+      const receita = await getReceitaBruta(req, String(a.id));
+      const insumos = await getInsumos(req, String(a.id));
+
       const cashback = money2(receita * (cashbackPct / 100));
-      const repasse = money2(receita - cashback);
+      const repasse = money2(insumos);
       const total = money2(repasse + cashback);
 
       const key = String(a.condominio_id);
@@ -214,22 +256,12 @@ export async function GET(req: Request) {
       const pagamento_texto = buildPagamentoTexto(condo);
       const cashbackPct = safeNum(pickFirst(condo, ["cashback_percent", "cashback", "percent_cashback"])) || 0;
 
-      const totals = await getTotaisDaAuditoria(req, String(a.id));
+      const receita = await getReceitaBruta(req, String(a.id));
+      const insumos = await getInsumos(req, String(a.id));
 
-      let repasse = 0;
-      let cashback = 0;
-      let total = 0;
-
-      if ((totals as any).total_a_pagar || (totals as any).total_repasse || (totals as any).total_cashback) {
-        repasse = money2(safeNum((totals as any).total_repasse));
-        cashback = money2(safeNum((totals as any).total_cashback));
-        total = money2(safeNum((totals as any).total_a_pagar) || repasse + cashback);
-      } else {
-        const receita = safeNum((totals as any).receita_bruta);
-        cashback = money2(receita * (cashbackPct / 100));
-        repasse = money2(receita - cashback);
-        total = money2(repasse + cashback);
-      }
+      const cashback = money2(receita * (cashbackPct / 100));
+      const repasse = money2(insumos); // ✅ repasse = INSUMOS (consumos)
+      const total = money2(repasse + cashback); // ✅ total a pagar = insumos + cashback
 
       const prevTotal = prevByCondo.get(String(a.condominio_id)) || 0;
       const variacao = prevTotal > 0 ? (total - prevTotal) / prevTotal : 0;
@@ -246,7 +278,6 @@ export async function GET(req: Request) {
       });
     }
 
-    // ordena por nome do condomínio
     items.sort((x, y) => String(x.condominio_nome).localeCompare(String(y.condominio_nome), "pt-BR"));
 
     return NextResponse.json({
