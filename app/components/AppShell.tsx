@@ -73,6 +73,8 @@ export function AppShell({
       { href: "/auditorias", label: "Auditorias", minRole: "auditor" },
       { href: "/condominios", label: "Pontos", minRole: "interno" },
       { href: "/atribuicoes", label: "Atribuições", minRole: "interno" },
+      { href: "/usuarios", label: "Usuários", minRole: "gestor" },
+   
 
       // Gestor
       { href: "/usuarios", label: "Usuários", minRole: "gestor" },
