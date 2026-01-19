@@ -1,4 +1,5 @@
 export const runtime = "nodejs";
+
 import { NextResponse } from "next/server";
 import { getUserAndRole, roleGte } from "@/lib/auth";
 
@@ -15,6 +16,27 @@ function numOrNull(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function intOrNull(v: any): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.trunc(n);
+}
+
+function dateOrNull(v: any): string | null {
+  const s = String(v ?? "").trim();
+  if (!s) return null; // espera "YYYY-MM-DD"
+  return s;
+}
+
+function calcVencimento(assinadoEm: string | null, prazoMeses: number | null): string | null {
+  if (!assinadoEm || !prazoMeses) return null;
+  const d = new Date(assinadoEm + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return null;
+  d.setMonth(d.getMonth() + prazoMeses);
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
 export async function GET() {
   const { supabase, user, role } = await getUserAndRole();
   if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
@@ -23,10 +45,11 @@ export async function GET() {
     const { data, error } = await supabase
       .from("auditor_condominios")
       .select(
-        "condominio_id, condominios(id,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3)"
+        "condominio_id, condominios(id,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro)"
       )
       .eq("auditor_id", user.id)
       .order("condominios(nome)");
+
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
     const condos = (data ?? []).map((r: any) => r.condominios).filter(Boolean);
     return NextResponse.json({ data: condos });
@@ -35,7 +58,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from("condominios")
     .select(
-      "id,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3,created_at"
+      "id,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro,created_at"
     )
     .order("nome", { ascending: true });
 
@@ -51,6 +74,11 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json().catch(() => ({}));
+
+  const contrato_assinado_em = dateOrNull(body?.contrato_assinado_em);
+  const contrato_prazo_meses = intOrNull(body?.contrato_prazo_meses);
+  const contrato_vencimento_em =
+    dateOrNull(body?.contrato_vencimento_em) ?? calcVencimento(contrato_assinado_em, contrato_prazo_meses);
 
   const payload = {
     nome: String(body?.nome || "").trim(),
@@ -74,6 +102,16 @@ export async function POST(req: Request) {
     conta: String(body?.conta || "").trim(),
     tipo_conta: String(body?.tipo_conta || "").trim(),
     pix: String(body?.pix || "").trim(),
+
+    // ✅ NOVO: emails no cadastro
+    email_sindico: String(body?.email_sindico || "").trim(),
+    email_financeiro: String(body?.email_financeiro || "").trim(),
+
+    // ✅ NOVO: contrato
+    contrato_assinado_em,
+    contrato_prazo_meses,
+    contrato_vencimento_em,
+
     maquinas: body?.maquinas ?? null,
 
     // ✅ NOVO: tarifas (repasse por consumo)
@@ -81,7 +119,7 @@ export async function POST(req: Request) {
     energia_valor_kwh: numOrNull(body?.energia_valor_kwh),
     gas_valor_m3: numOrNull(body?.gas_valor_m3),
 
-    // NOVO (regra de negócio): default direto
+    // ✅ regra existente: default direto
     tipo_pagamento: normalizeTipoPagamento(body?.tipo_pagamento),
   };
 
@@ -90,7 +128,7 @@ export async function POST(req: Request) {
   }
 
   const { data, error } = await supabase.from("condominios").insert(payload).select("id").single();
-
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
   return NextResponse.json({ ok: true, data });
 }

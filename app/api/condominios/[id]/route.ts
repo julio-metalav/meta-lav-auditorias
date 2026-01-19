@@ -14,6 +14,33 @@ function str(v: any) {
   return String(v ?? "").trim();
 }
 
+function intOrNull(v: any): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.trunc(n);
+}
+
+function numOrNull(v: any): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function dateOrNull(v: any): string | null {
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+  return s; // YYYY-MM-DD
+}
+
+function calcVencimento(assinadoEm: string | null, prazoMeses: number | null): string | null {
+  if (!assinadoEm || !prazoMeses) return null;
+  const d = new Date(assinadoEm + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return null;
+  d.setMonth(d.getMonth() + prazoMeses);
+  return d.toISOString().slice(0, 10);
+}
+
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const { supabase, user, role } = await getUserAndRole();
   if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
@@ -41,6 +68,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
         "sindico_nome,sindico_telefone,zelador_nome,zelador_telefone," +
         "valor_ciclo_lavadora,valor_ciclo_secadora,cashback_percent," +
         "banco,favorecido_cnpj,agencia,conta,tipo_conta,pix,maquinas," +
+        "agua_valor_m3,energia_valor_kwh,gas_valor_m3," +
+        "contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro," +
         "tipo_pagamento,created_at"
     )
     .eq("id", id)
@@ -92,6 +121,31 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   if (body?.maquinas !== undefined) patch.maquinas = body?.maquinas ?? null;
 
+  // ✅ NOVO: tarifas
+  if (body?.agua_valor_m3 !== undefined) patch.agua_valor_m3 = numOrNull(body?.agua_valor_m3);
+  if (body?.energia_valor_kwh !== undefined) patch.energia_valor_kwh = numOrNull(body?.energia_valor_kwh);
+  if (body?.gas_valor_m3 !== undefined) patch.gas_valor_m3 = numOrNull(body?.gas_valor_m3);
+
+  // ✅ NOVO: emails
+  if (body?.email_sindico !== undefined) patch.email_sindico = str(body?.email_sindico);
+  if (body?.email_financeiro !== undefined) patch.email_financeiro = str(body?.email_financeiro);
+
+  // ✅ NOVO: contrato
+  const mexeuAssinatura = body?.contrato_assinado_em !== undefined;
+  const mexeuPrazo = body?.contrato_prazo_meses !== undefined;
+  const mandouVenc = body?.contrato_vencimento_em !== undefined;
+
+  if (mexeuAssinatura) patch.contrato_assinado_em = dateOrNull(body?.contrato_assinado_em);
+  if (mexeuPrazo) patch.contrato_prazo_meses = intOrNull(body?.contrato_prazo_meses);
+  if (mandouVenc) patch.contrato_vencimento_em = dateOrNull(body?.contrato_vencimento_em);
+
+  // Se mexeu assinatura/prazo e não mandou vencimento, recalcula
+  if (!mandouVenc && (mexeuAssinatura || mexeuPrazo)) {
+    const ass = (patch.contrato_assinado_em ?? null) as string | null;
+    const pr = (patch.contrato_prazo_meses ?? null) as number | null;
+    patch.contrato_vencimento_em = calcVencimento(ass, pr);
+  }
+
   // NOVO: tipo_pagamento
   if (body?.tipo_pagamento !== undefined) {
     patch.tipo_pagamento = normalizeTipoPagamento(body?.tipo_pagamento);
@@ -116,7 +170,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     .from("condominios")
     .update(patch)
     .eq("id", id)
-    .select("id,tipo_pagamento")
+    .select(
+      "id,tipo_pagamento,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro,agua_valor_m3,energia_valor_kwh,gas_valor_m3"
+    )
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
