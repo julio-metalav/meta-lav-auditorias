@@ -30,7 +30,6 @@ async function fetchCondominioBasics(condominioId: string) {
         "tipo_pagamento",
         "valor_ciclo_lavadora",
         "valor_ciclo_secadora",
-        // ✅ campo correto no cadastro do condomínio
         "cashback_percent",
         "agua_valor_m3",
         "energia_valor_kwh",
@@ -51,37 +50,25 @@ function withCompatAliases(aud: any, condominio: any) {
   const base_energia = aud?.energia_leitura_base ?? null;
   const base_gas = aud?.gas_leitura_base ?? null;
 
-  // ✅ sempre do cadastro
+  // ✅ SEMPRE vem do cadastro do condomínio
   const cashback_percent = condominio?.cashback_percent ?? null;
-
-...
-
-cashback_percent,
-
 
   const agua_valor_m3 = condominio?.agua_valor_m3 ?? null;
   const energia_valor_kwh = condominio?.energia_valor_kwh ?? null;
   const gas_valor_m3 = condominio?.gas_valor_m3 ?? null;
 
- return {
-  ...aud,
-  pagamento_metodo,
-  base_agua,
-  base_energia,
-  base_gas,
-
-  // ✅ uma única vez
-  const cashback_percent = condominio?.cashback_percent ?? null;
-
-...
-
-cashback_percent,
-
-
-  agua_valor_m3,
-  energia_valor_kwh,
-  gas_valor_m3,
-};
+  return {
+    ...aud,
+    pagamento_metodo,
+    base_agua,
+    base_energia,
+    base_gas,
+    cashback_percent,
+    agua_valor_m3,
+    energia_valor_kwh,
+    gas_valor_m3,
+  };
+}
 
 const AUDITORIA_SELECT = [
   "id",
@@ -98,7 +85,7 @@ const AUDITORIA_SELECT = [
   "leitura_base_origem",
   "observacoes",
 
-  // ✅ FECHAMENTO (IMPORTANTE PRO INTERNO)
+  // fechamento
   "comprovante_fechamento_url",
   "fechamento_obs",
 
@@ -112,10 +99,14 @@ const AUDITORIA_SELECT = [
   "updated_at",
 ].join(",");
 
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(
+  _req: Request,
+  { params }: { params: { id: string } }
+) {
   try {
     const { user, role } = await getUserAndRole();
-    if (!user) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    if (!user)
+      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
 
     const sb = supabaseAdmin();
     const id = params.id;
@@ -126,39 +117,44 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       .eq("id", id)
       .maybeSingle();
 
-    if (audErr) return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
-    if (!aud) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+    if (audErr)
+      return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
+    if (!aud)
+      return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
     const audRow: any = aud;
 
     const isManager = roleGte(role, "interno");
-    const isOwnerAuditor = !!audRow.auditor_id && audRow.auditor_id === user.id;
-    const isUnassigned = !audRow.auditor_id; // ✅ fila aberta
+    const isOwnerAuditor = audRow.auditor_id === user.id;
+    const isUnassigned = !audRow.auditor_id;
 
-    // ✅ Regra nova:
-    // - interno/gestor sempre
-    // - auditor pode abrir se for dele OU se estiver sem auditor
     if (!isManager && !(isOwnerAuditor || isUnassigned)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
-    const { condominio, error: condoErr } = await fetchCondominioBasics(audRow.condominio_id);
-    if (condoErr) {
-      const payload = withCompatAliases(audRow, null);
-      return NextResponse.json({ ok: true, data: payload, auditoria: payload }, { status: 200 });
-    }
+    const { condominio, error: condoErr } = await fetchCondominioBasics(
+      audRow.condominio_id
+    );
 
-    const payload = withCompatAliases(audRow, condominio);
-    return NextResponse.json({ ok: true, data: payload, auditoria: payload }, { status: 200 });
+    const payload = withCompatAliases(audRow, condoErr ? null : condominio);
+
+    return NextResponse.json({ ok: true, data: payload, auditoria: payload });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "server_error" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "server_error" },
+      { status: 500 }
+    );
   }
 }
 
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
   try {
     const { user, role } = await getUserAndRole();
-    if (!user) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    if (!user)
+      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
 
     const sb = supabaseAdmin();
     const id = params.id;
@@ -170,32 +166,27 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       .eq("id", id)
       .maybeSingle();
 
-    if (audErr) return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
-    if (!aud) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+    if (audErr)
+      return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
+    if (!aud)
+      return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
     const audRow: any = aud;
 
     const isManager = roleGte(role, "interno");
-    const isOwnerAuditor = !!audRow.auditor_id && audRow.auditor_id === user.id;
+    const isOwnerAuditor = audRow.auditor_id === user.id;
     const isUnassigned = !audRow.auditor_id;
 
-    // ✅ Regra nova:
-    // - interno/gestor pode sempre
-    // - auditor pode editar se for dele OU se estiver sem auditor (vai "claimar")
     if (!isManager && !(isOwnerAuditor || isUnassigned)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
-    const patch: any = {};
     const allowed = [
       "agua_leitura",
       "energia_leitura",
       "gas_leitura",
       "observacoes",
-
-      // ✅ permite salvar obs do financeiro pelo interno
       "fechamento_obs",
-
       "foto_agua_url",
       "foto_energia_url",
       "foto_gas_url",
@@ -205,47 +196,24 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       "status",
     ];
 
+    const patch: any = {};
     for (const k of allowed) {
       if (k in body) patch[k] = body[k];
     }
 
     if (typeof patch.status === "string") {
-      const s = String(patch.status).trim().toLowerCase();
-      const okStatus: Status[] = ["aberta", "em_andamento", "em_conferencia", "final"];
-      if (!okStatus.includes(s as Status)) delete patch.status;
-      else patch.status = s;
-    }
-
-    // auditor não finaliza
-    if (!isManager && patch.status === "final") delete patch.status;
-    // auditor só pode mandar para em_conferencia (se você quiser manter isso)
-    if (!isManager && patch.status && patch.status !== "em_conferencia") delete patch.status;
-
-    // ✅ CLAIM atômico:
-    // se for auditor e estiver sem auditor_id, tenta "assumir" na hora do primeiro PATCH.
-    // Faz update condicionado em auditor_id IS NULL para evitar corrida.
-    if (!isManager && role === "auditor" && isUnassigned) {
-      const { data: claimed, error: claimErr } = await sb
-        .from("auditorias")
-        .update({ ...patch, auditor_id: user.id })
-        .eq("id", id)
-        .is("auditor_id", null)
-        .select(AUDITORIA_SELECT)
-        .maybeSingle();
-
-      if (claimErr) return NextResponse.json({ ok: false, error: claimErr.message }, { status: 400 });
-
-      if (!claimed) {
-        return NextResponse.json({ ok: false, error: "auditoria_ja_assumida" }, { status: 409 });
+      const s = patch.status.toLowerCase();
+      if (!["aberta", "em_andamento", "em_conferencia", "final"].includes(s)) {
+        delete patch.status;
+      } else {
+        patch.status = s;
       }
-
-      const { condominio } = await fetchCondominioBasics((claimed as any)!.condominio_id);
-      const payload = withCompatAliases(claimed as any, condominio);
-
-      return NextResponse.json({ ok: true, data: payload, auditoria: payload }, { status: 200 });
     }
 
-    // caminho normal (interno/gestor ou auditor já dono)
+    if (!isManager && patch.status === "final") delete patch.status;
+    if (!isManager && patch.status && patch.status !== "em_conferencia")
+      delete patch.status;
+
     const { data: saved, error: saveErr } = await sb
       .from("auditorias")
       .update(patch)
@@ -253,13 +221,17 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       .select(AUDITORIA_SELECT)
       .maybeSingle();
 
-    if (saveErr) return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
+    if (saveErr)
+      return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
 
-    const { condominio } = await fetchCondominioBasics((saved as any)!.condominio_id);
-    const payload = withCompatAliases(saved as any, condominio);
+    const { condominio } = await fetchCondominioBasics(saved!.condominio_id);
+    const payload = withCompatAliases(saved, condominio);
 
-    return NextResponse.json({ ok: true, data: payload, auditoria: payload }, { status: 200 });
+    return NextResponse.json({ ok: true, data: payload, auditoria: payload });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "server_error" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "server_error" },
+      { status: 500 }
+    );
   }
 }
