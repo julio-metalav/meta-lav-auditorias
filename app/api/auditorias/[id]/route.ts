@@ -30,6 +30,7 @@ async function fetchCondominioBasics(condominioId: string) {
         "tipo_pagamento",
         "valor_ciclo_lavadora",
         "valor_ciclo_secadora",
+        // ✅ campo correto no cadastro do condomínio
         "cashback_percent",
         "agua_valor_m3",
         "energia_valor_kwh",
@@ -50,7 +51,9 @@ function withCompatAliases(aud: any, condominio: any) {
   const base_energia = aud?.energia_leitura_base ?? null;
   const base_gas = aud?.gas_leitura_base ?? null;
 
+  // ✅ sempre do cadastro
   const cashback_percent = condominio?.cashback_percent ?? null;
+
   const agua_valor_m3 = condominio?.agua_valor_m3 ?? null;
   const energia_valor_kwh = condominio?.energia_valor_kwh ?? null;
   const gas_valor_m3 = condominio?.gas_valor_m3 ?? null;
@@ -61,7 +64,13 @@ function withCompatAliases(aud: any, condominio: any) {
     base_agua,
     base_energia,
     base_gas,
+
+    // ✅ nome que o front (interno) usa hoje
     cashback_percent,
+
+    // ✅ alias de compatibilidade (se algo antigo estiver lendo esse nome)
+    cashback_percent: cashback_percent,
+
     agua_valor_m3,
     energia_valor_kwh,
     gas_valor_m3,
