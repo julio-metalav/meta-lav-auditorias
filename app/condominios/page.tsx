@@ -15,6 +15,13 @@ type Condo = {
   complemento?: string;
 
   tipo_pagamento?: "direto" | "boleto" | null;
+
+  // ✅ NOVO
+  contrato_assinado_em?: string | null;
+  contrato_prazo_meses?: number | null;
+  contrato_vencimento_em?: string | null;
+  email_sindico?: string | null;
+  email_financeiro?: string | null;
 };
 
 type Me = { user: { id: string; email: string }; role: string };
@@ -81,6 +88,20 @@ function badgePagamento(tipo?: string | null) {
   );
 }
 
+function onlyDigits(v: string) {
+  return String(v ?? "").replace(/[^\d]/g, "");
+}
+
+function calcVencimento(assinadoEm?: string, prazoMeses?: string): string {
+  const a = String(assinadoEm ?? "").trim();
+  const p = Number(String(prazoMeses ?? "").trim());
+  if (!a || !Number.isFinite(p) || p <= 0) return "";
+  const d = new Date(a + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return "";
+  d.setMonth(d.getMonth() + Math.trunc(p));
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
 export default function CondominiosPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [condos, setCondos] = useState<Condo[]>([]);
@@ -104,10 +125,6 @@ export default function CondominiosPage() {
     zelador_nome: "",
     zelador_telefone: "",
 
-    // ⚠️ REMOVIDO da UI (duplicava com parque de máquinas)
-    // valor_ciclo_lavadora: "",
-    // valor_ciclo_secadora: "",
-
     cashback_percent: "",
 
     // ✅ tarifas para cálculo de repasse por consumo
@@ -122,6 +139,13 @@ export default function CondominiosPage() {
     pix: "",
     favorecido_cnpj: "",
     tipo_pagamento: "direto",
+
+    // ✅ NOVO: contrato + emails
+    contrato_assinado_em: "",
+    contrato_prazo_meses: "",
+    contrato_vencimento_em: "",
+    email_sindico: "",
+    email_financeiro: "",
   });
 
   // Parque de máquinas embutido no cadastro
@@ -142,7 +166,10 @@ export default function CondominiosPage() {
     setErr(null);
     setOk(null);
 
-    const [m, c] = await Promise.all([fetch("/api/me").then((r) => r.json()), fetch("/api/condominios").then((r) => r.json())]);
+    const [m, c] = await Promise.all([
+      fetch("/api/me").then((r) => r.json()),
+      fetch("/api/condominios").then((r) => r.json()),
+    ]);
 
     if (m?.error) {
       setErr(m.error);
@@ -225,6 +252,13 @@ export default function CondominiosPage() {
       pix: "",
       favorecido_cnpj: "",
       tipo_pagamento: "direto",
+
+      // ✅ NOVO: contrato + emails
+      contrato_assinado_em: "",
+      contrato_prazo_meses: "",
+      contrato_vencimento_em: "",
+      email_sindico: "",
+      email_financeiro: "",
     });
 
     setMaquinas([
@@ -254,7 +288,8 @@ export default function CondominiosPage() {
         if (!m.categoria) throw new Error(`Linha ${idx + 1}: Categoria da máquina é obrigatória.`);
         if (m.capacidade_kg === null || m.capacidade_kg === undefined || !Number.isFinite(Number(m.capacidade_kg)))
           throw new Error(`Linha ${idx + 1}: Capacidade (kg) é obrigatória. Use 10 ou 15.`);
-        if (!Number.isFinite(Number(m.quantidade)) || Number(m.quantidade) <= 0) throw new Error(`Linha ${idx + 1}: Quantidade deve ser maior que zero.`);
+        if (!Number.isFinite(Number(m.quantidade)) || Number(m.quantidade) <= 0)
+          throw new Error(`Linha ${idx + 1}: Quantidade deve ser maior que zero.`);
         const val = parseMoneyPtBr(m.valor_ciclo_text);
         if (!Number.isFinite(val) || val < 0) throw new Error(`Linha ${idx + 1}: Valor por ciclo inválido.`);
         if (!Number.isFinite(Number(m.limpeza_quimica_ciclos)) || Number(m.limpeza_quimica_ciclos) <= 0)
@@ -275,7 +310,21 @@ export default function CondominiosPage() {
       payload.energia_valor_kwh = payload.energia_valor_kwh ? parseMoneyPtBr(String(payload.energia_valor_kwh)) : null;
       payload.gas_valor_m3 = payload.gas_valor_m3 ? parseMoneyPtBr(String(payload.gas_valor_m3)) : null;
 
-      payload.tipo_pagamento = String(payload.tipo_pagamento ?? "direto").toLowerCase() === "boleto" ? "boleto" : "direto";
+      payload.tipo_pagamento =
+        String(payload.tipo_pagamento ?? "direto").toLowerCase() === "boleto" ? "boleto" : "direto";
+
+      // ✅ NOVO: normaliza emails
+      payload.email_sindico = String(payload.email_sindico ?? "").trim().toLowerCase();
+      payload.email_financeiro = String(payload.email_financeiro ?? "").trim().toLowerCase();
+
+      // ✅ NOVO: contrato (datas como YYYY-MM-DD)
+      payload.contrato_assinado_em = String(payload.contrato_assinado_em ?? "").trim() || null;
+
+      const prazoTxt = String(payload.contrato_prazo_meses ?? "").trim();
+      payload.contrato_prazo_meses = prazoTxt ? Number(onlyDigits(prazoTxt)) : null;
+
+      // Se não preencher vencimento, deixa vazio → API calcula quando tiver assinatura + prazo
+      payload.contrato_vencimento_em = String(payload.contrato_vencimento_em ?? "").trim() || null;
 
       const r = await fetch("/api/condominios", {
         method: "POST",
@@ -328,6 +377,11 @@ export default function CondominiosPage() {
       setSaving(false);
     }
   }
+
+  // ✅ UX: sugestão automática de vencimento (somente UI)
+  const vencSug = useMemo(() => {
+    return calcVencimento(String(form.contrato_assinado_em || ""), String(form.contrato_prazo_meses || ""));
+  }, [form.contrato_assinado_em, form.contrato_prazo_meses]);
 
   return (
     <AppShell title="Cadastro do ponto">
@@ -384,6 +438,93 @@ export default function CondominiosPage() {
               </select>
             </div>
             <div />
+          </div>
+
+          <div style={{ height: 10 }} />
+
+          {/* ✅ NOVO: CONTRATO */}
+          <div className="small">Contrato</div>
+          <div className="grid2">
+            <div>
+              <div className="small">Data de assinatura</div>
+              <input
+                className="input"
+                type="date"
+                value={form.contrato_assinado_em}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setForm((f: any) => ({
+                    ...f,
+                    contrato_assinado_em: v,
+                    // se o vencimento estiver vazio, sugere
+                    contrato_vencimento_em: String(f.contrato_vencimento_em || "").trim() ? f.contrato_vencimento_em : calcVencimento(v, String(f.contrato_prazo_meses || "")),
+                  }));
+                }}
+              />
+            </div>
+
+            <div>
+              <div className="small">Prazo (meses)</div>
+              <input
+                className="input"
+                inputMode="numeric"
+                placeholder="ex: 36"
+                value={form.contrato_prazo_meses}
+                onChange={(e) => {
+                  const v = onlyDigits(e.target.value);
+                  setForm((f: any) => ({
+                    ...f,
+                    contrato_prazo_meses: v,
+                    contrato_vencimento_em: String(f.contrato_vencimento_em || "").trim() ? f.contrato_vencimento_em : calcVencimento(String(f.contrato_assinado_em || ""), v),
+                  }));
+                }}
+              />
+              {!!vencSug && !String(form.contrato_vencimento_em || "").trim() && (
+                <div className="small" style={{ opacity: 0.7, marginTop: 4 }}>
+                  Sugestão de vencimento: <b>{vencSug}</b>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="small">Data de vencimento</div>
+              <input
+                className="input"
+                type="date"
+                value={form.contrato_vencimento_em}
+                onChange={(e) => setForm({ ...form, contrato_vencimento_em: e.target.value })}
+              />
+              <div className="small" style={{ opacity: 0.7, marginTop: 4 }}>
+                Se deixar vazio, o sistema calcula (assinatura + prazo).
+              </div>
+            </div>
+
+            <div />
+          </div>
+
+          <div style={{ height: 10 }} />
+
+          {/* ✅ NOVO: EMAILS */}
+          <div className="small">E-mails</div>
+          <div className="grid2">
+            <div>
+              <div className="small">E-mail do síndico</div>
+              <input
+                className="input"
+                placeholder="sindico@condominio.com"
+                value={form.email_sindico}
+                onChange={(e) => setForm({ ...form, email_sindico: e.target.value })}
+              />
+            </div>
+            <div>
+              <div className="small">E-mail do financeiro</div>
+              <input
+                className="input"
+                placeholder="financeiro@condominio.com"
+                value={form.email_financeiro}
+                onChange={(e) => setForm({ ...form, email_financeiro: e.target.value })}
+              />
+            </div>
           </div>
 
           <div style={{ height: 10 }} />
