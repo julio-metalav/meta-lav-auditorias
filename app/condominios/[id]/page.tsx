@@ -33,6 +33,13 @@ type Condo = {
   favorecido_cnpj?: string | null;
 
   tipo_pagamento?: TipoPagamento | null;
+
+  // ✅ NOVO: contrato + emails
+  contrato_assinado_em?: string | null; // YYYY-MM-DD
+  contrato_prazo_meses?: number | null;
+  contrato_vencimento_em?: string | null; // YYYY-MM-DD
+  email_sindico?: string | null;
+  email_financeiro?: string | null;
 };
 
 type Me = { user: { id: string; email: string }; role: string };
@@ -54,6 +61,38 @@ function formatMoneyPtBr(n: number): string {
 function normalizeTipoPagamento(v: any): TipoPagamento {
   const s = String(v ?? "").trim().toLowerCase();
   return s === "boleto" ? "boleto" : "direto";
+}
+
+function cleanEmail(v: any) {
+  return String(v ?? "").trim().toLowerCase();
+}
+
+function cleanDateYYYYMMDD(v: any): string {
+  // aceita "" e retorna ""
+  const s = String(v ?? "").trim();
+  return s;
+}
+
+function cleanIntText(v: any): string {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  const only = s.replace(/[^\d]/g, "");
+  return only;
+}
+
+function calcVencimento(assinadoEm: string, prazoMesesText: string): string {
+  const a = String(assinadoEm ?? "").trim();
+  const ptxt = String(prazoMesesText ?? "").trim();
+  if (!a || !ptxt) return "";
+
+  const prazo = Number(ptxt);
+  if (!Number.isFinite(prazo) || prazo <= 0) return "";
+
+  const d = new Date(a + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return "";
+
+  d.setMonth(d.getMonth() + Math.trunc(prazo));
+  return d.toISOString().slice(0, 10);
 }
 
 async function fetchJSON(url: string) {
@@ -95,6 +134,13 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
     pix: "",
     favorecido_cnpj: "",
     tipo_pagamento: "direto" as TipoPagamento,
+
+    // ✅ NOVO: contrato + emails
+    contrato_assinado_em: "",
+    contrato_prazo_meses: "",
+    contrato_vencimento_em: "",
+    email_sindico: "",
+    email_financeiro: "",
   });
 
   const canEdit = me?.role === "interno" || me?.role === "gestor";
@@ -135,10 +181,17 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
         zelador_nome: condo.zelador_nome ?? "",
         zelador_telefone: condo.zelador_telefone ?? "",
 
-        valor_ciclo_lavadora: condo.valor_ciclo_lavadora === null || condo.valor_ciclo_lavadora === undefined ? "" : formatMoneyPtBr(Number(condo.valor_ciclo_lavadora)),
-        valor_ciclo_secadora: condo.valor_ciclo_secadora === null || condo.valor_ciclo_secadora === undefined ? "" : formatMoneyPtBr(Number(condo.valor_ciclo_secadora)),
+        valor_ciclo_lavadora:
+          condo.valor_ciclo_lavadora === null || condo.valor_ciclo_lavadora === undefined
+            ? ""
+            : formatMoneyPtBr(Number(condo.valor_ciclo_lavadora)),
+        valor_ciclo_secadora:
+          condo.valor_ciclo_secadora === null || condo.valor_ciclo_secadora === undefined
+            ? ""
+            : formatMoneyPtBr(Number(condo.valor_ciclo_secadora)),
 
-        cashback_percent: condo.cashback_percent === null || condo.cashback_percent === undefined ? "" : String(condo.cashback_percent),
+        cashback_percent:
+          condo.cashback_percent === null || condo.cashback_percent === undefined ? "" : String(condo.cashback_percent),
 
         banco: condo.banco ?? "",
         agencia: condo.agencia ?? "",
@@ -148,6 +201,14 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
         favorecido_cnpj: condo.favorecido_cnpj ?? "",
 
         tipo_pagamento: normalizeTipoPagamento(condo.tipo_pagamento),
+
+        // ✅ NOVO: contrato + emails
+        contrato_assinado_em: condo.contrato_assinado_em ?? "",
+        contrato_prazo_meses:
+          condo.contrato_prazo_meses === null || condo.contrato_prazo_meses === undefined ? "" : String(condo.contrato_prazo_meses),
+        contrato_vencimento_em: condo.contrato_vencimento_em ?? "",
+        email_sindico: condo.email_sindico ?? "",
+        email_financeiro: condo.email_financeiro ?? "",
       });
     } catch (e: any) {
       setErr(e?.message ?? "Erro ao carregar");
@@ -181,6 +242,16 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
       // percent
       payload.cashback_percent = payload.cashback_percent ? Number(payload.cashback_percent) : null;
 
+      // ✅ NOVO: contrato + emails (datas como YYYY-MM-DD, prazo como int)
+      payload.contrato_assinado_em = cleanDateYYYYMMDD(payload.contrato_assinado_em) || null;
+      payload.contrato_prazo_meses = cleanIntText(payload.contrato_prazo_meses) ? Number(cleanIntText(payload.contrato_prazo_meses)) : null;
+
+      // se vencimento vazio, manda null e deixa backend calcular (ou você preenche)
+      payload.contrato_vencimento_em = cleanDateYYYYMMDD(payload.contrato_vencimento_em) || null;
+
+      payload.email_sindico = cleanEmail(payload.email_sindico) || null;
+      payload.email_financeiro = cleanEmail(payload.email_financeiro) || null;
+
       const r = await fetch(`/api/condominios/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -203,8 +274,12 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
     <AppShell title="Editar condomínio">
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <div className="row" style={{ gap: 8, alignItems: "center" }}>
-          <a className="btn" href="/condominios">← Voltar</a>
-          <a className="btn" href={`/condominios/${id}/maquinas`}>Ver máquinas</a>
+          <a className="btn" href="/condominios">
+            ← Voltar
+          </a>
+          <a className="btn" href={`/condominios/${id}/maquinas`}>
+            Ver máquinas
+          </a>
         </div>
         <button className="btn" onClick={loadAll} disabled={loading}>
           Recarregar
@@ -220,7 +295,9 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
         </div>
       ) : (
         <div className="card" style={{ background: "#fbfcff", marginTop: 12 }}>
-          <div className="small" style={{ marginBottom: 8 }}>Dados do condomínio</div>
+          <div className="small" style={{ marginBottom: 8 }}>
+            Dados do condomínio
+          </div>
 
           <div className="grid2">
             <div>
@@ -259,7 +336,13 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
 
             <div>
               <div className="small">Mapa</div>
-              {mapsUrl ? <a className="btn" href={mapsUrl} target="_blank">Abrir no Google Maps</a> : <div className="small">Preencha endereço</div>}
+              {mapsUrl ? (
+                <a className="btn" href={mapsUrl} target="_blank" rel="noreferrer">
+                  Abrir no Google Maps
+                </a>
+              ) : (
+                <div className="small">Preencha endereço</div>
+              )}
             </div>
           </div>
 
@@ -297,7 +380,11 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
             </div>
             <div>
               <div className="small">Síndico (telefone)</div>
-              <input className="input" value={form.sindico_telefone} onChange={(e) => setForm({ ...form, sindico_telefone: e.target.value })} />
+              <input
+                className="input"
+                value={form.sindico_telefone}
+                onChange={(e) => setForm({ ...form, sindico_telefone: e.target.value })}
+              />
             </div>
             <div>
               <div className="small">Zelador (nome)</div>
@@ -305,8 +392,81 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
             </div>
             <div>
               <div className="small">Zelador (telefone)</div>
-              <input className="input" value={form.zelador_telefone} onChange={(e) => setForm({ ...form, zelador_telefone: e.target.value })} />
+              <input
+                className="input"
+                value={form.zelador_telefone}
+                onChange={(e) => setForm({ ...form, zelador_telefone: e.target.value })}
+              />
             </div>
+
+            {/* ✅ NOVO: emails */}
+            <div>
+              <div className="small">E-mail do síndico</div>
+              <input
+                className="input"
+                placeholder="sindico@..."
+                value={form.email_sindico}
+                onChange={(e) => setForm({ ...form, email_sindico: e.target.value })}
+              />
+            </div>
+            <div>
+              <div className="small">E-mail do financeiro</div>
+              <input
+                className="input"
+                placeholder="financeiro@..."
+                value={form.email_financeiro}
+                onChange={(e) => setForm({ ...form, email_financeiro: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div style={{ height: 10 }} />
+          <div className="small">Contrato</div>
+          <div className="grid2">
+            <div>
+              <div className="small">Data de assinatura</div>
+              <input
+                className="input"
+                type="date"
+                value={form.contrato_assinado_em}
+                onChange={(e) => {
+                  const v = cleanDateYYYYMMDD(e.target.value);
+                  const prazoTxt = String(form.contrato_prazo_meses ?? "");
+                  const venc = calcVencimento(v, prazoTxt);
+                  setForm({ ...form, contrato_assinado_em: v, contrato_vencimento_em: venc || form.contrato_vencimento_em });
+                }}
+              />
+            </div>
+
+            <div>
+              <div className="small">Prazo (meses)</div>
+              <input
+                className="input"
+                inputMode="numeric"
+                placeholder="ex: 36"
+                value={form.contrato_prazo_meses}
+                onChange={(e) => {
+                  const prazoTxt = cleanIntText(e.target.value);
+                  const venc = calcVencimento(String(form.contrato_assinado_em ?? ""), prazoTxt);
+                  setForm({ ...form, contrato_prazo_meses: prazoTxt, contrato_vencimento_em: venc || form.contrato_vencimento_em });
+                }}
+              />
+              <div className="small" style={{ opacity: 0.75, marginTop: 4 }}>
+                Se preencher assinatura + prazo, o vencimento é calculado automaticamente.
+              </div>
+            </div>
+
+            <div>
+              <div className="small">Vencimento</div>
+              <input
+                className="input"
+                type="date"
+                value={form.contrato_vencimento_em}
+                onChange={(e) => setForm({ ...form, contrato_vencimento_em: cleanDateYYYYMMDD(e.target.value) })}
+              />
+            </div>
+
+            <div />
           </div>
 
           <div style={{ height: 10 }} />
@@ -314,11 +474,21 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
           <div className="grid2">
             <div>
               <div className="small">Valor ciclo lavadora (R$)</div>
-              <input className="input" placeholder="ex: 16,50" value={form.valor_ciclo_lavadora} onChange={(e) => setForm({ ...form, valor_ciclo_lavadora: e.target.value })} />
+              <input
+                className="input"
+                placeholder="ex: 16,50"
+                value={form.valor_ciclo_lavadora}
+                onChange={(e) => setForm({ ...form, valor_ciclo_lavadora: e.target.value })}
+              />
             </div>
             <div>
               <div className="small">Valor ciclo secadora (R$)</div>
-              <input className="input" placeholder="ex: 8,00" value={form.valor_ciclo_secadora} onChange={(e) => setForm({ ...form, valor_ciclo_secadora: e.target.value })} />
+              <input
+                className="input"
+                placeholder="ex: 8,00"
+                value={form.valor_ciclo_secadora}
+                onChange={(e) => setForm({ ...form, valor_ciclo_secadora: e.target.value })}
+              />
             </div>
             <div>
               <div className="small">Cashback %</div>
@@ -329,12 +499,34 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
           <div style={{ height: 10 }} />
           <div className="small">Dados bancários</div>
           <div className="grid2">
-            <div><div className="small">Banco</div><input className="input" value={form.banco} onChange={(e)=>setForm({...form,banco:e.target.value})}/></div>
-            <div><div className="small">Agência</div><input className="input" value={form.agencia} onChange={(e)=>setForm({...form,agencia:e.target.value})}/></div>
-            <div><div className="small">Conta</div><input className="input" value={form.conta} onChange={(e)=>setForm({...form,conta:e.target.value})}/></div>
-            <div><div className="small">Tipo conta</div><input className="input" value={form.tipo_conta} onChange={(e)=>setForm({...form,tipo_conta:e.target.value})}/></div>
-            <div><div className="small">PIX</div><input className="input" value={form.pix} onChange={(e)=>setForm({...form,pix:e.target.value})}/></div>
-            <div><div className="small">Favorecido/CNPJ</div><input className="input" value={form.favorecido_cnpj} onChange={(e)=>setForm({...form,favorecido_cnpj:e.target.value})}/></div>
+            <div>
+              <div className="small">Banco</div>
+              <input className="input" value={form.banco} onChange={(e) => setForm({ ...form, banco: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Agência</div>
+              <input className="input" value={form.agencia} onChange={(e) => setForm({ ...form, agencia: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Conta</div>
+              <input className="input" value={form.conta} onChange={(e) => setForm({ ...form, conta: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Tipo conta</div>
+              <input className="input" value={form.tipo_conta} onChange={(e) => setForm({ ...form, tipo_conta: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">PIX</div>
+              <input className="input" value={form.pix} onChange={(e) => setForm({ ...form, pix: e.target.value })} />
+            </div>
+            <div>
+              <div className="small">Favorecido/CNPJ</div>
+              <input
+                className="input"
+                value={form.favorecido_cnpj}
+                onChange={(e) => setForm({ ...form, favorecido_cnpj: e.target.value })}
+              />
+            </div>
           </div>
 
           <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
