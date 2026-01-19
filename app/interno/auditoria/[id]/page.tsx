@@ -39,7 +39,7 @@ type Aud = {
   gas_valor_m3?: number | null;
 
   // pode vir junto do backend
-  condominios?: { id?: string; nome?: string; cidade?: string; uf?: string } | null;
+  condominios?: { nome: string; cidade: string; uf: string; cashback_percent?: number | null } | null;
   condominio?: { id?: string; nome?: string; cidade?: string; uf?: string } | null;
 
   // (opcional) se o backend resolver mandar preços aqui no futuro, a UI já aproveita
@@ -497,7 +497,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
   const financeiro = useMemo(() => {
     const receita = relPrev.receita_total; // null se faltou preço
-    const cashbackPct = safeNumber(aud?.cashback_percent, 0);
+    const cashbackPct = safeNumber(aud?.condominios?.cashback_percent ?? aud?.cashback_percent, 0);
 
     const cashback = receita === null ? null : receita * (cashbackPct / 100);
 
