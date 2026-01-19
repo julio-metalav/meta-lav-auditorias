@@ -73,8 +73,6 @@ export function AppShell({
       { href: "/auditorias", label: "Auditorias", minRole: "auditor" },
       { href: "/condominios", label: "Pontos", minRole: "interno" },
       { href: "/atribuicoes", label: "Atribuições", minRole: "interno" },
-      { href: "/usuarios", label: "Usuários", minRole: "gestor" },
-   
 
       // Gestor
       { href: "/usuarios", label: "Usuários", minRole: "gestor" },
@@ -122,18 +120,18 @@ export function AppShell({
       {/* Topbar */}
       <header className="sticky top-0 z-50 border-b bg-white/90 backdrop-blur">
         <div className="mx-auto max-w-6xl px-4">
-          <div className="flex h-16 items-center justify-between gap-3">
+          <div className="flex flex-col gap-3 py-3 sm:h-16 sm:flex-row sm:items-center sm:justify-between sm:py-0 sm:gap-3">
             {/* Brand */}
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 min-w-0">
               <img
                 src="/logo.jpg"
                 alt="Meta-Lav"
                 className="h-8 w-auto"
                 style={{ display: "block" }}
               />
-              <div className="leading-tight">
+              <div className="leading-tight min-w-0">
                 <div className="text-sm font-semibold">Meta Lav Auditorias</div>
-                <div className="text-[12px] text-slate-500">
+                <div className="text-[12px] text-slate-500 truncate">
                   {loadingMe
                     ? "Carregando..."
                     : me?.user?.email
@@ -144,7 +142,7 @@ export function AppShell({
             </div>
 
             {/* Actions */}
-            <div className="flex items-center gap-2">
+            <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
               {showBack && (
                 <button
                   type="button"
@@ -167,7 +165,7 @@ export function AppShell({
           </div>
 
           {/* Nav */}
-          <nav className="flex flex-wrap items-center gap-2 pb-3">
+          <nav className="flex items-center gap-2 overflow-x-auto pb-3 [-webkit-overflow-scrolling:touch]">
             {nav.map((it) => {
               const active =
                 pathname === it.href ||
@@ -177,7 +175,7 @@ export function AppShell({
                   key={it.href}
                   href={it.href}
                   className={classNames(
-                    "rounded-full px-4 py-2 text-sm font-medium transition",
+                    "rounded-full px-4 py-2 text-sm font-medium transition whitespace-nowrap",
                     active
                       ? "bg-slate-900 text-white"
                       : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
