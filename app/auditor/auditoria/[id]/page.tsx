@@ -536,12 +536,13 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
   return (
     <AppShell title="Auditoria (Campo)">
-      <div className="mx-auto max-w-4xl p-6">
+      {/* ✅ container mobile-first, sem scroll horizontal */}
+      <div className="mx-auto max-w-4xl px-3 py-4 sm:px-6 sm:py-6 overflow-x-hidden">
         {/* Header */}
-        <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-semibold">Auditoria (Campo)</h1>
+              <h1 className="text-xl font-semibold sm:text-2xl">Auditoria (Campo)</h1>
 
               <span
                 className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${mePill.cls}`}
@@ -558,24 +559,25 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
             <div className="mt-2 rounded-xl border bg-white p-3 text-xs">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-gray-700">
+                <div className="text-gray-700 break-words">
                   <b>Logado como:</b> {meLabel}
                 </div>
-                <div className="text-gray-700">
+                <div className="text-gray-700 break-words">
                   <b>Auditoria atribuída a:</b> {assignedAuditorLabel}
                 </div>
               </div>
             </div>
 
             <div className="mt-2 text-xs text-gray-500">
-              Mês: <b>{aud ? pickMonth(aud) : "-"}</b> • ID: <span className="font-mono text-gray-400">{id}</span>
+              Mês: <b>{aud ? pickMonth(aud) : "-"}</b> • ID:{" "}
+              <span className="font-mono text-gray-400 break-all">{id}</span>
             </div>
 
             {/* ✅ UX: volta clara quando já concluiu */}
             {concluida && isAuditor && (
               <div className="mt-3">
                 <a
-                  className="inline-flex items-center rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-gray-50"
+                  className="inline-flex w-full items-center justify-center rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-gray-50 sm:w-auto"
                   href="/auditorias"
                   title="Voltar para a lista das suas auditorias"
                 >
@@ -586,7 +588,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           </div>
 
           <button
-            className="shrink-0 rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+            className="w-full shrink-0 rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 sm:w-auto"
             onClick={carregarTudo}
             disabled={loading || saving}
             title="Recarregar dados"
@@ -598,7 +600,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         {/* Mensagens */}
         {mismatch && (
           <div className="mb-4 rounded-2xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
-            <b>Atenção:</b> você está logado como <b>{meLabel}</b>, mas a auditoria pertence a <b>{assignedAuditorLabel}</b>.
+            <b>Atenção:</b> você está logado como <b>{meLabel}</b>, mas a auditoria pertence a{" "}
+            <b>{assignedAuditorLabel}</b>.
             <div className="mt-1 text-xs text-red-700">
               Para lançar dados como auditor, faça login com o usuário do auditor atribuído.
             </div>
@@ -612,8 +615,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           </div>
         )}
 
-        {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
-        {ok && <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>}
+        {err && (
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>
+        )}
+        {ok && (
+          <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>
+        )}
 
         {/* Checklist + Progresso + Ação principal */}
         <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
@@ -691,7 +698,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
               </button>
 
               {!!concludeDisabledReason && !concluida && (
-                <div className="mt-2 text-xs text-gray-500 max-w-[260px]">{concludeDisabledReason}</div>
+                <div className="mt-2 max-w-full text-xs text-gray-500 sm:max-w-[260px] break-words">
+                  {concludeDisabledReason}
+                </div>
               )}
             </div>
           </div>
@@ -700,14 +709,14 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         {/* Histórico (somente leitura p/ interno/gestor) */}
         {canSeeHistorico && (
           <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="text-sm font-semibold text-gray-800">Histórico de status</div>
                 <div className="mt-1 text-xs text-gray-500">Somente leitura.</div>
               </div>
 
               <button
-                className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                className="w-full rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 sm:w-auto"
                 onClick={carregarHistorico}
                 disabled={histLoading}
                 title="Atualizar histórico"
@@ -740,12 +749,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                     const whoRole = h.actor?.role ? ` - ${h.actor.role}` : "";
                     return (
                       <div key={`${h.created_at}-${idx}`} className="grid grid-cols-12 px-3 py-2 text-sm">
-                        <div className="col-span-4 text-gray-700">{fmtBR(h.created_at)}</div>
-                        <div className="col-span-4 text-gray-800">
+                        <div className="col-span-12 sm:col-span-4 text-gray-700">{fmtBR(h.created_at)}</div>
+                        <div className="col-span-12 sm:col-span-4 text-gray-800">
                           <span className="font-mono text-xs text-gray-600">{de}</span> {"->"}{" "}
                           <span className="font-mono text-xs text-gray-600">{para}</span>
                         </div>
-                        <div className="col-span-4 text-gray-700">
+                        <div className="col-span-12 sm:col-span-4 text-gray-700">
                           {who}
                           <span className="text-xs text-gray-500">{whoRole}</span>
                         </div>
@@ -759,7 +768,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         )}
 
         {/* Conteúdo: Leituras + Observações + Fotos */}
-        <div className="rounded-2xl border bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border bg-white p-4 sm:p-5 shadow-sm">
           <div className="mb-3 text-sm font-semibold text-gray-700">Leituras</div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -852,7 +861,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 );
 
                 return (
-                  <div key={item.kind} className="flex flex-col gap-2 p-3 md:flex-row md:items-center md:justify-between">
+                  <div key={item.kind} className="flex flex-col gap-3 p-3 md:flex-row md:items-start md:justify-between">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="text-sm font-semibold text-gray-800">{item.label}</div>
@@ -885,70 +894,72 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                       )}
                     </div>
 
-                    {/* ✅ MOBILE: empilha e ocupa 100% / DESKTOP: mantém em linha */}
-                    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-                      <label
-                        className={`w-full sm:w-auto cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
-                          disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
-                        }`}
-                        title={disableAll ? "Somente leitura" : mismatch ? "Sem permissão" : "Abrir câmera"}
-                      >
-                        Tirar
-                        <input
-                          type="file"
-                          accept="image/*"
-                          capture="environment"
-                          className="hidden"
-                          onChange={(e) => {
-                            onPick(item.kind, e.target.files?.[0]);
-                            e.currentTarget.value = "";
-                          }}
-                          disabled={disableAll || mismatch || busy}
-                        />
-                      </label>
-
-                      <label
-                        className={`w-full sm:w-auto cursor-pointer rounded-xl border px-4 py-2 text-sm ${
-                          disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
-                        }`}
-                        title="Selecionar da galeria"
-                      >
-                        Galeria
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => {
-                            onPick(item.kind, e.target.files?.[0]);
-                            e.currentTarget.value = "";
-                          }}
-                          disabled={disableAll || mismatch || busy}
-                        />
-                      </label>
-
-                      {pend && (
-                        <>
-                          <button
-                            className={`w-full sm:w-auto order-3 sm:order-none rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
-                              disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
-                            }`}
+                    {/* ✅ MOBILE: stack 100% / DESKTOP: em linha */}
+                    <div className="w-full md:w-auto">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+                        <label
+                          className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
+                            disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
+                          }`}
+                          title={disableAll ? "Somente leitura" : mismatch ? "Sem permissão" : "Abrir câmera"}
+                        >
+                          Tirar
+                          <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            className="hidden"
+                            onChange={(e) => {
+                              onPick(item.kind, e.target.files?.[0]);
+                              e.currentTarget.value = "";
+                            }}
                             disabled={disableAll || mismatch || busy}
-                            onClick={() => uploadFoto(item.kind, pendingFile[item.kind] as File)}
-                            title="Enviar e salvar no sistema"
-                          >
-                            {busy ? "Enviando..." : "Salvar"}
-                          </button>
+                          />
+                        </label>
 
-                          <button
-                            className="w-full sm:w-auto order-4 sm:order-none rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                        <label
+                          className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl border px-4 py-2 text-sm ${
+                            disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
+                          }`}
+                          title="Selecionar da galeria"
+                        >
+                          Galeria
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              onPick(item.kind, e.target.files?.[0]);
+                              e.currentTarget.value = "";
+                            }}
                             disabled={disableAll || mismatch || busy}
-                            onClick={() => cancelPending(item.kind)}
-                            title="Descartar esta seleção"
-                          >
-                            Refazer
-                          </button>
-                        </>
-                      )}
+                          />
+                        </label>
+
+                        {pend && (
+                          <>
+                            <button
+                              className={`inline-flex w-full sm:w-auto items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                                disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
+                              }`}
+                              disabled={disableAll || mismatch || busy}
+                              onClick={() => uploadFoto(item.kind, pendingFile[item.kind] as File)}
+                              title="Enviar e salvar no sistema"
+                            >
+                              {busy ? "Enviando..." : "Salvar"}
+                            </button>
+
+                            <button
+                              className="inline-flex w-full sm:w-auto items-center justify-center rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                              disabled={disableAll || mismatch || busy}
+                              onClick={() => cancelPending(item.kind)}
+                              title="Descartar esta seleção"
+                            >
+                              Refazer
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -956,14 +967,16 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             </div>
 
             {!concluida && (
-              <div className="mt-3 text-xs text-gray-500">Dica: o ideal é salvar todas as fotos obrigatórias antes de concluir.</div>
+              <div className="mt-3 text-xs text-gray-500">
+                Dica: o ideal é salvar todas as fotos obrigatórias antes de concluir.
+              </div>
             )}
           </div>
 
           {/* Ações */}
-          <div className="mt-4 flex flex-wrap gap-3">
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
             <button
-              className={`rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+              className={`w-full sm:w-auto rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
                 dirty ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-300"
               }`}
               onClick={() => salvarRascunho()}
@@ -973,7 +986,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
               {saving ? "Salvando..." : dirty ? "Salvar" : "Sem alterações"}
             </button>
 
-            <a className="rounded-xl border px-5 py-2 text-sm hover:bg-gray-50" href="/auditorias">
+            <a
+              className="w-full sm:w-auto inline-flex items-center justify-center rounded-xl border px-5 py-2 text-sm hover:bg-gray-50"
+              href="/auditorias"
+            >
               Voltar
             </a>
           </div>
@@ -983,10 +999,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         {previewKind && pendingUrl[previewKind] && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="w-full max-w-lg rounded-2xl bg-white p-4">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">{FOTO_ITEMS.find((x) => x.kind === previewKind)?.label}</div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 truncate text-sm font-semibold">
+                  {FOTO_ITEMS.find((x) => x.kind === previewKind)?.label}
+                </div>
                 <button
-                  className="rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
+                  className="shrink-0 rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
                   onClick={() => setPreviewKind(null)}
                 >
                   Fechar
