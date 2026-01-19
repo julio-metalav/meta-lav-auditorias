@@ -69,7 +69,7 @@ function withCompatAliases(aud: any, condominio: any) {
     cashback_percent,
 
     // ✅ alias de compatibilidade (se algo antigo estiver lendo esse nome)
-    cashback_percent: cashback_percent,
+    cashback_percent,
 
     agua_valor_m3,
     energia_valor_kwh,
