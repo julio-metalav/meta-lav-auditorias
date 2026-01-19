@@ -54,28 +54,34 @@ function withCompatAliases(aud: any, condominio: any) {
   // ✅ sempre do cadastro
   const cashback_percent = condominio?.cashback_percent ?? null;
 
+...
+
+cashback_percent,
+
+
   const agua_valor_m3 = condominio?.agua_valor_m3 ?? null;
   const energia_valor_kwh = condominio?.energia_valor_kwh ?? null;
   const gas_valor_m3 = condominio?.gas_valor_m3 ?? null;
 
-  return {
-    ...aud,
-    pagamento_metodo,
-    base_agua,
-    base_energia,
-    base_gas,
+ return {
+  ...aud,
+  pagamento_metodo,
+  base_agua,
+  base_energia,
+  base_gas,
 
-    // ✅ nome que o front (interno) usa hoje
-    cashback_percent,
+  // ✅ uma única vez
+  const cashback_percent = condominio?.cashback_percent ?? null;
 
-    // ✅ alias de compatibilidade (se algo antigo estiver lendo esse nome)
-    cashback_percent,
+...
 
-    agua_valor_m3,
-    energia_valor_kwh,
-    gas_valor_m3,
-  };
-}
+cashback_percent,
+
+
+  agua_valor_m3,
+  energia_valor_kwh,
+  gas_valor_m3,
+};
 
 const AUDITORIA_SELECT = [
   "id",
