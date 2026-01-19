@@ -215,17 +215,18 @@ export async function PATCH(
       delete patch.status;
 
     const { data: saved, error: saveErr } = await sb
-      .from("auditorias")
-      .update(patch)
-      .eq("id", id)
-      .select(AUDITORIA_SELECT)
-      .maybeSingle();
+  .from("auditorias")
+  .update(patch)
+  .eq("id", id)
+  .select(AUDITORIA_SELECT)
+  .maybeSingle();
 
-    if (saveErr)
-      return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
+if (saveErr) return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
+if (!saved) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
-    const { condominio } = await fetchCondominioBasics(saved!.condominio_id);
-    const payload = withCompatAliases(saved, condominio);
+const { condominio } = await fetchCondominioBasics((saved as any).condominio_id);
+const payload = withCompatAliases(saved as any, condominio);
+
 
     return NextResponse.json({ ok: true, data: payload, auditoria: payload });
   } catch (e: any) {
