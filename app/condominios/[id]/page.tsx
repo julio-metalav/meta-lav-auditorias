@@ -35,6 +35,11 @@ type Condo = {
   stone_taxa_fixa_por_transacao?: number | null; // R$ por transação
   custo_sistema_pagamento_mensal?: number | null; // R$/mês
 
+  // ✅ tarifas (já existem no banco)
+  agua_valor_m3?: number | null; // R$/m³ (lavadora)
+  energia_valor_kwh?: number | null; // R$/kWh (rateio lav+sec)
+  gas_valor_m3?: number | null; // R$/m³ (secadora quando usa gás)
+
   banco?: string | null;
   agencia?: string | null;
   conta?: string | null;
@@ -152,6 +157,11 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
     valor_ciclo_secadora: "",
     cashback_percent: "",
 
+    // ✅ tarifas
+    agua_valor_m3: "",
+    energia_valor_kwh: "",
+    gas_valor_m3: "",
+
     // ✅ NOVO: custos / pagamentos
     custo_quimicos_por_ciclo_lavadora: "",
     stone_taxa_percent: "",
@@ -236,6 +246,11 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
         cashback_percent:
           condo.cashback_percent === null || condo.cashback_percent === undefined ? "" : String(condo.cashback_percent),
 
+        // ✅ tarifas
+        agua_valor_m3: condo.agua_valor_m3 === null || condo.agua_valor_m3 === undefined ? "" : formatMoneyPtBr(Number(condo.agua_valor_m3)),
+        energia_valor_kwh: condo.energia_valor_kwh === null || condo.energia_valor_kwh === undefined ? "" : formatMoneyPtBr(Number(condo.energia_valor_kwh)),
+        gas_valor_m3: condo.gas_valor_m3 === null || condo.gas_valor_m3 === undefined ? "" : formatMoneyPtBr(Number(condo.gas_valor_m3)),
+
         // ✅ NOVO: custos / pagamentos
         custo_quimicos_por_ciclo_lavadora:
           condo.custo_quimicos_por_ciclo_lavadora === null || condo.custo_quimicos_por_ciclo_lavadora === undefined
@@ -305,9 +320,14 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
       // ✅ código: só dígitos e 4
       payload.codigo_condominio = codigo ? onlyDigits(codigo).slice(0, 4) : null;
 
-      // money
+      // money (valores de ciclo)
       payload.valor_ciclo_lavadora = payload.valor_ciclo_lavadora ? parseMoneyPtBr(String(payload.valor_ciclo_lavadora)) : null;
       payload.valor_ciclo_secadora = payload.valor_ciclo_secadora ? parseMoneyPtBr(String(payload.valor_ciclo_secadora)) : null;
+
+      // ✅ tarifas (money)
+      payload.agua_valor_m3 = payload.agua_valor_m3 ? parseMoneyPtBr(String(payload.agua_valor_m3)) : null;
+      payload.energia_valor_kwh = payload.energia_valor_kwh ? parseMoneyPtBr(String(payload.energia_valor_kwh)) : null;
+      payload.gas_valor_m3 = payload.gas_valor_m3 ? parseMoneyPtBr(String(payload.gas_valor_m3)) : null;
 
       // ✅ NOVO: money (químicos / stone fixa / sistema mensal)
       payload.custo_quimicos_por_ciclo_lavadora = payload.custo_quimicos_por_ciclo_lavadora
@@ -571,6 +591,51 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
               <div className="small">Cashback %</div>
               <input className="input" value={form.cashback_percent} onChange={(e) => setForm({ ...form, cashback_percent: e.target.value })} />
             </div>
+          </div>
+
+          <div style={{ height: 10 }} />
+          <div className="small">Tarifas (insumos)</div>
+          <div className="grid2">
+            <div>
+              <div className="small">Água (R$ por m³)</div>
+              <input
+                className="input"
+                placeholder="ex: 8,50"
+                value={form.agua_valor_m3 ?? ""}
+                onChange={(e) => setForm({ ...form, agua_valor_m3: e.target.value })}
+              />
+              <div className="small" style={{ opacity: 0.75, marginTop: 4 }}>
+                Aplica somente na <b>lavadora</b>.
+              </div>
+            </div>
+
+            <div>
+              <div className="small">Energia (R$ por kWh)</div>
+              <input
+                className="input"
+                placeholder="ex: 1,05"
+                value={form.energia_valor_kwh ?? ""}
+                onChange={(e) => setForm({ ...form, energia_valor_kwh: e.target.value })}
+              />
+              <div className="small" style={{ opacity: 0.75, marginTop: 4 }}>
+                Rateada entre <b>lavadora</b> e <b>secadora</b>.
+              </div>
+            </div>
+
+            <div>
+              <div className="small">Gás (R$ por m³)</div>
+              <input
+                className="input"
+                placeholder="ex: 6,20"
+                value={form.gas_valor_m3 ?? ""}
+                onChange={(e) => setForm({ ...form, gas_valor_m3: e.target.value })}
+              />
+              <div className="small" style={{ opacity: 0.75, marginTop: 4 }}>
+                Aplica somente na <b>secadora</b> (quando usar gás).
+              </div>
+            </div>
+
+            <div />
           </div>
 
           <div style={{ height: 10 }} />
