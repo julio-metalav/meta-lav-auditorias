@@ -17,6 +17,9 @@ type Condo = {
   tipo_pagamento?: "direto" | "boleto" | null;
 
   // ✅ NOVO
+  codigo_condominio?: string | null;
+
+  // ✅ NOVO
   contrato_assinado_em?: string | null;
   contrato_prazo_meses?: number | null;
   contrato_vencimento_em?: string | null;
@@ -112,6 +115,9 @@ export default function CondominiosPage() {
   const [showForm, setShowForm] = useState(false);
 
   const [form, setForm] = useState<any>({
+    // ✅ NOVO
+    codigo_condominio: "",
+
     nome: "",
     cidade: "",
     uf: "",
@@ -140,7 +146,7 @@ export default function CondominiosPage() {
     favorecido_cnpj: "",
     tipo_pagamento: "direto",
 
-    // ✅ NOVO: contrato + emails
+    // ✅ contrato + emails
     contrato_assinado_em: "",
     contrato_prazo_meses: "",
     contrato_vencimento_em: "",
@@ -227,6 +233,8 @@ export default function CondominiosPage() {
 
   function resetForm() {
     setForm({
+      codigo_condominio: "",
+
       nome: "",
       cidade: "",
       uf: "",
@@ -253,7 +261,6 @@ export default function CondominiosPage() {
       favorecido_cnpj: "",
       tipo_pagamento: "direto",
 
-      // ✅ NOVO: contrato + emails
       contrato_assinado_em: "",
       contrato_prazo_meses: "",
       contrato_vencimento_em: "",
@@ -273,13 +280,18 @@ export default function CondominiosPage() {
     ]);
   }
 
+  const codigoOk = useMemo(() => /^\d{4}$/.test(String(form.codigo_condominio ?? "").trim()), [form.codigo_condominio]);
+
   async function criar() {
     setErr(null);
     setOk(null);
     setSaving(true);
 
     try {
-      if (!form.nome || !form.cidade || !form.uf) throw new Error("Preencha Nome, Cidade e UF.");
+      const codigo = String(form.codigo_condominio ?? "").trim();
+      if (!/^\d{4}$/.test(codigo)) throw new Error("Preencha o Código do condomínio com 4 dígitos (ex: 0001).");
+      if (!form.nome) throw new Error("Preencha o Nome.");
+
       if (!maquinas.length) throw new Error("Cadastre pelo menos 1 tipo de máquina.");
 
       for (let idx = 0; idx < maquinas.length; idx++) {
@@ -300,6 +312,9 @@ export default function CondominiosPage() {
 
       const payload: any = { ...form };
 
+      // ✅ garante só dígitos no código (4)
+      payload.codigo_condominio = onlyDigits(String(payload.codigo_condominio ?? "")).slice(0, 4);
+
       // ⚠️ não manda valor_ciclo_lavadora/secadora (evita duplicidade)
       payload.valor_ciclo_lavadora = null;
       payload.valor_ciclo_secadora = null;
@@ -313,17 +328,16 @@ export default function CondominiosPage() {
       payload.tipo_pagamento =
         String(payload.tipo_pagamento ?? "direto").toLowerCase() === "boleto" ? "boleto" : "direto";
 
-      // ✅ NOVO: normaliza emails
+      // ✅ emails
       payload.email_sindico = String(payload.email_sindico ?? "").trim().toLowerCase();
       payload.email_financeiro = String(payload.email_financeiro ?? "").trim().toLowerCase();
 
-      // ✅ NOVO: contrato (datas como YYYY-MM-DD)
+      // ✅ contrato (datas como YYYY-MM-DD)
       payload.contrato_assinado_em = String(payload.contrato_assinado_em ?? "").trim() || null;
 
       const prazoTxt = String(payload.contrato_prazo_meses ?? "").trim();
       payload.contrato_prazo_meses = prazoTxt ? Number(onlyDigits(prazoTxt)) : null;
 
-      // Se não preencher vencimento, deixa vazio → API calcula quando tiver assinatura + prazo
       payload.contrato_vencimento_em = String(payload.contrato_vencimento_em ?? "").trim() || null;
 
       const r = await fetch("/api/condominios", {
@@ -356,7 +370,7 @@ export default function CondominiosPage() {
 
       if (!maquinasPayload.length) throw new Error("Informe quantidade de máquinas (mínimo 1).");
 
-      // ✅ padrão: envia {itens:[...]} (backend também aceita array)
+      // ✅ envia {itens:[...]} (backend também aceita array)
       const r2 = await fetch(`/api/condominios/${condominioId}/maquinas`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -411,6 +425,25 @@ export default function CondominiosPage() {
 
           <div className="grid2">
             <div>
+              <div className="small">Código do condomínio</div>
+              <input
+                className="input"
+                inputMode="numeric"
+                placeholder="0001"
+                value={form.codigo_condominio}
+                onChange={(e) => {
+                  const v = onlyDigits(e.target.value).slice(0, 4);
+                  setForm({ ...form, codigo_condominio: v });
+                }}
+              />
+              {String(form.codigo_condominio || "").length > 0 && !codigoOk && (
+                <div className="small" style={{ color: "#b42318", marginTop: 4 }}>
+                  Use 4 dígitos (ex: 0001).
+                </div>
+              )}
+            </div>
+
+            <div>
               <div className="small">Nome</div>
               <input className="input" value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} />
             </div>
@@ -442,7 +475,7 @@ export default function CondominiosPage() {
 
           <div style={{ height: 10 }} />
 
-          {/* ✅ NOVO: CONTRATO */}
+          {/* ✅ CONTRATO */}
           <div className="small">Contrato</div>
           <div className="grid2">
             <div>
@@ -456,8 +489,9 @@ export default function CondominiosPage() {
                   setForm((f: any) => ({
                     ...f,
                     contrato_assinado_em: v,
-                    // se o vencimento estiver vazio, sugere
-                    contrato_vencimento_em: String(f.contrato_vencimento_em || "").trim() ? f.contrato_vencimento_em : calcVencimento(v, String(f.contrato_prazo_meses || "")),
+                    contrato_vencimento_em: String(f.contrato_vencimento_em || "").trim()
+                      ? f.contrato_vencimento_em
+                      : calcVencimento(v, String(f.contrato_prazo_meses || "")),
                   }));
                 }}
               />
@@ -475,7 +509,9 @@ export default function CondominiosPage() {
                   setForm((f: any) => ({
                     ...f,
                     contrato_prazo_meses: v,
-                    contrato_vencimento_em: String(f.contrato_vencimento_em || "").trim() ? f.contrato_vencimento_em : calcVencimento(String(f.contrato_assinado_em || ""), v),
+                    contrato_vencimento_em: String(f.contrato_vencimento_em || "").trim()
+                      ? f.contrato_vencimento_em
+                      : calcVencimento(String(f.contrato_assinado_em || ""), v),
                   }));
                 }}
               />
@@ -504,7 +540,7 @@ export default function CondominiosPage() {
 
           <div style={{ height: 10 }} />
 
-          {/* ✅ NOVO: EMAILS */}
+          {/* ✅ EMAILS */}
           <div className="small">E-mails</div>
           <div className="grid2">
             <div>
@@ -779,7 +815,7 @@ export default function CondominiosPage() {
               Cancelar
             </button>
 
-            <button className="btn primary" onClick={criar} disabled={saving || !form.nome || !form.cidade || !form.uf}>
+            <button className="btn primary" onClick={criar} disabled={saving || !codigoOk || !form.nome}>
               {saving ? "Salvando..." : "Salvar (Condomínio + Máquinas)"}
             </button>
           </div>
@@ -792,11 +828,12 @@ export default function CondominiosPage() {
         {condos.map((c) => (
           <div key={c.id} className="card">
             <div style={{ fontWeight: 700 }}>
+              {c.codigo_condominio ? `[${c.codigo_condominio}] ` : ""}
               {c.nome}
               {badgePagamento(c.tipo_pagamento)}
             </div>
             <div className="small">
-              {c.cidade}/{c.uf}
+              {(c.cidade || "—")}/{(c.uf || "—")}
             </div>
             <div className="small">{[c.rua, c.numero, c.bairro].filter(Boolean).join(", ")}</div>
 

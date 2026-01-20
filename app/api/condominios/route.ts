@@ -29,6 +29,10 @@ function dateOrNull(v: any): string | null {
   return s;
 }
 
+function onlyDigits(v: any) {
+  return String(v ?? "").replace(/[^\d]/g, "");
+}
+
 function calcVencimento(assinadoEm: string | null, prazoMeses: number | null): string | null {
   if (!assinadoEm || !prazoMeses) return null;
   const d = new Date(assinadoEm + "T00:00:00");
@@ -45,7 +49,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from("auditor_condominios")
       .select(
-        "condominio_id, condominios(id,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro)"
+        "condominio_id, condominios(id,codigo_condominio,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro)"
       )
       .eq("auditor_id", user.id)
       .order("condominios(nome)");
@@ -58,7 +62,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from("condominios")
     .select(
-      "id,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro,created_at"
+      "id,codigo_condominio,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro,created_at"
     )
     .order("nome", { ascending: true });
 
@@ -75,15 +79,36 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
 
+  // ✅ codigo_condominio: obrigatório e 4 dígitos
+  const codigo_condominio = onlyDigits(body?.codigo_condominio).slice(0, 4);
+  if (!/^\d{4}$/.test(codigo_condominio)) {
+    return NextResponse.json({ error: "Código do condomínio inválido. Use 4 dígitos (ex: 0001)." }, { status: 400 });
+  }
+
+  // ✅ evita duplicar (mesmo antes do UNIQUE no banco)
+  const { data: existing, error: exErr } = await supabase
+    .from("condominios")
+    .select("id")
+    .eq("codigo_condominio", codigo_condominio)
+    .maybeSingle();
+
+  if (exErr) return NextResponse.json({ error: exErr.message }, { status: 400 });
+  if (existing?.id) return NextResponse.json({ error: `Código ${codigo_condominio} já existe.` }, { status: 400 });
+
   const contrato_assinado_em = dateOrNull(body?.contrato_assinado_em);
   const contrato_prazo_meses = intOrNull(body?.contrato_prazo_meses);
   const contrato_vencimento_em =
     dateOrNull(body?.contrato_vencimento_em) ?? calcVencimento(contrato_assinado_em, contrato_prazo_meses);
 
   const payload = {
+    codigo_condominio,
+
     nome: String(body?.nome || "").trim(),
+
+    // cidade/uf continuam existindo, mas não travam mais
     cidade: String(body?.cidade || "").trim(),
     uf: String(body?.uf || "").trim(),
+
     cep: String(body?.cep || "").trim(),
     rua: String(body?.rua || "").trim(),
     numero: String(body?.numero || "").trim(),
@@ -103,28 +128,27 @@ export async function POST(req: Request) {
     tipo_conta: String(body?.tipo_conta || "").trim(),
     pix: String(body?.pix || "").trim(),
 
-    // ✅ NOVO: emails no cadastro
+    // ✅ emails
     email_sindico: String(body?.email_sindico || "").trim(),
     email_financeiro: String(body?.email_financeiro || "").trim(),
 
-    // ✅ NOVO: contrato
+    // ✅ contrato
     contrato_assinado_em,
     contrato_prazo_meses,
     contrato_vencimento_em,
 
     maquinas: body?.maquinas ?? null,
 
-    // ✅ NOVO: tarifas (repasse por consumo)
+    // ✅ tarifas
     agua_valor_m3: numOrNull(body?.agua_valor_m3),
     energia_valor_kwh: numOrNull(body?.energia_valor_kwh),
     gas_valor_m3: numOrNull(body?.gas_valor_m3),
 
-    // ✅ regra existente: default direto
     tipo_pagamento: normalizeTipoPagamento(body?.tipo_pagamento),
   };
 
-  if (!payload.nome || !payload.cidade || !payload.uf) {
-    return NextResponse.json({ error: "Campos obrigatórios: nome, cidade, uf" }, { status: 400 });
+  if (!payload.nome) {
+    return NextResponse.json({ error: "Campo obrigatório: nome" }, { status: 400 });
   }
 
   const { data, error } = await supabase.from("condominios").insert(payload).select("id").single();
