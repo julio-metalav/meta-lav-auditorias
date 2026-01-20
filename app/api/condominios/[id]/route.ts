@@ -14,6 +14,17 @@ function str(v: any) {
   return String(v ?? "").trim();
 }
 
+function onlyDigits(v: any) {
+  return String(v ?? "").replace(/[^\d]/g, "");
+}
+
+function codigoOrNull(v: any): string | null {
+  const s = onlyDigits(v).slice(0, 4);
+  if (!s) return null;
+  if (!/^\d{4}$/.test(s)) return null;
+  return s;
+}
+
 function intOrNull(v: any): number | null {
   if (v === null || v === undefined || v === "") return null;
   const n = Number(v);
@@ -64,7 +75,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const { data, error } = await supabase
     .from("condominios")
     .select(
-      "id,nome,cidade,uf,cep,rua,numero,bairro,complemento," +
+      "id,codigo_condominio,nome,cidade,uf,cep,rua,numero,bairro,complemento," +
         "sindico_nome,sindico_telefone,zelador_nome,zelador_telefone," +
         "valor_ciclo_lavadora,valor_ciclo_secadora,cashback_percent," +
         "banco,favorecido_cnpj,agencia,conta,tipo_conta,pix,maquinas," +
@@ -92,6 +103,18 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const body = await req.json().catch(() => ({}));
 
   const patch: any = {};
+
+  // ✅ NOVO: codigo_condominio (opcional; valida 4 dígitos)
+  if (body?.codigo_condominio !== undefined) {
+    const c = String(body?.codigo_condominio ?? "").trim();
+    if (c === "") {
+      patch.codigo_condominio = null; // permite limpar enquanto não está NOT NULL
+    } else {
+      const parsed = codigoOrNull(c);
+      if (!parsed) return NextResponse.json({ error: "codigo_condominio inválido. Use 4 dígitos (ex: 0001)." }, { status: 400 });
+      patch.codigo_condominio = parsed;
+    }
+  }
 
   // PATCH: só atualiza o que vier
   if (body?.nome !== undefined) patch.nome = str(body?.nome);
@@ -121,16 +144,16 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   if (body?.maquinas !== undefined) patch.maquinas = body?.maquinas ?? null;
 
-  // ✅ NOVO: tarifas
+  // tarifas
   if (body?.agua_valor_m3 !== undefined) patch.agua_valor_m3 = numOrNull(body?.agua_valor_m3);
   if (body?.energia_valor_kwh !== undefined) patch.energia_valor_kwh = numOrNull(body?.energia_valor_kwh);
   if (body?.gas_valor_m3 !== undefined) patch.gas_valor_m3 = numOrNull(body?.gas_valor_m3);
 
-  // ✅ NOVO: emails
+  // emails
   if (body?.email_sindico !== undefined) patch.email_sindico = str(body?.email_sindico);
   if (body?.email_financeiro !== undefined) patch.email_financeiro = str(body?.email_financeiro);
 
-  // ✅ NOVO: contrato
+  // contrato
   const mexeuAssinatura = body?.contrato_assinado_em !== undefined;
   const mexeuPrazo = body?.contrato_prazo_meses !== undefined;
   const mandouVenc = body?.contrato_vencimento_em !== undefined;
@@ -139,14 +162,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (mexeuPrazo) patch.contrato_prazo_meses = intOrNull(body?.contrato_prazo_meses);
   if (mandouVenc) patch.contrato_vencimento_em = dateOrNull(body?.contrato_vencimento_em);
 
-  // Se mexeu assinatura/prazo e não mandou vencimento, recalcula
   if (!mandouVenc && (mexeuAssinatura || mexeuPrazo)) {
     const ass = (patch.contrato_assinado_em ?? null) as string | null;
     const pr = (patch.contrato_prazo_meses ?? null) as number | null;
     patch.contrato_vencimento_em = calcVencimento(ass, pr);
   }
 
-  // NOVO: tipo_pagamento
+  // tipo_pagamento
   if (body?.tipo_pagamento !== undefined) {
     patch.tipo_pagamento = normalizeTipoPagamento(body?.tipo_pagamento);
   }
@@ -171,7 +193,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     .update(patch)
     .eq("id", id)
     .select(
-      "id,tipo_pagamento,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro,agua_valor_m3,energia_valor_kwh,gas_valor_m3"
+      "id,codigo_condominio,tipo_pagamento,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro,agua_valor_m3,energia_valor_kwh,gas_valor_m3"
     )
     .single();
 
