@@ -74,6 +74,14 @@ function currentMonthInputValue() {
   return currentMonthISO().slice(0, 7); // "YYYY-MM"
 }
 
+function statusPillClass(st: any) {
+  const done = isConcluida(st);
+  return [
+    "inline-flex rounded-full border px-2 py-1 text-xs whitespace-nowrap",
+    done ? "border-green-200 bg-green-50 text-green-800" : "border-gray-200 bg-gray-50 text-gray-700",
+  ].join(" ");
+}
+
 export default function AuditoriasPage() {
   const router = useRouter();
 
@@ -160,8 +168,10 @@ export default function AuditoriasPage() {
 
   return (
     <AppShell title="Auditorias">
-      <div className="mx-auto max-w-6xl p-6">
-        <div className="mb-4 flex items-start justify-between gap-3">
+      {/* ✅ padding menor no mobile, igual no desktop */}
+      <div className="mx-auto max-w-6xl px-4 py-4 sm:p-6">
+        {/* Header */}
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold">Auditorias</h1>
             <div className="mt-1 text-sm text-gray-600">
@@ -172,12 +182,13 @@ export default function AuditoriasPage() {
             </div>
           </div>
 
-          <div className="flex gap-2">
+          {/* ✅ No mobile, botões viram coluna e ocupam largura */}
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-start sm:justify-end">
             {/* ✅ Botões e seletor APENAS para interno/gestor (e só depois do /api/me carregar) */}
             {meLoaded && isStaff && (
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
                 <button
-                  className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50"
+                  className="w-full rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50 sm:w-auto"
                   onClick={() => router.push("/auditorias/nova")}
                   disabled={loading}
                   title="Criar nova auditoria"
@@ -185,11 +196,11 @@ export default function AuditoriasPage() {
                   + Nova auditoria
                 </button>
 
-                <div className="flex items-center gap-2 rounded-xl border bg-white px-3 py-2">
-                  <span className="text-xs text-gray-600">Relatório:</span>
+                <div className="flex w-full items-center gap-2 rounded-xl border bg-white px-3 py-2 sm:w-auto">
+                  <span className="text-xs text-gray-600 whitespace-nowrap">Relatório:</span>
                   <input
                     type="month"
-                    className="text-sm outline-none"
+                    className="w-full text-sm outline-none sm:w-auto"
                     value={mesRelatorio}
                     onChange={(e) => setMesRelatorio(e.target.value)}
                     title="Escolha o mês do relatório"
@@ -197,7 +208,7 @@ export default function AuditoriasPage() {
                 </div>
 
                 <a
-                  className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+                  className="w-full rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 sm:w-auto"
                   href={`/api/relatorios/financeiro/export/xlsx?mes_ref=${encodeURIComponent(mesRefRelatorio)}`}
                   target="_blank"
                   rel="noreferrer"
@@ -207,7 +218,7 @@ export default function AuditoriasPage() {
                 </a>
 
                 <a
-                  className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+                  className="w-full rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 sm:w-auto"
                   href={`/api/relatorios/financeiro/export/pdf?mes_ref=${encodeURIComponent(mesRefRelatorio)}`}
                   target="_blank"
                   rel="noreferrer"
@@ -219,7 +230,7 @@ export default function AuditoriasPage() {
             )}
 
             <button
-              className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+              className="w-full rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 sm:w-auto"
               onClick={carregar}
               disabled={loading}
               title="Recarregar"
@@ -231,16 +242,17 @@ export default function AuditoriasPage() {
 
         {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
 
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        {/* Filtros */}
+        <div className="mb-4 grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center">
           <input
-            className="w-full max-w-md rounded-xl border px-4 py-2 text-sm"
+            className="w-full rounded-xl border px-4 py-2 text-sm sm:max-w-md"
             placeholder="Buscar condomínio, auditor, ID..."
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
 
           <select
-            className="rounded-xl border px-4 py-2 text-sm"
+            className="w-full rounded-xl border px-4 py-2 text-sm sm:w-auto"
             value={filtro}
             onChange={(e) => setFiltro(e.target.value as Filtro)}
           >
@@ -250,7 +262,58 @@ export default function AuditoriasPage() {
           </select>
         </div>
 
-        <div className="overflow-hidden rounded-2xl border bg-white shadow-sm">
+        {/* ✅ MOBILE: Cards */}
+        <div className="space-y-3 sm:hidden">
+          {auditoriasFiltradas.length === 0 && (
+            <div className="rounded-2xl border bg-white p-4 text-sm text-gray-600">Nenhuma auditoria no filtro.</div>
+          )}
+
+          {auditoriasFiltradas.map((a) => {
+            const c = a.condominios;
+            const condoLabel = c ? `${c.nome} - ${c.cidade}/${c.uf}` : a.condominio_id;
+            const month = pickMonth(a) || "—";
+            const st = a.status ?? "—";
+            const auditorEmail = a.profiles?.email ?? "—";
+
+            return (
+              <div key={a.id} className="rounded-2xl border bg-white p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-semibold truncate">{condoLabel}</div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      ID: <span className="font-mono">{a.id}</span>
+                    </div>
+                  </div>
+                  <span className={statusPillClass(st)}>{st}</span>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <div className="rounded-xl border bg-gray-50 p-2">
+                    <div className="text-[11px] text-gray-500">Mês</div>
+                    <div className="font-medium">{month}</div>
+                  </div>
+                  <div className="rounded-xl border bg-gray-50 p-2">
+                    <div className="text-[11px] text-gray-500">Auditor</div>
+                    <div className="font-medium truncate">{auditorEmail}</div>
+                  </div>
+                </div>
+
+                <div className="mt-3">
+                  <Link
+                    href={hrefAbrir(a)}
+                    className="inline-flex w-full items-center justify-center rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-gray-50"
+                    title="Abrir auditoria"
+                  >
+                    Abrir
+                  </Link>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ✅ DESKTOP (sm+): Tabela atual (mantida) */}
+        <div className="hidden overflow-hidden rounded-2xl border bg-white shadow-sm sm:block">
           <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
             <div className="col-span-5">Condomínio</div>
             <div className="col-span-2">Mês</div>
@@ -283,16 +346,7 @@ export default function AuditoriasPage() {
                   <div className="col-span-2 text-gray-800">{month}</div>
 
                   <div className="col-span-2">
-                    <span
-                      className={[
-                        "inline-flex rounded-full border px-2 py-1 text-xs",
-                        isConcluida(st)
-                          ? "border-green-200 bg-green-50 text-green-800"
-                          : "border-gray-200 bg-gray-50 text-gray-700",
-                      ].join(" ")}
-                    >
-                      {st}
-                    </span>
+                    <span className={statusPillClass(st)}>{st}</span>
                   </div>
 
                   <div className="col-span-2 truncate text-gray-700">{auditorEmail}</div>
@@ -300,7 +354,7 @@ export default function AuditoriasPage() {
                   <div className="col-span-1 flex justify-end">
                     <Link
                       href={hrefAbrir(a)}
-                      className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
+                      className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 whitespace-nowrap"
                       title="Abrir auditoria"
                     >
                       Abrir

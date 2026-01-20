@@ -49,7 +49,9 @@ export async function GET() {
     const { data, error } = await supabase
       .from("auditor_condominios")
       .select(
-        "condominio_id, condominios(id,codigo_condominio,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro)"
+        "condominio_id, condominios(id,codigo_condominio,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro," +
+          // ✅ NOVO: custos/stone/sistema
+          "custo_quimicos_por_ciclo_lavadora,stone_taxa_percent,stone_taxa_fixa_por_transacao,custo_sistema_pagamento_mensal)"
       )
       .eq("auditor_id", user.id)
       .order("condominios(nome)");
@@ -62,7 +64,10 @@ export async function GET() {
   const { data, error } = await supabase
     .from("condominios")
     .select(
-      "id,codigo_condominio,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro,created_at"
+      "id,codigo_condominio,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3," +
+        // ✅ NOVO: custos/stone/sistema
+        "custo_quimicos_por_ciclo_lavadora,stone_taxa_percent,stone_taxa_fixa_por_transacao,custo_sistema_pagamento_mensal," +
+        "contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro,created_at"
     )
     .order("nome", { ascending: true });
 
@@ -121,6 +126,13 @@ export async function POST(req: Request) {
     valor_ciclo_lavadora: body?.valor_ciclo_lavadora ?? null,
     valor_ciclo_secadora: body?.valor_ciclo_secadora ?? null,
     cashback_percent: body?.cashback_percent ?? null,
+
+    // ✅ NOVO: custos/stone/sistema (se vier vazio -> null; banco tem default 0)
+    custo_quimicos_por_ciclo_lavadora: numOrNull(body?.custo_quimicos_por_ciclo_lavadora),
+    stone_taxa_percent: numOrNull(body?.stone_taxa_percent),
+    stone_taxa_fixa_por_transacao: numOrNull(body?.stone_taxa_fixa_por_transacao),
+    custo_sistema_pagamento_mensal: numOrNull(body?.custo_sistema_pagamento_mensal),
+
     banco: String(body?.banco || "").trim(),
     favorecido_cnpj: String(body?.favorecido_cnpj || "").trim(),
     agencia: String(body?.agencia || "").trim(),

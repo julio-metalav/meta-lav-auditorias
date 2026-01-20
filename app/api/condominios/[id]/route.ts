@@ -78,6 +78,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       "id,codigo_condominio,nome,cidade,uf,cep,rua,numero,bairro,complemento," +
         "sindico_nome,sindico_telefone,zelador_nome,zelador_telefone," +
         "valor_ciclo_lavadora,valor_ciclo_secadora,cashback_percent," +
+        // ✅ NOVO: custos/stone/sistema (campos adicionados no banco)
+        "custo_quimicos_por_ciclo_lavadora,stone_taxa_percent,stone_taxa_fixa_por_transacao,custo_sistema_pagamento_mensal," +
         "banco,favorecido_cnpj,agencia,conta,tipo_conta,pix,maquinas," +
         "agua_valor_m3,energia_valor_kwh,gas_valor_m3," +
         "contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro," +
@@ -134,6 +136,19 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (body?.valor_ciclo_lavadora !== undefined) patch.valor_ciclo_lavadora = body?.valor_ciclo_lavadora ?? null;
   if (body?.valor_ciclo_secadora !== undefined) patch.valor_ciclo_secadora = body?.valor_ciclo_secadora ?? null;
   if (body?.cashback_percent !== undefined) patch.cashback_percent = body?.cashback_percent ?? null;
+
+  // ✅ NOVO: químicos/stone/sistema (sem quebrar: aceita null; banco tem default 0)
+  if (body?.custo_quimicos_por_ciclo_lavadora !== undefined)
+    patch.custo_quimicos_por_ciclo_lavadora = numOrNull(body?.custo_quimicos_por_ciclo_lavadora);
+
+  if (body?.stone_taxa_percent !== undefined)
+    patch.stone_taxa_percent = numOrNull(body?.stone_taxa_percent);
+
+  if (body?.stone_taxa_fixa_por_transacao !== undefined)
+    patch.stone_taxa_fixa_por_transacao = numOrNull(body?.stone_taxa_fixa_por_transacao);
+
+  if (body?.custo_sistema_pagamento_mensal !== undefined)
+    patch.custo_sistema_pagamento_mensal = numOrNull(body?.custo_sistema_pagamento_mensal);
 
   if (body?.banco !== undefined) patch.banco = str(body?.banco);
   if (body?.favorecido_cnpj !== undefined) patch.favorecido_cnpj = str(body?.favorecido_cnpj);
@@ -193,7 +208,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     .update(patch)
     .eq("id", id)
     .select(
-      "id,codigo_condominio,tipo_pagamento,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro,agua_valor_m3,energia_valor_kwh,gas_valor_m3"
+      "id,codigo_condominio,tipo_pagamento,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro,agua_valor_m3,energia_valor_kwh,gas_valor_m3," +
+        // ✅ NOVO: devolve também os campos novos
+        "custo_quimicos_por_ciclo_lavadora,stone_taxa_percent,stone_taxa_fixa_por_transacao,custo_sistema_pagamento_mensal"
     )
     .single();
 

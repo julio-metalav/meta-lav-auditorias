@@ -29,6 +29,12 @@ type Condo = {
   valor_ciclo_secadora?: number | null;
   cashback_percent?: number | null;
 
+  // ✅ NOVO: custos operacionais / pagamentos
+  custo_quimicos_por_ciclo_lavadora?: number | null; // R$/ciclo (lavadora)
+  stone_taxa_percent?: number | null; // % (ex: 2.36)
+  stone_taxa_fixa_por_transacao?: number | null; // R$ por transação
+  custo_sistema_pagamento_mensal?: number | null; // R$/mês
+
   banco?: string | null;
   agencia?: string | null;
   conta?: string | null;
@@ -60,6 +66,14 @@ function parseMoneyPtBr(input: string): number {
 function formatMoneyPtBr(n: number): string {
   const fixed = Number(n ?? 0).toFixed(2);
   return fixed.replace(".", ",");
+}
+
+function parsePercentPtBr(input: string): number {
+  const s = String(input ?? "").trim();
+  if (!s) return 0;
+  const normalized = s.replace(/\s/g, "").replace("%", "").replace(",", ".");
+  const n = Number(normalized);
+  return Number.isFinite(n) ? n : 0;
 }
 
 function normalizeTipoPagamento(v: any): TipoPagamento {
@@ -137,6 +151,13 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
     valor_ciclo_lavadora: "",
     valor_ciclo_secadora: "",
     cashback_percent: "",
+
+    // ✅ NOVO: custos / pagamentos
+    custo_quimicos_por_ciclo_lavadora: "",
+    stone_taxa_percent: "",
+    stone_taxa_fixa_por_transacao: "",
+    custo_sistema_pagamento_mensal: "",
+
     banco: "",
     agencia: "",
     conta: "",
@@ -215,6 +236,27 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
         cashback_percent:
           condo.cashback_percent === null || condo.cashback_percent === undefined ? "" : String(condo.cashback_percent),
 
+        // ✅ NOVO: custos / pagamentos
+        custo_quimicos_por_ciclo_lavadora:
+          condo.custo_quimicos_por_ciclo_lavadora === null || condo.custo_quimicos_por_ciclo_lavadora === undefined
+            ? ""
+            : formatMoneyPtBr(Number(condo.custo_quimicos_por_ciclo_lavadora)),
+
+        stone_taxa_percent:
+          condo.stone_taxa_percent === null || condo.stone_taxa_percent === undefined
+            ? ""
+            : String(condo.stone_taxa_percent).replace(".", ","),
+
+        stone_taxa_fixa_por_transacao:
+          condo.stone_taxa_fixa_por_transacao === null || condo.stone_taxa_fixa_por_transacao === undefined
+            ? ""
+            : formatMoneyPtBr(Number(condo.stone_taxa_fixa_por_transacao)),
+
+        custo_sistema_pagamento_mensal:
+          condo.custo_sistema_pagamento_mensal === null || condo.custo_sistema_pagamento_mensal === undefined
+            ? ""
+            : formatMoneyPtBr(Number(condo.custo_sistema_pagamento_mensal)),
+
         banco: condo.banco ?? "",
         agencia: condo.agencia ?? "",
         conta: condo.conta ?? "",
@@ -267,8 +309,24 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
       payload.valor_ciclo_lavadora = payload.valor_ciclo_lavadora ? parseMoneyPtBr(String(payload.valor_ciclo_lavadora)) : null;
       payload.valor_ciclo_secadora = payload.valor_ciclo_secadora ? parseMoneyPtBr(String(payload.valor_ciclo_secadora)) : null;
 
+      // ✅ NOVO: money (químicos / stone fixa / sistema mensal)
+      payload.custo_quimicos_por_ciclo_lavadora = payload.custo_quimicos_por_ciclo_lavadora
+        ? parseMoneyPtBr(String(payload.custo_quimicos_por_ciclo_lavadora))
+        : null;
+
+      payload.stone_taxa_fixa_por_transacao = payload.stone_taxa_fixa_por_transacao
+        ? parseMoneyPtBr(String(payload.stone_taxa_fixa_por_transacao))
+        : null;
+
+      payload.custo_sistema_pagamento_mensal = payload.custo_sistema_pagamento_mensal
+        ? parseMoneyPtBr(String(payload.custo_sistema_pagamento_mensal))
+        : null;
+
       // percent
       payload.cashback_percent = payload.cashback_percent ? Number(payload.cashback_percent) : null;
+
+      // ✅ NOVO: percent stone (aceita "2,36")
+      payload.stone_taxa_percent = payload.stone_taxa_percent ? parsePercentPtBr(String(payload.stone_taxa_percent)) : null;
 
       // contrato + emails
       payload.contrato_assinado_em = cleanDateYYYYMMDD(payload.contrato_assinado_em) || null;
@@ -512,6 +570,62 @@ export default function CondominioEditPage({ params }: { params: { id: string } 
             <div>
               <div className="small">Cashback %</div>
               <input className="input" value={form.cashback_percent} onChange={(e) => setForm({ ...form, cashback_percent: e.target.value })} />
+            </div>
+          </div>
+
+          <div style={{ height: 10 }} />
+          <div className="small">Custos (insumos e pagamentos)</div>
+          <div className="grid2">
+            <div>
+              <div className="small">Químicos lavadora (R$ por ciclo)</div>
+              <input
+                className="input"
+                placeholder="ex: 2,00"
+                value={form.custo_quimicos_por_ciclo_lavadora}
+                onChange={(e) => setForm({ ...form, custo_quimicos_por_ciclo_lavadora: e.target.value })}
+              />
+              <div className="small" style={{ opacity: 0.75, marginTop: 4 }}>
+                Aplica somente na <b>lavadora</b>.
+              </div>
+            </div>
+
+            <div>
+              <div className="small">Sistema de pagamento (R$ por mês)</div>
+              <input
+                className="input"
+                placeholder="ex: 89,90"
+                value={form.custo_sistema_pagamento_mensal}
+                onChange={(e) => setForm({ ...form, custo_sistema_pagamento_mensal: e.target.value })}
+              />
+              <div className="small" style={{ opacity: 0.75, marginTop: 4 }}>
+                Custo fixo mensal do condomínio.
+              </div>
+            </div>
+
+            <div>
+              <div className="small">Stone taxa % (sobre transação)</div>
+              <input
+                className="input"
+                placeholder="ex: 2,36"
+                value={form.stone_taxa_percent}
+                onChange={(e) => setForm({ ...form, stone_taxa_percent: e.target.value })}
+              />
+              <div className="small" style={{ opacity: 0.75, marginTop: 4 }}>
+                Ex.: 2,36 = 2,36%
+              </div>
+            </div>
+
+            <div>
+              <div className="small">Stone taxa fixa (R$ por transação)</div>
+              <input
+                className="input"
+                placeholder="ex: 0,25"
+                value={form.stone_taxa_fixa_por_transacao}
+                onChange={(e) => setForm({ ...form, stone_taxa_fixa_por_transacao: e.target.value })}
+              />
+              <div className="small" style={{ opacity: 0.75, marginTop: 4 }}>
+                Se não tiver, pode deixar 0.
+              </div>
             </div>
           </div>
 
