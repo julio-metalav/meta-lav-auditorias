@@ -37,14 +37,13 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
     if (!aud.auditor_id || aud.auditor_id !== user.id) {
       return bad("Sem permissão para acessar esta auditoria", 403);
     }
-    } else {
+  } else {
     // interno/gestor: mantém regra por hierarquia (RLS = Row Level Security, se existir no projeto)
     if (!role) return bad("Sem permissão", 403);
-    if (!roleGte(role, "interno")) {
+    if (!roleGte(role as Role, "interno")) {
       return bad("Sem permissão", 403);
     }
   }
-
 
   // 2) Lista provetas
   const { data, error } = await admin
