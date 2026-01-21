@@ -4,7 +4,6 @@ import { NextResponse } from "next/server";
 import { getUserAndRole, supabaseAdmin } from "@/lib/auth";
 
 type Role = "auditor" | "interno" | "gestor";
-type Status = "aberta" | "em_andamento" | "em_conferencia" | "final";
 
 function roleGte(role: Role | null, min: Role) {
   const rank: Record<Role, number> = { auditor: 1, interno: 2, gestor: 3 };
@@ -96,12 +95,15 @@ export async function GET(
     }
 
     const sb = supabaseAdmin();
-    const id = params.id.replace(/[\\"]/g, "");
+
+    // 🔴 SANITIZAÇÃO DEFINITIVA DO ID
+    const rawId = decodeURIComponent(params.id);
+    const id = rawId.replace(/^"+|"+$/g, "").trim();
 
     const { data, error } = await sb
       .from("auditorias")
       .select(AUDITORIA_SELECT)
-      .eq("id", id as unknown as string)
+      .filter("id", "eq", id)
       .maybeSingle();
 
     if (error) {
@@ -147,15 +149,18 @@ export async function PATCH(
     }
 
     const sb = supabaseAdmin();
-    const id = params.id.replace(/"/g, "");
+
+    // 🔴 MESMA SANITIZAÇÃO DO GET
+    const rawId = decodeURIComponent(params.id);
+    const id = rawId.replace(/^"+|"+$/g, "").trim();
+
     const body = await req.json().catch(() => ({}));
 
     const { data, error } = await sb
       .from("auditorias")
-.select(AUDITORIA_SELECT)
-.filter("id", "eq", id)
-.maybeSingle();
-
+      .select(AUDITORIA_SELECT)
+      .filter("id", "eq", id)
+      .maybeSingle();
 
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
@@ -223,7 +228,6 @@ export async function PATCH(
     }
 
     const savedAud = saved as any;
-
     const { condominio } = await fetchCondominioBasics(savedAud.condominio_id);
     const payload = withCompatAliases(savedAud, condominio);
 
