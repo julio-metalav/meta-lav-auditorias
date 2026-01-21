@@ -321,36 +321,74 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       setProvetas([]);
     }
   }
+async function descobrirLavadoras(condominio_id: string) {
+  // tenta inferir N de lavadoras com tolerância a formatos diferentes do endpoint
+  let lavs = 1;
 
-  async function descobrirLavadoras(condominio_id: string) {
-    // endpoint existente no seu projeto
-    let lavs = 1;
-    try {
-      const maquinasResp = await fetch(`/api/condominios/${condominio_id}/maquinas`, { method: "GET" });
-      if (!maquinasResp.ok) return 1;
+  try {
+    const maquinasResp = await fetch(`/api/condominios/${condominio_id}/maquinas`, { method: "GET" });
+    if (!maquinasResp.ok) return 1;
 
-      const maquinasJson: any = await maquinasResp.json().catch(() => null);
-      const items: any[] = Array.isArray(maquinasJson)
-        ? maquinasJson
-        : Array.isArray(maquinasJson?.items)
-        ? maquinasJson.items
-        : Array.isArray(maquinasJson?.data)
-        ? maquinasJson.data
-        : [];
+    const maquinasJson: any = await maquinasResp.json().catch(() => null);
 
-      const totalLavadoras = items.reduce((acc, it) => {
-        const categoria = it?.categoria ?? it?.tipo ?? it?.nome ?? it?.tag ?? "";
-        const qtd = it?.quantidade ?? it?.qtd ?? it?.qty ?? 0;
-        if (isLavadoraLike(categoria)) return acc + safeNum(qtd || 0);
-        return acc;
-      }, 0);
+    const items: any[] = Array.isArray(maquinasJson)
+      ? maquinasJson
+      : Array.isArray(maquinasJson?.items)
+      ? maquinasJson.items
+      : Array.isArray(maquinasJson?.data)
+      ? maquinasJson.data
+      : [];
 
-      if (totalLavadoras > 0) lavs = totalLavadoras;
-    } catch {
-      // ignore
+    if (!items.length) return 1;
+
+    const isLavadora = (it: any) => {
+      const cat = String(it?.categoria ?? it?.tipo ?? it?.nome ?? it?.tag ?? it?.machine_tag ?? "").toLowerCase();
+      // pega "lavadora/lav", mas evita confundir com "secadora"
+      const lav = cat.includes("lav");
+      const sec = cat.includes("sec");
+      return lav && !sec;
+    };
+
+    const lavItems = items.filter(isLavadora);
+    if (!lavItems.length) return 1;
+
+    // Caso A) endpoint já traz quantidade
+    const sumQtd = lavItems.reduce((acc, it) => {
+      const q = Number(it?.quantidade ?? it?.qtd ?? it?.qty ?? it?.qtd_maquinas ?? it?.count ?? NaN);
+      return acc + (Number.isFinite(q) && q > 0 ? q : 0);
+    }, 0);
+
+    if (sumQtd > 0) {
+      lavs = sumQtd;
+      return lavs;
     }
-    return lavs > 0 ? lavs : 1;
+
+    // Caso B) endpoint retorna 1 linha por máquina (id por máquina)
+    // (ou tem algo como maquina_idx/idx)
+    const hasIdx = lavItems.some((it) => {
+      const v = Number(it?.maquina_idx ?? it?.idx ?? it?.sequencia ?? NaN);
+      return Number.isFinite(v) && v >= 1;
+    });
+
+    if (hasIdx) {
+      // pega o maior idx
+      const maxIdx = lavItems.reduce((m, it) => {
+        const v = Number(it?.maquina_idx ?? it?.idx ?? it?.sequencia ?? 0);
+        return v > m ? v : m;
+      }, 0);
+      lavs = maxIdx > 0 ? maxIdx : lavItems.length;
+      return lavs;
+    }
+
+    // Caso C) não tem qtd nem idx: conta linhas lavadora
+    lavs = lavItems.length || 1;
+    return lavs;
+  } catch {
+    return 1;
   }
+}
+
+  
 
   async function carregarTudo() {
     setLoading(true);
