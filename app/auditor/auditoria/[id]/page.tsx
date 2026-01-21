@@ -122,23 +122,53 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   }, [aud?.status]);
 
   async function carregarLavadoras(condominioId: string) {
-    const r = await fetch(`/api/condominios/${condominioId}/maquinas`, { cache: "no-store" });
-    if (!r.ok) return setLavadoras([]);
+  try {
+    const r = await fetch(`/api/condominios/${condominioId}/maquinas`, {
+      cache: "no-store",
+    });
+
+    if (!r.ok) {
+      setLavadoras([]);
+      return;
+    }
 
     const j = await safeReadJson(r);
-    const list: any[] = Array.isArray(j) ? j : j?.data ?? [];
+    const list: any[] = Array.isArray(j)
+      ? j
+      : Array.isArray(j?.data)
+      ? j.data
+      : [];
 
-    const lavs: Lavadora[] = list
-      .filter((m) => String(m.maquina_tag).toLowerCase() === "lavadora")
-      .map((m, idx) => ({
-        maquina_id: m.id,
-        maquina_idx: m.maquina_idx ?? idx + 1,
-        maquina_tag: "lavadora",
-      }))
-      .sort((a, b) => a.maquina_idx - b.maquina_idx);
+    const lavs: Lavadora[] = [];
+
+    list.forEach((m: any, idx: number) => {
+      const raw =
+        m?.maquina_tag ??
+        m?.categoria ??
+        m?.tipo ??
+        m?.descricao ??
+        "";
+
+      const tag = String(raw).toLowerCase();
+
+      if (
+        tag.includes("lav") ||
+        tag.includes("washer")
+      ) {
+        lavs.push({
+          maquina_id: m.id,
+          maquina_idx: m.maquina_idx ?? idx + 1,
+          maquina_tag: "lavadora",
+        });
+      }
+    });
 
     setLavadoras(lavs);
+  } catch {
+    setLavadoras([]);
   }
+}
+
 
   async function carregarProvetas(auditoriaId: string) {
     const r = await fetch(`/api/auditorias/${auditoriaId}/provetas`, { cache: "no-store" });
