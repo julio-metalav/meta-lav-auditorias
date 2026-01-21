@@ -44,11 +44,9 @@ async function fetchCondominioBasics(condominioId: string) {
 }
 
 function withCompatAliases(aud: any, condominio: any) {
-  const pagamento_metodo = normalizeMetodo(condominio?.tipo_pagamento);
-
   return {
     ...aud,
-    pagamento_metodo,
+    pagamento_metodo: normalizeMetodo(condominio?.tipo_pagamento),
     base_agua: aud?.agua_leitura_base ?? null,
     base_energia: aud?.energia_leitura_base ?? null,
     base_gas: aud?.gas_leitura_base ?? null,
@@ -86,7 +84,7 @@ const AUDITORIA_SELECT = [
 ].join(",");
 
 /* =========================
-   GET
+   GET /api/auditorias/[id]
 ========================= */
 export async function GET(
   _req: Request,
@@ -99,7 +97,9 @@ export async function GET(
     }
 
     const sb = supabaseAdmin();
-    const id = params.id.replace(/^"+|"+$/g, "");
+
+    // 🔥 CORREÇÃO DEFINITIVA
+    const id = params.id.replace(/"/g, "");
 
     const { data: aud, error } = await sb
       .from("auditorias")
@@ -137,7 +137,7 @@ export async function GET(
 }
 
 /* =========================
-   PATCH
+   PATCH /api/auditorias/[id]
 ========================= */
 export async function PATCH(
   req: Request,
@@ -150,7 +150,10 @@ export async function PATCH(
     }
 
     const sb = supabaseAdmin();
-    const id = params.id.replace(/^"+|"+$/g, "");
+
+    // 🔥 CORREÇÃO DEFINITIVA
+    const id = params.id.replace(/"/g, "");
+
     const body = await req.json().catch(() => ({}));
 
     const { data: aud, error } = await sb
@@ -224,8 +227,8 @@ export async function PATCH(
       return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
     }
 
-    const { condominio } = await fetchCondominioBasics((saved as any).condominio_id);
-    const payload = withCompatAliases(saved as any, condominio);
+    const { condominio } = await fetchCondominioBasics(saved.condominio_id);
+    const payload = withCompatAliases(saved, condominio);
 
     return NextResponse.json({ ok: true, data: payload, auditoria: payload });
   } catch (e: any) {
