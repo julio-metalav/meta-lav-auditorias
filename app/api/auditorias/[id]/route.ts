@@ -50,7 +50,6 @@ function withCompatAliases(aud: any, condominio: any) {
   const base_energia = aud?.energia_leitura_base ?? null;
   const base_gas = aud?.gas_leitura_base ?? null;
 
-  // ✅ SEMPRE vem do cadastro do condomínio
   const cashback_percent = condominio?.cashback_percent ?? null;
 
   const agua_valor_m3 = condominio?.agua_valor_m3 ?? null;
@@ -84,11 +83,8 @@ const AUDITORIA_SELECT = [
   "gas_leitura_base",
   "leitura_base_origem",
   "observacoes",
-
-  // fechamento
   "comprovante_fechamento_url",
   "fechamento_obs",
-
   "foto_agua_url",
   "foto_energia_url",
   "foto_gas_url",
@@ -99,17 +95,23 @@ const AUDITORIA_SELECT = [
   "updated_at",
 ].join(",");
 
+/* =========================
+   GET /api/auditorias/[id]
+   ========================= */
 export async function GET(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
     const { user, role } = await getUserAndRole();
-    if (!user)
+    if (!user) {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    }
 
     const sb = supabaseAdmin();
-    const id = params.id;
+
+    const rawId = params.id;
+    const id = rawId.replace(/^"+|"+$/g, ""); // 🔑 NORMALIZA UUID
 
     const { data: aud, error: audErr } = await sb
       .from("auditorias")
@@ -117,26 +119,26 @@ export async function GET(
       .eq("id", id)
       .maybeSingle();
 
-    if (audErr)
+    if (audErr) {
       return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
-    if (!aud)
+    }
+    if (!aud) {
       return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
-
-    const audRow: any = aud;
+    }
 
     const isManager = roleGte(role, "interno");
-    const isOwnerAuditor = audRow.auditor_id === user.id;
-    const isUnassigned = !audRow.auditor_id;
+    const isOwnerAuditor = aud.auditor_id === user.id;
+    const isUnassigned = !aud.auditor_id;
 
     if (!isManager && !(isOwnerAuditor || isUnassigned)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
     const { condominio, error: condoErr } = await fetchCondominioBasics(
-      audRow.condominio_id
+      aud.condominio_id
     );
 
-    const payload = withCompatAliases(audRow, condoErr ? null : condominio);
+    const payload = withCompatAliases(aud, condoErr ? null : condominio);
 
     return NextResponse.json({ ok: true, data: payload, auditoria: payload });
   } catch (e: any) {
@@ -147,17 +149,24 @@ export async function GET(
   }
 }
 
+/* =========================
+   PATCH /api/auditorias/[id]
+   ========================= */
 export async function PATCH(
   req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
     const { user, role } = await getUserAndRole();
-    if (!user)
+    if (!user) {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    }
 
     const sb = supabaseAdmin();
-    const id = params.id;
+
+    const rawId = params.id;
+    const id = rawId.replace(/^"+|"+$/g, ""); // 🔑 NORMALIZA UUID
+
     const body = await req.json().catch(() => ({}));
 
     const { data: aud, error: audErr } = await sb
@@ -166,16 +175,16 @@ export async function PATCH(
       .eq("id", id)
       .maybeSingle();
 
-    if (audErr)
+    if (audErr) {
       return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
-    if (!aud)
+    }
+    if (!aud) {
       return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
-
-    const audRow: any = aud;
+    }
 
     const isManager = roleGte(role, "interno");
-    const isOwnerAuditor = audRow.auditor_id === user.id;
-    const isUnassigned = !audRow.auditor_id;
+    const isOwnerAuditor = aud.auditor_id === user.id;
+    const isUnassigned = !aud.auditor_id;
 
     if (!isManager && !(isOwnerAuditor || isUnassigned)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
@@ -211,22 +220,26 @@ export async function PATCH(
     }
 
     if (!isManager && patch.status === "final") delete patch.status;
-    if (!isManager && patch.status && patch.status !== "em_conferencia")
+    if (!isManager && patch.status && patch.status !== "em_conferencia") {
       delete patch.status;
+    }
 
     const { data: saved, error: saveErr } = await sb
-  .from("auditorias")
-  .update(patch)
-  .eq("id", id)
-  .select(AUDITORIA_SELECT)
-  .maybeSingle();
+      .from("auditorias")
+      .update(patch)
+      .eq("id", id)
+      .select(AUDITORIA_SELECT)
+      .maybeSingle();
 
-if (saveErr) return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
-if (!saved) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+    if (saveErr) {
+      return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
+    }
+    if (!saved) {
+      return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+    }
 
-const { condominio } = await fetchCondominioBasics((saved as any).condominio_id);
-const payload = withCompatAliases(saved as any, condominio);
-
+    const { condominio } = await fetchCondominioBasics(saved.condominio_id);
+    const payload = withCompatAliases(saved, condominio);
 
     return NextResponse.json({ ok: true, data: payload, auditoria: payload });
   } catch (e: any) {
