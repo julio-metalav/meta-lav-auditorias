@@ -46,26 +46,16 @@ async function fetchCondominioBasics(condominioId: string) {
 function withCompatAliases(aud: any, condominio: any) {
   const pagamento_metodo = normalizeMetodo(condominio?.tipo_pagamento);
 
-  const base_agua = aud?.agua_leitura_base ?? null;
-  const base_energia = aud?.energia_leitura_base ?? null;
-  const base_gas = aud?.gas_leitura_base ?? null;
-
-  const cashback_percent = condominio?.cashback_percent ?? null;
-
-  const agua_valor_m3 = condominio?.agua_valor_m3 ?? null;
-  const energia_valor_kwh = condominio?.energia_valor_kwh ?? null;
-  const gas_valor_m3 = condominio?.gas_valor_m3 ?? null;
-
   return {
     ...aud,
     pagamento_metodo,
-    base_agua,
-    base_energia,
-    base_gas,
-    cashback_percent,
-    agua_valor_m3,
-    energia_valor_kwh,
-    gas_valor_m3,
+    base_agua: aud?.agua_leitura_base ?? null,
+    base_energia: aud?.energia_leitura_base ?? null,
+    base_gas: aud?.gas_leitura_base ?? null,
+    cashback_percent: condominio?.cashback_percent ?? null,
+    agua_valor_m3: condominio?.agua_valor_m3 ?? null,
+    energia_valor_kwh: condominio?.energia_valor_kwh ?? null,
+    gas_valor_m3: condominio?.gas_valor_m3 ?? null,
   };
 }
 
@@ -96,8 +86,8 @@ const AUDITORIA_SELECT = [
 ].join(",");
 
 /* =========================
-   GET /api/auditorias/[id]
-   ========================= */
+   GET
+========================= */
 export async function GET(
   _req: Request,
   { params }: { params: { id: string } }
@@ -109,36 +99,33 @@ export async function GET(
     }
 
     const sb = supabaseAdmin();
+    const id = params.id.replace(/^"+|"+$/g, "");
 
-    const rawId = params.id;
-    const id = rawId.replace(/^"+|"+$/g, ""); // 🔑 NORMALIZA UUID
-
-    const { data: aud, error: audErr } = await sb
+    const { data: aud, error } = await sb
       .from("auditorias")
       .select(AUDITORIA_SELECT)
       .eq("id", id)
       .maybeSingle();
 
-    if (audErr) {
-      return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
     }
     if (!aud) {
       return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
     }
 
+    const audRow = aud as any;
+
     const isManager = roleGte(role, "interno");
-    const isOwnerAuditor = aud.auditor_id === user.id;
-    const isUnassigned = !aud.auditor_id;
+    const isOwnerAuditor = audRow.auditor_id === user.id;
+    const isUnassigned = !audRow.auditor_id;
 
     if (!isManager && !(isOwnerAuditor || isUnassigned)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
-    const { condominio, error: condoErr } = await fetchCondominioBasics(
-      aud.condominio_id
-    );
-
-    const payload = withCompatAliases(aud, condoErr ? null : condominio);
+    const { condominio } = await fetchCondominioBasics(audRow.condominio_id);
+    const payload = withCompatAliases(audRow, condominio);
 
     return NextResponse.json({ ok: true, data: payload, auditoria: payload });
   } catch (e: any) {
@@ -150,8 +137,8 @@ export async function GET(
 }
 
 /* =========================
-   PATCH /api/auditorias/[id]
-   ========================= */
+   PATCH
+========================= */
 export async function PATCH(
   req: Request,
   { params }: { params: { id: string } }
@@ -163,28 +150,27 @@ export async function PATCH(
     }
 
     const sb = supabaseAdmin();
-
-    const rawId = params.id;
-    const id = rawId.replace(/^"+|"+$/g, ""); // 🔑 NORMALIZA UUID
-
+    const id = params.id.replace(/^"+|"+$/g, "");
     const body = await req.json().catch(() => ({}));
 
-    const { data: aud, error: audErr } = await sb
+    const { data: aud, error } = await sb
       .from("auditorias")
       .select("id, condominio_id, auditor_id, status")
       .eq("id", id)
       .maybeSingle();
 
-    if (audErr) {
-      return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
     }
     if (!aud) {
       return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
     }
 
+    const audRow = aud as any;
+
     const isManager = roleGte(role, "interno");
-    const isOwnerAuditor = aud.auditor_id === user.id;
-    const isUnassigned = !aud.auditor_id;
+    const isOwnerAuditor = audRow.auditor_id === user.id;
+    const isUnassigned = !audRow.auditor_id;
 
     if (!isManager && !(isOwnerAuditor || isUnassigned)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
@@ -238,8 +224,8 @@ export async function PATCH(
       return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
     }
 
-    const { condominio } = await fetchCondominioBasics(saved.condominio_id);
-    const payload = withCompatAliases(saved, condominio);
+    const { condominio } = await fetchCondominioBasics((saved as any).condominio_id);
+    const payload = withCompatAliases(saved as any, condominio);
 
     return NextResponse.json({ ok: true, data: payload, auditoria: payload });
   } catch (e: any) {
