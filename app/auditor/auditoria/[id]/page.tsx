@@ -62,6 +62,8 @@ const FOTO_ITEMS: FotoItem[] = [
   { kind: "conector_bala", label: "Conector bala conectado", required: true },
 ];
 
+type ProvetaRow = { maquina_tag: string; maquina_idx: number; foto_url: string };
+
 async function safeReadJson(res: Response): Promise<any> {
   const ct = res.headers.get("content-type") ?? "";
   const text = await res.text().catch(() => "");
@@ -131,6 +133,18 @@ function rolePill(r: Role) {
   return { label: "—", cls: "bg-gray-100 text-gray-700 border-gray-200" };
 }
 
+function safeText(v: any) {
+  return String(v ?? "");
+}
+function safeNum(v: any) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+function isLavadoraLike(x: any) {
+  const s = safeText(x).toLowerCase();
+  return s.includes("lav") || s.includes("washer") || s.includes("lavadora");
+}
+
 export default function AuditorAuditoriaPage({ params }: { params: { id: string } }) {
   const id = params.id;
 
@@ -164,6 +178,23 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   const [pendingFile, setPendingFile] = useState<Partial<Record<FotoKind, File>>>({});
   const [pendingUrl, setPendingUrl] = useState<Partial<Record<FotoKind, string>>>({});
   const [previewKind, setPreviewKind] = useState<FotoKind | null>(null);
+
+  // ✅ Provetas por lavadora (novo) - sem mexer no checklist/Concluir por enquanto
+  const [numLavadoras, setNumLavadoras] = useState<number>(1);
+  const [provetas, setProvetas] = useState<ProvetaRow[]>([]);
+  const provetasMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of provetas) {
+      const key = `${safeText(p.maquina_tag || "lavadora")}:${safeNum(p.maquina_idx)}`;
+      m.set(key, safeText(p.foto_url));
+    }
+    return m;
+  }, [provetas]);
+
+  const [provetaUploading, setProvetaUploading] = useState<Record<number, boolean>>({});
+  const [provetaPendingFile, setProvetaPendingFile] = useState<Record<number, File | undefined>>({});
+  const [provetaPendingUrl, setProvetaPendingUrl] = useState<Record<number, string | undefined>>({});
+  const [previewProvetaIdx, setPreviewProvetaIdx] = useState<number | null>(null);
 
   // Histórico (somente leitura para interno/gestor)
   const [histLoading, setHistLoading] = useState(false);
@@ -265,6 +296,57 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
+  async function carregarNumLavadoras(condoId: string) {
+    // defensivo: se endpoint não existir ou formato variar, não quebra
+    try {
+      const resp = await fetch(`/api/condominios/${condoId}/maquinas`, { method: "GET", cache: "no-store" });
+      if (!resp.ok) return 1;
+
+      const json = await safeReadJson(resp);
+      const items: any[] = Array.isArray(json)
+        ? json
+        : Array.isArray(json?.items)
+        ? json.items
+        : Array.isArray(json?.data)
+        ? json.data
+        : [];
+
+      const totalLavadoras = items.reduce((acc, it) => {
+        const categoria = it?.categoria ?? it?.tipo ?? it?.nome ?? it?.tag ?? "";
+        const qtd = it?.quantidade ?? it?.qtd ?? it?.qty ?? 0;
+        if (isLavadoraLike(categoria)) return acc + safeNum(qtd || 0);
+        return acc;
+      }, 0);
+
+      return totalLavadoras > 0 ? totalLavadoras : 1;
+    } catch {
+      return 1;
+    }
+  }
+
+  async function carregarProvetas(auditoriaId: string) {
+    // defensivo: se endpoint não existir ainda, não quebra a tela
+    try {
+      const resp = await fetch(`/api/auditorias/${auditoriaId}/provetas`, { method: "GET", cache: "no-store" });
+      if (!resp.ok) {
+        setProvetas([]);
+        return;
+      }
+      const json = await safeReadJson(resp);
+      const list: any[] = Array.isArray(json) ? json : Array.isArray(json?.items) ? json.items : [];
+      const parsed: ProvetaRow[] = list
+        .map((x) => ({
+          maquina_tag: safeText(x?.maquina_tag || "lavadora"),
+          maquina_idx: safeNum(x?.maquina_idx || 0),
+          foto_url: safeText(x?.foto_url || ""),
+        }))
+        .filter((x) => x.maquina_idx >= 1 && !!x.foto_url);
+      setProvetas(parsed);
+    } catch {
+      setProvetas([]);
+    }
+  }
+
   async function carregarTudo() {
     setLoading(true);
     setErr(null);
@@ -302,6 +384,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
       setAud(found);
       applyFromAud(found);
+
+      // ✅ Provetas por lavadora: carrega qty + provetas (sem quebrar nada se falhar)
+      const lavs = await carregarNumLavadoras(found.condominio_id);
+      setNumLavadoras(lavs > 0 ? lavs : 1);
+      await carregarProvetas(id);
 
       carregarHistorico();
     } catch (e: any) {
@@ -458,6 +545,89 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
+  // ✅ Provetas (por lavadora)
+  function onPickProveta(idx: number, file?: File | null) {
+    if (!file) return;
+
+    const url = URL.createObjectURL(file);
+    const old = provetaPendingUrl[idx];
+    if (old) URL.revokeObjectURL(old);
+
+    setProvetaPendingFile((p) => ({ ...p, [idx]: file }));
+    setProvetaPendingUrl((p) => ({ ...p, [idx]: url }));
+    setPreviewProvetaIdx(null);
+  }
+
+  function cancelPendingProveta(idx: number) {
+    const url = provetaPendingUrl[idx];
+    if (url) URL.revokeObjectURL(url);
+
+    setProvetaPendingFile((p) => {
+      const copy = { ...p };
+      delete copy[idx];
+      return copy;
+    });
+    setProvetaPendingUrl((p) => {
+      const copy = { ...p };
+      delete copy[idx];
+      return copy;
+    });
+
+    if (previewProvetaIdx === idx) setPreviewProvetaIdx(null);
+  }
+
+  async function uploadProveta(idx: number, file: File) {
+    setErr(null);
+    setOk(null);
+
+    if (!aud) return setErr("Auditoria não carregada.");
+    if (mismatch) return setErr(`Sem permissão: logado como "${meLabel}", mas auditoria é de "${assignedAuditorLabel}".`);
+    if (concluida) return setErr("Esta auditoria já está em conferência/final. Não dá pra alterar fotos em campo.");
+    if (!file.type.startsWith("image/")) return setErr("Envie apenas imagem.");
+
+    setProvetaUploading((p) => ({ ...p, [idx]: true }));
+    try {
+      const fd = new FormData();
+      fd.append("kind", "proveta");
+      fd.append("maquina_tag", "lavadora");
+      fd.append("maquina_idx", String(idx));
+      fd.append("file", file);
+
+      const res = await fetch(`/api/auditorias/${id}/fotos`, { method: "POST", body: fd });
+      const json = await safeReadJson(res);
+
+      if (!res.ok) {
+        const raw = json?._raw ? ` (${String(json._raw).slice(0, 140)})` : "";
+        throw new Error((json?.error ?? "Erro ao enviar proveta") + raw);
+      }
+
+      // limpa pendência
+      const pUrl = provetaPendingUrl[idx];
+      if (pUrl) URL.revokeObjectURL(pUrl);
+
+      setProvetaPendingFile((p) => {
+        const copy = { ...p };
+        delete copy[idx];
+        return copy;
+      });
+      setProvetaPendingUrl((p) => {
+        const copy = { ...p };
+        delete copy[idx];
+        return copy;
+      });
+      if (previewProvetaIdx === idx) setPreviewProvetaIdx(null);
+
+      // recarrega lista provetas (não quebra se endpoint falhar)
+      await carregarProvetas(id);
+
+      setOkMsg("Proveta salva ✅");
+    } catch (e: any) {
+      setErr(e?.message ?? "Falha ao enviar proveta");
+    } finally {
+      setProvetaUploading((p) => ({ ...p, [idx]: false }));
+    }
+  }
+
   const checklistUi = useMemo(() => {
     const a = aud;
 
@@ -505,6 +675,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     return () => {
       if (okTimer.current) window.clearTimeout(okTimer.current);
       Object.values(pendingUrl).forEach((u) => u && URL.revokeObjectURL(u));
+      Object.values(provetaPendingUrl).forEach((u) => u && URL.revokeObjectURL(u));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -515,16 +686,17 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
   const disableAll = loading || saving || !aud || concluida;
   const busyAnyUpload = useMemo(() => Object.values(uploading).some(Boolean), [uploading]);
+  const busyAnyProveta = useMemo(() => Object.values(provetaUploading).some(Boolean), [provetaUploading]);
 
   const concludeDisabledReason = useMemo(() => {
     if (!aud) return "Auditoria não carregada";
     if (loading || saving) return "Aguarde…";
-    if (busyAnyUpload) return "Ainda tem upload em andamento";
+    if (busyAnyUpload || busyAnyProveta) return "Ainda tem upload em andamento";
     if (mismatch) return "Você não é o auditor atribuído";
     if (concluida) return "Já está em conferência/final";
     if (!checklistUi.prontoCampo) return `Faltando: ${checklistUi.faltas.join(", ")}`;
     return "";
-  }, [aud, loading, saving, busyAnyUpload, mismatch, concluida, checklistUi]);
+  }, [aud, loading, saving, busyAnyUpload, busyAnyProveta, mismatch, concluida, checklistUi]);
 
   async function concluirEmCampo() {
     const okConfirm = window.confirm(
@@ -533,6 +705,18 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     if (!okConfirm) return;
     await salvarRascunho({ status: "em_conferencia" });
   }
+
+  const provetasStatus = useMemo(() => {
+    const n = numLavadoras > 0 ? numLavadoras : 1;
+    let done = 0;
+    for (let i = 1; i <= n; i++) {
+      const key = `lavadora:${i}`;
+      if (provetasMap.get(key)) done++;
+    }
+    const total = n;
+    const okAll = total > 0 && done === total;
+    return { done, total, okAll };
+  }, [numLavadoras, provetasMap]);
 
   return (
     <AppShell title="Auditoria (Campo)">
@@ -973,6 +1157,158 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             )}
           </div>
 
+          {/* ✅ NOVO: Provetas por lavadora (não bloqueia Concluir ainda) */}
+          <div className="mt-6 rounded-2xl border p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="mb-1 text-sm font-semibold text-gray-700">Provetas (por lavadora)</div>
+                <div className="text-xs text-gray-500">
+                  1 foto por lavadora. Celular: “Tirar” abre a câmera. PC: use “Galeria” para enviar JPG/JPEG.
+                </div>
+              </div>
+              <div className="text-xs font-semibold">
+                Status:{" "}
+                {provetasStatus.okAll ? (
+                  <span className="text-green-700">OK</span>
+                ) : (
+                  <span className="text-red-700">
+                    Pendente ({provetasStatus.done}/{provetasStatus.total})
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-3 space-y-3">
+              {Array.from({ length: numLavadoras > 0 ? numLavadoras : 1 }).map((_, i) => {
+                const idx = i + 1;
+                const key = `lavadora:${idx}`;
+                const savedUrl = provetasMap.get(key) || "";
+                const saved = !!savedUrl;
+
+                const pend = !!provetaPendingFile[idx];
+                const pUrl = provetaPendingUrl[idx];
+                const busy = !!provetaUploading[idx];
+
+                const badge = saved ? (
+                  <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">Feita</span>
+                ) : pend ? (
+                  <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">
+                    Pendente
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">Obrigatória</span>
+                );
+
+                return (
+                  <div key={key} className="flex flex-col gap-3 rounded-xl border p-3 md:flex-row md:items-start md:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-sm font-semibold text-gray-800">Proveta Lavadora {idx}</div>
+                        {badge}
+                      </div>
+
+                      {saved && savedUrl && (
+                        <div className="mt-1">
+                          <a className="text-xs underline text-gray-600" href={savedUrl} target="_blank" rel="noreferrer">
+                            Abrir arquivo
+                          </a>
+                        </div>
+                      )}
+
+                      {pend && (
+                        <div className="mt-1 text-xs text-gray-600">
+                          Selecionada: <b>{provetaPendingFile[idx]?.name ?? "proveta.jpg"}</b>
+                          {pUrl && (
+                            <>
+                              {" "}
+                              -{" "}
+                              <button className="underline" onClick={() => setPreviewProvetaIdx(idx)}>
+                                Ver
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="w-full md:w-auto">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+                        <label
+                          className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
+                            disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
+                          }`}
+                          title={disableAll ? "Somente leitura" : mismatch ? "Sem permissão" : "Abrir câmera"}
+                        >
+                          Tirar
+                          <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            className="hidden"
+                            onChange={(e) => {
+                              onPickProveta(idx, e.target.files?.[0]);
+                              e.currentTarget.value = "";
+                            }}
+                            disabled={disableAll || mismatch || busy}
+                          />
+                        </label>
+
+                        <label
+                          className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl border px-4 py-2 text-sm ${
+                            disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
+                          }`}
+                          title="Selecionar arquivo (JPG/JPEG/PNG)"
+                        >
+                          Galeria
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              onPickProveta(idx, e.target.files?.[0]);
+                              e.currentTarget.value = "";
+                            }}
+                            disabled={disableAll || mismatch || busy}
+                          />
+                        </label>
+
+                        {pend && (
+                          <>
+                            <button
+                              className={`inline-flex w-full sm:w-auto items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                                disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
+                              }`}
+                              disabled={disableAll || mismatch || busy}
+                              onClick={() => uploadProveta(idx, provetaPendingFile[idx] as File)}
+                              title="Enviar e salvar no sistema"
+                            >
+                              {busy ? "Enviando..." : "Salvar"}
+                            </button>
+
+                            <button
+                              className="inline-flex w-full sm:w-auto items-center justify-center rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                              disabled={disableAll || mismatch || busy}
+                              onClick={() => cancelPendingProveta(idx)}
+                              title="Descartar esta seleção"
+                            >
+                              Refazer
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {!concluida && (
+              <div className="mt-3 text-xs text-gray-500">
+                Obs: por enquanto isso não bloqueia “Concluir em campo”. Quando você quiser, a gente liga como obrigatório.
+              </div>
+            )}
+          </div>
+
           {/* Ações */}
           <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
             <button
@@ -995,7 +1331,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           </div>
         </div>
 
-        {/* Preview modal */}
+        {/* Preview modal (checklist) */}
         {previewKind && pendingUrl[previewKind] && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="w-full max-w-lg rounded-2xl bg-white p-4">
@@ -1015,6 +1351,31 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 <img
                   src={pendingUrl[previewKind] as string}
                   alt="preview"
+                  className="max-h-[70vh] w-full rounded-xl object-contain"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Preview modal (provetas) */}
+        {previewProvetaIdx && provetaPendingUrl[previewProvetaIdx] && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-lg rounded-2xl bg-white p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 truncate text-sm font-semibold">Proveta Lavadora {previewProvetaIdx}</div>
+                <button
+                  className="shrink-0 rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
+                  onClick={() => setPreviewProvetaIdx(null)}
+                >
+                  Fechar
+                </button>
+              </div>
+              <div className="mt-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={provetaPendingUrl[previewProvetaIdx] as string}
+                  alt="preview proveta"
                   className="max-h-[70vh] w-full rounded-xl object-contain"
                 />
               </div>
