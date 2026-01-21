@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/app/components/AppShell";
 
-type FotoKindBase = "agua" | "energia" | "gas" | "bombonas" | "conector_bala";
-type FotoKind = FotoKindBase | "proveta";
+type FotoKind = "agua" | "energia" | "gas" | "bombonas" | "conector_bala";
+type ProvetaKind = "proveta";
 
 type Aud = {
   id: string;
@@ -23,6 +23,9 @@ type Aud = {
   foto_agua_url?: string | null;
   foto_energia_url?: string | null;
   foto_gas_url?: string | null;
+
+  // legado (pode existir no banco)
+  foto_quimicos_url?: string | null;
 
   foto_bombonas_url?: string | null;
   foto_conector_bala_url?: string | null;
@@ -49,7 +52,7 @@ type HistItem = {
   actor?: { id: string; email: string | null; role: string | null } | null;
 };
 
-type FotoItem = { kind: FotoKindBase; label: string; required: boolean; help?: string };
+type FotoItem = { kind: FotoKind; label: string; required: boolean; help?: string };
 
 const FOTO_ITEMS: FotoItem[] = [
   { kind: "agua", label: "Medidor de Água", required: true },
@@ -59,7 +62,11 @@ const FOTO_ITEMS: FotoItem[] = [
   { kind: "conector_bala", label: "Conector bala conectado", required: true },
 ];
 
-type ProvetaRow = { maquina_tag: string; maquina_idx: number; foto_url: string };
+type ProvetaRow = {
+  maquina_tag: string; // "lavadora"
+  maquina_idx: number; // 1..N
+  foto_url: string;
+};
 
 async function safeReadJson(res: Response): Promise<any> {
   const ct = res.headers.get("content-type") ?? "";
@@ -130,13 +137,24 @@ function rolePill(r: Role) {
   return { label: "—", cls: "bg-gray-100 text-gray-700 border-gray-200" };
 }
 
-function safeText(v: any) {
-  return String(v ?? "");
+function fotoUrl(a: Aud | null, kind: FotoKind) {
+  if (!a) return null;
+  if (kind === "agua") return a.foto_agua_url ?? null;
+  if (kind === "energia") return a.foto_energia_url ?? null;
+  if (kind === "gas") return a.foto_gas_url ?? null;
+  if (kind === "bombonas") return a.foto_bombonas_url ?? null;
+  return a.foto_conector_bala_url ?? null;
 }
+
 function safeNum(v: any) {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
+
+function safeText(v: any) {
+  return String(v ?? "");
+}
+
 function isLavadoraLike(x: any) {
   const s = safeText(x).toLowerCase();
   return s.includes("lav") || s.includes("washer") || s.includes("lavadora");
@@ -163,30 +181,31 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
   const [dirty, setDirty] = useState(false);
 
-  const [uploading, setUploading] = useState<Record<string, boolean>>({});
+  const [uploading, setUploading] = useState<Record<FotoKind, boolean>>({
+    agua: false,
+    energia: false,
+    gas: false,
+    bombonas: false,
+    conector_bala: false,
+  });
 
-  const [pendingFile, setPendingFile] = useState<Partial<Record<string, File>>>({});
-  const [pendingUrl, setPendingUrl] = useState<Partial<Record<string, string>>>({});
-  const [previewKey, setPreviewKey] = useState<string | null>(null);
+  const [pendingFile, setPendingFile] = useState<Partial<Record<FotoKind, File>>>({});
+  const [pendingUrl, setPendingUrl] = useState<Partial<Record<FotoKind, string>>>({});
+  const [previewKind, setPreviewKind] = useState<FotoKind | null>(null);
+
+  // Provetas (por lavadora)
+  const [numLavadoras, setNumLavadoras] = useState<number>(1);
+  const [provetas, setProvetas] = useState<ProvetaRow[]>([]);
+  const [provUploading, setProvUploading] = useState<Record<number, boolean>>({});
+  const [provPendingFile, setProvPendingFile] = useState<Record<number, File | undefined>>({});
+  const [provPendingUrl, setProvPendingUrl] = useState<Record<number, string | undefined>>({});
+  const [provPreviewIdx, setProvPreviewIdx] = useState<number | null>(null);
 
   // Histórico (somente leitura para interno/gestor)
   const [histLoading, setHistLoading] = useState(false);
   const [histErr, setHistErr] = useState<string | null>(null);
   const [histRole, setHistRole] = useState<Role>(null);
   const [histData, setHistData] = useState<HistItem[]>([]);
-
-  // Provetas por lavadora
-  const [numLavadoras, setNumLavadoras] = useState<number>(1);
-  const [provetas, setProvetas] = useState<ProvetaRow[]>([]);
-
-  const provetasMap = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const p of provetas) {
-      const key = `${safeText(p.maquina_tag || "lavadora")}:${safeNum(p.maquina_idx)}`;
-      m.set(key, safeText(p.foto_url));
-    }
-    return m;
-  }, [provetas]);
 
   function setOkMsg(msg: string) {
     setOk(msg);
@@ -201,20 +220,16 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     const aEn = a.energia_leitura ?? null;
     const aGs = a.gas_leitura ?? null;
 
-    setAguaLeitura(aAg !== null && aAg !== undefined ? toText(aAg) : "");
-    setEnergiaLeitura(aEn !== null && aEn !== undefined ? toText(aEn) : "");
-    setGasLeitura(aGs !== null && aGs !== undefined ? toText(aGs) : "");
+    if (aAg !== null && aAg !== undefined) setAguaLeitura(toText(aAg));
+    else setAguaLeitura("");
+
+    if (aEn !== null && aEn !== undefined) setEnergiaLeitura(toText(aEn));
+    else setEnergiaLeitura("");
+
+    if (aGs !== null && aGs !== undefined) setGasLeitura(toText(aGs));
+    else setGasLeitura("");
 
     setDirty(false);
-  }
-
-  function fotoUrl(a: Aud | null, kind: FotoKindBase) {
-    if (!a) return null;
-    if (kind === "agua") return a.foto_agua_url ?? null;
-    if (kind === "energia") return a.foto_energia_url ?? null;
-    if (kind === "gas") return a.foto_gas_url ?? null;
-    if (kind === "bombonas") return a.foto_bombonas_url ?? null;
-    return a.foto_conector_bala_url ?? null;
   }
 
   const userEmailById = useMemo(() => {
@@ -256,6 +271,15 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
   const canSeeHistorico = useMemo(() => histRole === "interno" || histRole === "gestor", [histRole]);
 
+  const provetasMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of provetas) {
+      const key = `${safeText(p.maquina_tag || "lavadora")}:${safeNum(p.maquina_idx)}`;
+      m.set(key, safeText(p.foto_url));
+    }
+    return m;
+  }, [provetas]);
+
   async function carregarHistorico() {
     setHistLoading(true);
     setHistErr(null);
@@ -274,15 +298,16 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
-  async function carregarProvetas(auditoriaId: string) {
+  async function carregarProvetas() {
     try {
-      const r = await fetch(`/api/auditorias/${auditoriaId}/provetas`, { cache: "no-store" });
-      if (!r.ok) {
+      const res = await fetch(`/api/auditorias/${id}/provetas`, { cache: "no-store" });
+      if (!res.ok) {
+        // endpoint pode falhar sem quebrar a tela
         setProvetas([]);
         return;
       }
-      const j = await safeReadJson(r);
-      const list: any[] = Array.isArray(j) ? j : Array.isArray(j?.items) ? j.items : Array.isArray(j?.data) ? j.data : [];
+      const json = await safeReadJson(res);
+      const list: ProvetaRow[] = Array.isArray(json) ? json : Array.isArray(json?.items) ? json.items : [];
       setProvetas(
         list
           .map((x) => ({
@@ -297,31 +322,34 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
-  async function carregarNumLavadoras(condominioId: string) {
+  async function descobrirLavadoras(condominio_id: string) {
+    // endpoint existente no seu projeto
     let lavs = 1;
     try {
-      const r = await fetch(`/api/condominios/${condominioId}/maquinas`, { cache: "no-store" });
-      if (r.ok) {
-        const j = await safeReadJson(r);
-        const items: any[] = Array.isArray(j)
-          ? j
-          : Array.isArray(j?.items)
-          ? j.items
-          : Array.isArray(j?.data)
-          ? j.data
-          : [];
-        const totalLavadoras = items.reduce((acc, it) => {
-          const categoria = it?.categoria ?? it?.tipo ?? it?.nome ?? it?.tag ?? "";
-          const qtd = it?.quantidade ?? it?.qtd ?? it?.qty ?? 0;
-          if (isLavadoraLike(categoria)) return acc + safeNum(qtd || 0);
-          return acc;
-        }, 0);
-        if (totalLavadoras > 0) lavs = totalLavadoras;
-      }
+      const maquinasResp = await fetch(`/api/condominios/${condominio_id}/maquinas`, { method: "GET" });
+      if (!maquinasResp.ok) return 1;
+
+      const maquinasJson: any = await maquinasResp.json().catch(() => null);
+      const items: any[] = Array.isArray(maquinasJson)
+        ? maquinasJson
+        : Array.isArray(maquinasJson?.items)
+        ? maquinasJson.items
+        : Array.isArray(maquinasJson?.data)
+        ? maquinasJson.data
+        : [];
+
+      const totalLavadoras = items.reduce((acc, it) => {
+        const categoria = it?.categoria ?? it?.tipo ?? it?.nome ?? it?.tag ?? "";
+        const qtd = it?.quantidade ?? it?.qtd ?? it?.qty ?? 0;
+        if (isLavadoraLike(categoria)) return acc + safeNum(qtd || 0);
+        return acc;
+      }, 0);
+
+      if (totalLavadoras > 0) lavs = totalLavadoras;
     } catch {
       // ignore
     }
-    setNumLavadoras(lavs > 0 ? lavs : 1);
+    return lavs > 0 ? lavs : 1;
   }
 
   async function carregarTudo() {
@@ -362,8 +390,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       setAud(found);
       applyFromAud(found);
 
-      await carregarNumLavadoras(found.condominio_id);
-      await carregarProvetas(found.id);
+      // lavadoras + provetas
+      const lavs = await descobrirLavadoras(found.condominio_id);
+      setNumLavadoras(lavs);
+      await carregarProvetas();
 
       carregarHistorico();
     } catch (e: any) {
@@ -425,37 +455,37 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
-  function onPick(key: string, file?: File | null) {
+  function onPick(kind: FotoKind, file?: File | null) {
     if (!file) return;
 
     const url = URL.createObjectURL(file);
-    const old = pendingUrl[key];
+    const old = pendingUrl[kind];
     if (old) URL.revokeObjectURL(old);
 
-    setPendingFile((p) => ({ ...p, [key]: file }));
-    setPendingUrl((p) => ({ ...p, [key]: url }));
-    setPreviewKey(null);
+    setPendingFile((p) => ({ ...p, [kind]: file }));
+    setPendingUrl((p) => ({ ...p, [kind]: url }));
+    setPreviewKind(null);
   }
 
-  function cancelPending(key: string) {
-    const url = pendingUrl[key];
+  function cancelPending(kind: FotoKind) {
+    const url = pendingUrl[kind];
     if (url) URL.revokeObjectURL(url);
 
     setPendingFile((p) => {
       const copy = { ...p };
-      delete copy[key];
+      delete copy[kind];
       return copy;
     });
     setPendingUrl((p) => {
       const copy = { ...p };
-      delete copy[key];
+      delete copy[kind];
       return copy;
     });
 
-    if (previewKey === key) setPreviewKey(null);
+    if (previewKind === kind) setPreviewKind(null);
   }
 
-  async function uploadFotoBase(kind: FotoKindBase, file: File) {
+  async function uploadFoto(kind: FotoKind, file: File) {
     setErr(null);
     setOk(null);
 
@@ -484,7 +514,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       } else if (json?.auditoria) {
         setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...(json.auditoria as Aud) }));
       } else if (json?.url) {
-        const map: Record<FotoKindBase, keyof Aud> = {
+        const map: Record<FotoKind, keyof Aud> = {
           agua: "foto_agua_url",
           energia: "foto_energia_url",
           gas: "foto_gas_url",
@@ -509,7 +539,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         return copy;
       });
 
-      if (previewKey === kind) setPreviewKey(null);
+      if (previewKind === kind) setPreviewKind(null);
 
       setOkMsg("Foto salva ✅");
     } catch (e: any) {
@@ -519,8 +549,38 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
+  // Provetas
+  function onPickProveta(idx: number, file?: File | null) {
+    if (!file) return;
+
+    const url = URL.createObjectURL(file);
+    const old = provPendingUrl[idx];
+    if (old) URL.revokeObjectURL(old);
+
+    setProvPendingFile((p) => ({ ...p, [idx]: file }));
+    setProvPendingUrl((p) => ({ ...p, [idx]: url }));
+    setProvPreviewIdx(null);
+  }
+
+  function cancelProveta(idx: number) {
+    const url = provPendingUrl[idx];
+    if (url) URL.revokeObjectURL(url);
+
+    setProvPendingFile((p) => {
+      const copy = { ...p };
+      delete copy[idx];
+      return copy;
+    });
+    setProvPendingUrl((p) => {
+      const copy = { ...p };
+      delete copy[idx];
+      return copy;
+    });
+
+    if (provPreviewIdx === idx) setProvPreviewIdx(null);
+  }
+
   async function uploadProveta(idx: number, file: File) {
-    const key = `proveta:${idx}`;
     setErr(null);
     setOk(null);
 
@@ -529,10 +589,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     if (concluida) return setErr("Esta auditoria já está em conferência/final. Não dá pra alterar fotos em campo.");
     if (!file.type.startsWith("image/")) return setErr("Envie apenas imagem.");
 
-    setUploading((p) => ({ ...p, [key]: true }));
+    setProvUploading((p) => ({ ...p, [idx]: true }));
     try {
       const fd = new FormData();
-      fd.append("kind", "proveta");
+      fd.append("kind", "proveta" as ProvetaKind);
       fd.append("maquina_tag", "lavadora");
       fd.append("maquina_idx", String(idx));
       fd.append("file", file);
@@ -545,30 +605,30 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         throw new Error((json?.error ?? "Erro ao enviar proveta") + raw);
       }
 
-      // Recarrega a lista pra refletir o que salvou no banco
-      await carregarProvetas(id);
+      // recarrega lista (garante refletir URL salva)
+      await carregarProvetas();
 
-      const url = pendingUrl[key];
+      const url = provPendingUrl[idx];
       if (url) URL.revokeObjectURL(url);
 
-      setPendingFile((p) => {
+      setProvPendingFile((p) => {
         const copy = { ...p };
-        delete copy[key];
+        delete copy[idx];
         return copy;
       });
-      setPendingUrl((p) => {
+      setProvPendingUrl((p) => {
         const copy = { ...p };
-        delete copy[key];
+        delete copy[idx];
         return copy;
       });
 
-      if (previewKey === key) setPreviewKey(null);
+      if (provPreviewIdx === idx) setProvPreviewIdx(null);
 
-      setOkMsg(`Proveta Lavadora ${idx} salva ✅`);
+      setOkMsg(`Proveta lavadora ${idx} salva ✅`);
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao enviar proveta");
     } finally {
-      setUploading((p) => ({ ...p, [key]: false }));
+      setProvUploading((p) => ({ ...p, [idx]: false }));
     }
   }
 
@@ -580,15 +640,15 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
     const fotoAguaOk = !!a?.foto_agua_url;
     const fotoEnergiaOk = !!a?.foto_energia_url;
-
     const fotoBombonasOk = !!a?.foto_bombonas_url;
     const fotoConectorOk = !!a?.foto_conector_bala_url;
 
-    // Provetas por lavadora (obrigatório agregado)
-    const n = numLavadoras > 0 ? numLavadoras : 1;
+    // provetas por lavadora
+    const nLav = numLavadoras > 0 ? numLavadoras : 1;
     let provetasOk = true;
-    for (let i = 1; i <= n; i++) {
-      const url = provetasMap.get(`lavadora:${i}`);
+    for (let i = 1; i <= nLav; i++) {
+      const key = `lavadora:${i}`;
+      const url = provetasMap.get(key);
       if (!url) {
         provetasOk = false;
         break;
@@ -615,7 +675,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     const prontoCampo = faltas.length === 0;
     const pct = totalReq === 0 ? 0 : Math.round((doneReq / totalReq) * 100);
 
-    return { items, faltas, prontoCampo, doneReq, totalReq, pct, provetasOk };
+    return { items, faltas, prontoCampo, doneReq, totalReq, pct };
   }, [aud, agua_leitura, energia_leitura, gas_leitura, numLavadoras, provetasMap]);
 
   const concluidaBanner = useMemo(() => statusBadge(aud?.status), [aud?.status]);
@@ -630,6 +690,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     return () => {
       if (okTimer.current) window.clearTimeout(okTimer.current);
       Object.values(pendingUrl).forEach((u) => u && URL.revokeObjectURL(u));
+      Object.values(provPendingUrl).forEach((u) => u && URL.revokeObjectURL(u));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -639,18 +700,18 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     : aud?.condominio_id ?? "";
 
   const disableAll = loading || saving || !aud || concluida;
-
   const busyAnyUpload = useMemo(() => Object.values(uploading).some(Boolean), [uploading]);
+  const busyAnyProv = useMemo(() => Object.values(provUploading).some(Boolean), [provUploading]);
 
   const concludeDisabledReason = useMemo(() => {
     if (!aud) return "Auditoria não carregada";
     if (loading || saving) return "Aguarde…";
-    if (busyAnyUpload) return "Ainda tem upload em andamento";
+    if (busyAnyUpload || busyAnyProv) return "Ainda tem upload em andamento";
     if (mismatch) return "Você não é o auditor atribuído";
     if (concluida) return "Já está em conferência/final";
     if (!checklistUi.prontoCampo) return `Faltando: ${checklistUi.faltas.join(", ")}`;
     return "";
-  }, [aud, loading, saving, busyAnyUpload, mismatch, concluida, checklistUi]);
+  }, [aud, loading, saving, busyAnyUpload, busyAnyProv, mismatch, concluida, checklistUi]);
 
   async function concluirEmCampo() {
     const okConfirm = window.confirm(
@@ -659,6 +720,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     if (!okConfirm) return;
     await salvarRascunho({ status: "em_conferencia" });
   }
+
+  const legadoProvetaUrl = aud?.foto_quimicos_url ?? null;
 
   return (
     <AppShell title="Auditoria (Campo)">
@@ -701,6 +764,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 <a
                   className="inline-flex w-full items-center justify-center rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-gray-50 sm:w-auto"
                   href="/auditorias"
+                  title="Voltar para a lista das suas auditorias"
                 >
                   ← Voltar para minhas auditorias
                 </a>
@@ -821,7 +885,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           </div>
         </div>
 
-        {/* Histórico */}
+        {/* Histórico (somente leitura p/ interno/gestor) */}
         {canSeeHistorico && (
           <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -834,6 +898,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 className="w-full rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 sm:w-auto"
                 onClick={carregarHistorico}
                 disabled={histLoading}
+                title="Atualizar histórico"
               >
                 {histLoading ? "Carregando..." : "Atualizar"}
               </button>
@@ -881,7 +946,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           </div>
         )}
 
-        {/* Conteúdo */}
+        {/* Conteúdo: Leituras + Observações + Fotos */}
         <div className="rounded-2xl border bg-white p-4 sm:p-5 shadow-sm">
           <div className="mb-3 text-sm font-semibold text-gray-700">Leituras</div>
 
@@ -950,15 +1015,15 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
           {/* Fotos gerais */}
           <div className="mt-6 rounded-2xl border p-4">
-            <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (gerais)</div>
-            <div className="text-xs text-gray-500">Tocar em “Tirar” → depois “Salvar”.</div>
+            <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (checklist)</div>
+            <div className="text-xs text-gray-500">Tocar em “Tirar” → depois “Salvar”. (No PC use “Galeria” pra JPG/JPEG)</div>
 
             <div className="mt-3 divide-y rounded-xl border">
               {FOTO_ITEMS.map((item) => {
                 const savedUrl = fotoUrl(aud, item.kind);
                 const saved = !!savedUrl;
                 const pend = !!pendingFile[item.kind];
-                const busy = !!uploading[item.kind];
+                const busy = uploading[item.kind];
                 const pUrl = pendingUrl[item.kind];
 
                 const badge = saved ? (
@@ -996,7 +1061,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                             <>
                               {" "}
                               -{" "}
-                              <button className="underline" onClick={() => setPreviewKey(item.kind)}>
+                              <button className="underline" onClick={() => setPreviewKind(item.kind)}>
                                 Ver
                               </button>
                             </>
@@ -1011,6 +1076,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                           className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
                             disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
                           }`}
+                          title={disableAll ? "Somente leitura" : mismatch ? "Sem permissão" : "Abrir câmera"}
                         >
                           Tirar
                           <input
@@ -1030,11 +1096,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                           className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl border px-4 py-2 text-sm ${
                             disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
                           }`}
+                          title="Selecionar da galeria (PC: JPG/JPEG)"
                         >
                           Galeria
                           <input
                             type="file"
-                            accept="image/*"
+                            accept="image/jpeg,image/jpg,image/png,image/webp,image/*"
                             className="hidden"
                             onChange={(e) => {
                               onPick(item.kind, e.target.files?.[0]);
@@ -1051,7 +1118,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                                 disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
                               }`}
                               disabled={disableAll || mismatch || busy}
-                              onClick={() => uploadFotoBase(item.kind, pendingFile[item.kind] as File)}
+                              onClick={() => uploadFoto(item.kind, pendingFile[item.kind] as File)}
+                              title="Enviar e salvar no sistema"
                             >
                               {busy ? "Enviando..." : "Salvar"}
                             </button>
@@ -1060,6 +1128,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                               className="inline-flex w-full sm:w-auto items-center justify-center rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
                               disabled={disableAll || mismatch || busy}
                               onClick={() => cancelPending(item.kind)}
+                              title="Descartar esta seleção"
                             >
                               Refazer
                             </button>
@@ -1071,67 +1140,77 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 );
               })}
             </div>
+
+            {!concluida && <div className="mt-3 text-xs text-gray-500">Dica: salve todas as fotos obrigatórias antes de concluir.</div>}
           </div>
 
-          {/* Provetas por lavadora (ÚNICO lugar de proveta) */}
-          <div className="mt-4 rounded-2xl border p-4">
-            <div className="flex items-center justify-between gap-3">
+          {/* Provetas por lavadora (único lugar de proveta) */}
+          <div className="mt-6 rounded-2xl border p-4">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="text-sm font-semibold text-gray-700">Provetas (por lavadora)</div>
                 <div className="text-xs text-gray-500">
-                  Precisamos de <b>{numLavadoras}</b> foto(s): Lavadora 1..{numLavadoras}.
+                  1 foto por lavadora. (No PC use “Galeria” pra JPG/JPEG)
                 </div>
               </div>
-              <div className="text-xs">
-                Status:{" "}
-                {checklistUi.provetasOk ? (
-                  <span className="font-semibold text-green-700">OK</span>
-                ) : (
-                  <span className="font-semibold text-red-700">Pendente</span>
-                )}
+              <div className="text-xs text-gray-600">
+                Lavadoras: <b>{numLavadoras || 1}</b>
               </div>
             </div>
 
+            {legadoProvetaUrl && (
+              <div className="mt-3 rounded-xl border bg-gray-50 p-3 text-xs text-gray-700">
+                <b>Proveta legado:</b>{" "}
+                <a className="underline" href={legadoProvetaUrl} target="_blank" rel="noreferrer">
+                  abrir
+                </a>{" "}
+                (não entra no checklist)
+              </div>
+            )}
+
             <div className="mt-3 divide-y rounded-xl border">
-              {Array.from({ length: numLavadoras }).map((_, i) => {
+              {Array.from({ length: numLavadoras > 0 ? numLavadoras : 1 }).map((_, i) => {
                 const idx = i + 1;
-                const mapKey = `lavadora:${idx}`;
-                const savedUrl = provetasMap.get(mapKey) || "";
-                const key = `proveta:${idx}`;
-                const pend = !!pendingFile[key];
-                const busy = !!uploading[key];
-                const pUrl = pendingUrl[key];
+                const key = `lavadora:${idx}`;
+                const savedUrl = provetasMap.get(key) || "";
+                const saved = !!savedUrl;
+
+                const pend = !!provPendingFile[idx];
+                const busy = !!provUploading[idx];
+                const pUrl = provPendingUrl[idx];
+
+                const badge = saved ? (
+                  <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">Feita</span>
+                ) : pend ? (
+                  <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">Pendente</span>
+                ) : (
+                  <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">Obrigatória</span>
+                );
 
                 return (
-                  <div key={key} className="flex flex-col gap-3 p-3 md:flex-row md:items-start md:justify-between">
+                  <div key={idx} className="flex flex-col gap-3 p-3 md:flex-row md:items-start md:justify-between">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="text-sm font-semibold text-gray-800">Proveta Lavadora {idx}</div>
-                        {savedUrl ? (
-                          <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">Feita</span>
-                        ) : (
-                          <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">Obrigatória</span>
-                        )}
+                        {badge}
                       </div>
 
-                      {savedUrl ? (
+                      {saved && savedUrl && (
                         <div className="mt-1">
                           <a className="text-xs underline text-gray-600" href={savedUrl} target="_blank" rel="noreferrer">
                             Abrir arquivo
                           </a>
                         </div>
-                      ) : (
-                        <div className="mt-1 text-xs text-gray-500">Ainda não enviada.</div>
                       )}
 
                       {pend && (
                         <div className="mt-1 text-xs text-gray-600">
-                          Selecionada: <b>{pendingFile[key]?.name ?? "proveta.jpg"}</b>
+                          Selecionada: <b>{provPendingFile[idx]?.name ?? "foto.jpg"}</b>
                           {pUrl && (
                             <>
                               {" "}
                               -{" "}
-                              <button className="underline" onClick={() => setPreviewKey(key)}>
+                              <button className="underline" onClick={() => setProvPreviewIdx(idx)}>
                                 Ver
                               </button>
                             </>
@@ -1146,6 +1225,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                           className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
                             disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
                           }`}
+                          title={disableAll ? "Somente leitura" : mismatch ? "Sem permissão" : "Abrir câmera"}
                         >
                           Tirar
                           <input
@@ -1154,7 +1234,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                             capture="environment"
                             className="hidden"
                             onChange={(e) => {
-                              onPick(key, e.target.files?.[0]);
+                              onPickProveta(idx, e.target.files?.[0]);
                               e.currentTarget.value = "";
                             }}
                             disabled={disableAll || mismatch || busy}
@@ -1165,15 +1245,15 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                           className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl border px-4 py-2 text-sm ${
                             disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
                           }`}
-                          title="PC: use para enviar JPG/JPEG"
+                          title="Selecionar da galeria (PC: JPG/JPEG)"
                         >
                           Galeria
                           <input
                             type="file"
-                            accept="image/*"
+                            accept="image/jpeg,image/jpg,image/png,image/webp,image/*"
                             className="hidden"
                             onChange={(e) => {
-                              onPick(key, e.target.files?.[0]);
+                              onPickProveta(idx, e.target.files?.[0]);
                               e.currentTarget.value = "";
                             }}
                             disabled={disableAll || mismatch || busy}
@@ -1187,7 +1267,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                                 disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
                               }`}
                               disabled={disableAll || mismatch || busy}
-                              onClick={() => uploadProveta(idx, pendingFile[key] as File)}
+                              onClick={() => uploadProveta(idx, provPendingFile[idx] as File)}
+                              title="Enviar e salvar no sistema"
                             >
                               {busy ? "Enviando..." : "Salvar"}
                             </button>
@@ -1195,7 +1276,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                             <button
                               className="inline-flex w-full sm:w-auto items-center justify-center rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
                               disabled={disableAll || mismatch || busy}
-                              onClick={() => cancelPending(key)}
+                              onClick={() => cancelProveta(idx)}
+                              title="Descartar esta seleção"
                             >
                               Refazer
                             </button>
@@ -1210,7 +1292,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
             {!concluida && (
               <div className="mt-3 text-xs text-gray-500">
-                Dica: salve todas as provetas antes de concluir.
+                Obs: isso <b>entra</b> no checklist (1 foto por lavadora).
               </div>
             )}
           </div>
@@ -1234,19 +1316,43 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
           </div>
         </div>
 
-        {/* Preview modal */}
-        {previewKey && pendingUrl[previewKey] && (
+        {/* Preview modal (fotos gerais) */}
+        {previewKind && pendingUrl[previewKind] && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="w-full max-w-lg rounded-2xl bg-white p-4">
               <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0 truncate text-sm font-semibold">Preview</div>
-                <button className="shrink-0 rounded-lg border px-3 py-1 text-sm hover:bg-gray-50" onClick={() => setPreviewKey(null)}>
+                <div className="min-w-0 truncate text-sm font-semibold">
+                  {FOTO_ITEMS.find((x) => x.kind === previewKind)?.label}
+                </div>
+                <button className="shrink-0 rounded-lg border px-3 py-1 text-sm hover:bg-gray-50" onClick={() => setPreviewKind(null)}>
                   Fechar
                 </button>
               </div>
               <div className="mt-3">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={pendingUrl[previewKey] as string} alt="preview" className="max-h-[70vh] w-full rounded-xl object-contain" />
+                <img src={pendingUrl[previewKind] as string} alt="preview" className="max-h-[70vh] w-full rounded-xl object-contain" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Preview modal (provetas) */}
+        {provPreviewIdx && provPendingUrl[provPreviewIdx] && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-lg rounded-2xl bg-white p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 truncate text-sm font-semibold">Proveta Lavadora {provPreviewIdx}</div>
+                <button className="shrink-0 rounded-lg border px-3 py-1 text-sm hover:bg-gray-50" onClick={() => setProvPreviewIdx(null)}>
+                  Fechar
+                </button>
+              </div>
+              <div className="mt-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={provPendingUrl[provPreviewIdx] as string}
+                  alt="preview"
+                  className="max-h-[70vh] w-full rounded-xl object-contain"
+                />
               </div>
             </div>
           </div>
