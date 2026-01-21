@@ -60,17 +60,26 @@ type FotoItem = {
   help?: string;
 };
 
+type UploadingState = Partial<Record<UploadKey, boolean>>;
+
 /* =========================
    CONFIGURAÇÃO DAS FOTOS FIXAS
+   - Checklist principal: água, energia, gás, conector
+   - Químicos: bombonas + provetas (fora do bloco principal)
 ========================= */
 
-const FOTO_ITEMS: FotoItem[] = [
+const FOTO_ITEMS_CHECKLIST: FotoItem[] = [
   { kind: "agua", label: "Medidor de Água", required: true },
   { kind: "energia", label: "Medidor de Energia", required: true },
   { kind: "gas", label: "Medidor de Gás", required: false, help: "Opcional (se houver gás)" },
-  { kind: "bombonas", label: "Bombonas (detergente + amaciante)", required: true },
   { kind: "conector_bala", label: "Conector bala conectado", required: true },
 ];
+
+const FOTO_ITEM_BOMBONAS: FotoItem = {
+  kind: "bombonas",
+  label: "Bombonas (detergente + amaciante)",
+  required: true,
+};
 
 /* =========================
    HELPERS
@@ -160,8 +169,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
   const [dirty, setDirty] = useState(false);
 
-  // uploads (fixos + provetas)
-  const [uploading, setUploading] = useState<Record<UploadKey, boolean>>({
+  // uploads (fixos + provetas dinâmicas)
+  const [uploading, setUploading] = useState<UploadingState>({
     agua: false,
     energia: false,
     gas: false,
@@ -205,7 +214,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     if (kind === "bombonas") return a.foto_bombonas_url ?? null;
     return a.foto_conector_bala_url ?? null;
   }
-
   const userEmailById = useMemo(() => {
     const m = new Map<string, string>();
     users.forEach((u) => m.set(u.id, u.email ?? u.id));
@@ -265,13 +273,12 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
   async function carregarQtdLavadoras(condominioId: string) {
     try {
-      // endpoint simples que você já tem/ou criamos antes: retorna { count: number }
+      // endpoint esperado: { count: number }
       const res = await fetch(`/api/condominios/${condominioId}/lavadoras`, { cache: "no-store" });
       const json = await safeReadJson(res);
       if (res.ok && Number.isFinite(Number(json?.count))) {
         setQtdLavadoras(Number(json.count));
       } else {
-        // fallback (se endpoint não existir ainda, não quebra)
         setQtdLavadoras(0);
       }
     } catch {
@@ -317,10 +324,10 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       setAud(found);
       applyFromAud(found);
 
-      // tenta buscar qtd lavadoras
+      // qtd lavadoras (para renderizar provetas)
       if (found.condominio_id) carregarQtdLavadoras(found.condominio_id);
 
-      // tenta carregar provetas já salvas (se backend devolver)
+      // provetas já salvas (se backend devolver)
       if (json?.provetas && typeof json.provetas === "object") {
         const obj = json.provetas as Record<string, string>;
         const next: Record<number, string> = {};
@@ -456,13 +463,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         throw new Error((json?.error ?? "Erro ao enviar foto") + raw);
       }
 
-      // ✅ PROVETAS: salva em estado separado
       if (isProveta) {
         const idx = Number(kindStr.replace("proveta_", ""));
         const url = (json?.url ?? json?.proveta_url ?? null) as string | null;
         if (url) setProvetaUrls((p) => ({ ...p, [idx]: url }));
       } else {
-        // ✅ OUTROS KINDS: comportamento antigo
         const updated = (json?.updated ?? null) as Record<string, any> | null;
 
         if (updated && typeof updated === "object") {
@@ -483,7 +488,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         }
       }
 
-      // limpa pending do item
+      // limpa pending
       const urlLocal = pendingUrl[kind];
       if (urlLocal) URL.revokeObjectURL(urlLocal);
 
@@ -507,6 +512,14 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       setUploading((p) => ({ ...p, [kind]: false }));
     }
   }
+  const provetaItems = useMemo(() => {
+    const n = Math.max(0, Number(qtdLavadoras || 0));
+    if (!n) return [] as Array<{ idx: number; key: ProvetaKey; label: string }>;
+    return Array.from({ length: n }, (_, i) => {
+      const idx = i + 1;
+      return { idx, key: `proveta_${idx}` as ProvetaKey, label: `Proveta Lavadora ${idx}` };
+    });
+  }, [qtdLavadoras]);
 
   const checklistUi = useMemo(() => {
     const a = aud;
@@ -516,16 +529,31 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
     const fotoAguaOk = !!a?.foto_agua_url;
     const fotoEnergiaOk = !!a?.foto_energia_url;
-    const fotoBombonasOk = !!a?.foto_bombonas_url;
     const fotoConectorOk = !!a?.foto_conector_bala_url;
+
+    // Químicos (obrigatórios, mas fora do bloco principal)
+    const fotoBombonasOk = !!a?.foto_bombonas_url;
+
+    const provetasOk =
+      provetaItems.length === 0
+        ? false
+        : provetaItems.every((p) => {
+            const u = provetaUrls[p.idx];
+            return !!u;
+          });
 
     const items = [
       { label: "Leitura de água", ok: leituraAguaOk, required: true },
       { label: "Leitura de energia", ok: leituraEnergiaOk, required: true },
       { label: "Foto do medidor de água", ok: fotoAguaOk, required: true },
       { label: "Foto do medidor de energia", ok: fotoEnergiaOk, required: true },
-      { label: "Foto bombonas", ok: fotoBombonasOk, required: true },
       { label: "Foto conector bala", ok: fotoConectorOk, required: true },
+
+      // Químicos (conta pro “Concluir em campo”, mas é outro grupo na tela)
+      { label: "Foto bombonas (Químicos)", ok: fotoBombonasOk, required: true },
+      { label: "Fotos provetas (Químicos)", ok: provetasOk, required: true },
+
+      // opcionais
       { label: "Leitura de gás (opcional)", ok: (gas_leitura ?? "").trim().length > 0, required: false },
       { label: "Foto do medidor de gás (opcional)", ok: !!a?.foto_gas_url, required: false },
     ];
@@ -535,11 +563,17 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     const totalReq = required.length;
 
     const faltas = required.filter((i) => !i.ok).map((i) => i.label);
+
+    // Se não conseguiu determinar qtdLavadoras, considera “faltando provetas”
+    if (qtdLavadoras <= 0) {
+      if (!faltas.includes("Fotos provetas (Químicos)")) faltas.push("Fotos provetas (Químicos)");
+    }
+
     const prontoCampo = faltas.length === 0;
     const pct = totalReq === 0 ? 0 : Math.round((doneReq / totalReq) * 100);
 
     return { items, faltas, prontoCampo, doneReq, totalReq, pct };
-  }, [aud, agua_leitura, energia_leitura, gas_leitura]);
+  }, [aud, agua_leitura, energia_leitura, gas_leitura, provetaItems, provetaUrls, qtdLavadoras]);
 
   const concluidaBanner = useMemo(() => statusBadge(aud?.status), [aud?.status]);
   const mePill = useMemo(() => rolePill(me?.role ?? null), [me?.role]);
@@ -562,6 +596,7 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     : aud?.condominio_id ?? "";
 
   const disableAll = loading || saving || !aud || concluida;
+
   const busyAnyUpload = useMemo(() => Object.values(uploading).some(Boolean), [uploading]);
 
   const concludeDisabledReason = useMemo(() => {
@@ -582,17 +617,151 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     await salvarRascunho({ status: "em_conferencia" });
   }
 
-  const provetaItems = useMemo(() => {
-    const n = Math.max(0, Number(qtdLavadoras || 0));
-    if (!n) return [] as Array<{ idx: number; key: ProvetaKey; label: string }>;
-    return Array.from({ length: n }, (_, i) => {
-      const idx = i + 1;
-      return { idx, key: `proveta_${idx}` as ProvetaKey, label: `Proveta Lavadora ${idx}` };
-    });
-  }, [qtdLavadoras]);
+  function badgeFor(required: boolean, saved: boolean, pend: boolean) {
+    if (saved) {
+      return (
+        <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">Feita</span>
+      );
+    }
+    if (pend) {
+      return (
+        <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">Pendente</span>
+      );
+    }
+    if (required) {
+      return (
+        <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">Obrigatória</span>
+      );
+    }
+    return (
+      <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-700">Opcional</span>
+    );
+  }
+
+  function UploadRow(props: {
+    kind: UploadKey;
+    title: string;
+    required: boolean;
+    savedUrl: string | null;
+    help?: string;
+    previewLabel?: string;
+  }) {
+    const { kind, title, required, savedUrl, help, previewLabel } = props;
+
+    const saved = !!savedUrl;
+    const pend = !!pendingFile[kind];
+    const busy = !!uploading[kind];
+    const pUrl = pendingUrl[kind];
+
+    return (
+      <div className="flex flex-col gap-3 p-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-sm font-semibold text-gray-800">{title}</div>
+            {badgeFor(required, saved, pend)}
+          </div>
+
+          {help && <div className="mt-1 text-xs text-gray-500">{help}</div>}
+
+          {saved && savedUrl && (
+            <div className="mt-1">
+              <a className="text-xs underline text-gray-600" href={savedUrl} target="_blank" rel="noreferrer">
+                Abrir arquivo
+              </a>
+            </div>
+          )}
+
+          {pend && (
+            <div className="mt-1 text-xs text-gray-600">
+              Selecionada: <b>{pendingFile[kind]?.name ?? "foto.jpg"}</b>
+              {pUrl && (
+                <>
+                  {" "}
+                  -{" "}
+                  <button className="underline" onClick={() => setPreviewKind(kind)}>
+                    Ver
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="w-full md:w-auto">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+            <label
+              className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
+                disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
+              }`}
+              title={disableAll ? "Somente leitura" : mismatch ? "Sem permissão" : "Abrir câmera"}
+            >
+              Tirar
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={(e) => {
+                  onPick(kind, e.target.files?.[0]);
+                  e.currentTarget.value = "";
+                }}
+                disabled={disableAll || mismatch || busy}
+              />
+            </label>
+
+            <label
+              className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl border px-4 py-2 text-sm ${
+                disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
+              }`}
+              title="Selecionar da galeria"
+            >
+              Galeria
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  onPick(kind, e.target.files?.[0]);
+                  e.currentTarget.value = "";
+                }}
+                disabled={disableAll || mismatch || busy}
+              />
+            </label>
+
+            {pend && (
+              <>
+                <button
+                  className={`inline-flex w-full sm:w-auto items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                    disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
+                  }`}
+                  disabled={disableAll || mismatch || busy}
+                  onClick={() => uploadFoto(kind, pendingFile[kind] as File)}
+                  title="Enviar e salvar no sistema"
+                >
+                  {busy ? "Enviando..." : "Salvar"}
+                </button>
+
+                <button
+                  className="inline-flex w-full sm:w-auto items-center justify-center rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                  disabled={disableAll || mismatch || busy}
+                  onClick={() => cancelPending(kind)}
+                  title="Descartar esta seleção"
+                >
+                  Refazer
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Preview label (opcional, usado no modal) */}
+        <span className="hidden" data-preview-label={previewLabel ?? title} />
+      </div>
+    );
+  }
+
   return (
     <AppShell title="Auditoria (Campo)">
-      {/* ✅ container mobile-first, sem scroll horizontal */}
       <div className="mx-auto max-w-4xl px-3 py-4 sm:px-6 sm:py-6 overflow-x-hidden">
         {/* Header */}
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -629,7 +798,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
               <span className="font-mono text-gray-400 break-all">{id}</span>
             </div>
 
-            {/* ✅ UX: volta clara quando já concluiu */}
             {concluida && isAuditor && (
               <div className="mt-3">
                 <a
@@ -672,7 +840,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         )}
 
         {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
-        {ok && <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>}
+        {ok && (
+          <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>
+        )}
 
         {/* Checklist + Progresso + Ação principal */}
         <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
@@ -680,10 +850,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             <div className="min-w-0">
               <div className="text-sm font-semibold text-gray-800">Checklist de campo</div>
               <div className="mt-1 text-xs text-gray-500">
-                Para concluir, complete os itens obrigatórios. (Gás é opcional — o sistema decide por condomínio)
+                Para concluir, complete os itens obrigatórios. (Químicos inclui bombonas + provetas por lavadora)
               </div>
 
-              {/* Progresso */}
               <div className="mt-3">
                 <div className="flex items-center justify-between text-xs text-gray-600">
                   <div>
@@ -701,7 +870,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 </div>
               </div>
 
-              {/* Lista */}
               <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {checklistUi.items.map((it) => (
                   <div
@@ -886,284 +1054,65 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
             />
           </div>
 
-          {/* ✅ PROVETAS POR LAVADORA */}
-          <div className="mt-6 rounded-2xl border p-4">
-            <div className="mb-2 text-sm font-semibold text-gray-700">Provetas por lavadora</div>
-            <div className="text-xs text-gray-500">
-              Se o condomínio tiver 2 lavadoras, aparecerão 2 itens aqui. (Cada um salva separado no backend.)
-            </div>
-
-            {!qtdLavadoras ? (
-              <div className="mt-3 text-sm text-gray-600">
-                Não consegui identificar a quantidade de lavadoras deste condomínio.
-                <div className="mt-1 text-xs text-gray-500">
-                  (Se você ainda não criou o endpoint <span className="font-mono">/api/condominios/[id]/lavadoras</span>,
-                  eu te passo ele no próximo passo.)
-                </div>
-              </div>
-            ) : (
-              <div className="mt-3 divide-y rounded-xl border">
-                {provetaItems.map((it) => {
-                  const savedUrl = provetaUrls[it.idx] ?? null;
-                  const saved = !!savedUrl;
-                  const pend = !!pendingFile[it.key];
-                  const busy = !!uploading[it.key];
-                  const pUrl = pendingUrl[it.key];
-
-                  const badge = saved ? (
-                    <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">
-                      Feita
-                    </span>
-                  ) : pend ? (
-                    <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">
-                      Pendente
-                    </span>
-                  ) : (
-                    <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">
-                      Obrigatória
-                    </span>
-                  );
-
-                  return (
-                    <div key={it.key} className="flex flex-col gap-3 p-3 md:flex-row md:items-start md:justify-between">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <div className="text-sm font-semibold text-gray-800">{it.label}</div>
-                          {badge}
-                        </div>
-
-                        {saved && savedUrl && (
-                          <div className="mt-1">
-                            <a className="text-xs underline text-gray-600" href={savedUrl} target="_blank" rel="noreferrer">
-                              Abrir arquivo
-                            </a>
-                          </div>
-                        )}
-
-                        {pend && (
-                          <div className="mt-1 text-xs text-gray-600">
-                            Selecionada: <b>{pendingFile[it.key]?.name ?? "foto.jpg"}</b>
-                            {pUrl && (
-                              <>
-                                {" "}
-                                -{" "}
-                                <button className="underline" onClick={() => setPreviewKind(it.key)}>
-                                  Ver
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="w-full md:w-auto">
-                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-                          <label
-                            className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
-                              disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
-                            }`}
-                            title={disableAll ? "Somente leitura" : mismatch ? "Sem permissão" : "Abrir câmera"}
-                          >
-                            Tirar
-                            <input
-                              type="file"
-                              accept="image/*"
-                              capture="environment"
-                              className="hidden"
-                              onChange={(e) => {
-                                onPick(it.key, e.target.files?.[0]);
-                                e.currentTarget.value = "";
-                              }}
-                              disabled={disableAll || mismatch || busy}
-                            />
-                          </label>
-
-                          <label
-                            className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl border px-4 py-2 text-sm ${
-                              disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
-                            }`}
-                            title="Selecionar da galeria"
-                          >
-                            Galeria
-                            <input
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              onChange={(e) => {
-                                onPick(it.key, e.target.files?.[0]);
-                                e.currentTarget.value = "";
-                              }}
-                              disabled={disableAll || mismatch || busy}
-                            />
-                          </label>
-
-                          {pend && (
-                            <>
-                              <button
-                                className={`inline-flex w-full sm:w-auto items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
-                                  disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
-                                }`}
-                                disabled={disableAll || mismatch || busy}
-                                onClick={() => uploadFoto(it.key, pendingFile[it.key] as File)}
-                                title="Enviar e salvar no sistema"
-                              >
-                                {busy ? "Enviando..." : "Salvar"}
-                              </button>
-
-                              <button
-                                className="inline-flex w-full sm:w-auto items-center justify-center rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-                                disabled={disableAll || mismatch || busy}
-                                onClick={() => cancelPending(it.key)}
-                                title="Descartar esta seleção"
-                              >
-                                Refazer
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* FOTOS CHECKLIST (fixas) */}
+          {/* Fotos (CHECKLIST principal) */}
           <div className="mt-6 rounded-2xl border p-4">
             <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (checklist)</div>
             <div className="text-xs text-gray-500">Tocar em “Tirar” → depois “Salvar”.</div>
 
             <div className="mt-3 divide-y rounded-xl border">
-              {FOTO_ITEMS.map((item) => {
-                const savedUrl = fotoUrl(aud, item.kind);
-                const saved = !!savedUrl;
-                const pend = !!pendingFile[item.kind];
-                const busy = !!uploading[item.kind];
-                const pUrl = pendingUrl[item.kind];
+              {FOTO_ITEMS_CHECKLIST.map((item) => (
+                <UploadRow
+                  key={item.kind}
+                  kind={item.kind}
+                  title={item.label}
+                  required={item.required}
+                  help={item.help}
+                  savedUrl={fotoUrl(aud, item.kind)}
+                />
+              ))}
+            </div>
+          </div>
 
-                const badge = saved ? (
-                  <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">Feita</span>
-                ) : pend ? (
-                  <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">
-                    Pendente
-                  </span>
-                ) : item.required ? (
-                  <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">
-                    Obrigatória
-                  </span>
-                ) : (
-                  <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-700">Opcional</span>
-                );
+          {/* ✅ QUÍMICOS (fora do bloco principal): Bombonas + Provetas */}
+          <div className="mt-6 rounded-2xl border p-4">
+            <div className="mb-2 text-sm font-semibold text-gray-700">Químicos</div>
+            <div className="text-xs text-gray-500">Bombonas e provetas por lavadora. (Obrigatório para concluir)</div>
 
-                return (
-                  <div key={item.kind} className="flex flex-col gap-3 p-3 md:flex-row md:items-start md:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-sm font-semibold text-gray-800">{item.label}</div>
-                        {badge}
-                      </div>
+            <div className="mt-3 overflow-hidden rounded-xl border">
+              {/* Bombonas */}
+              <div className="border-b bg-white">
+                <UploadRow
+                  kind={FOTO_ITEM_BOMBONAS.kind}
+                  title={FOTO_ITEM_BOMBONAS.label}
+                  required={FOTO_ITEM_BOMBONAS.required}
+                  savedUrl={fotoUrl(aud, FOTO_ITEM_BOMBONAS.kind)}
+                />
+              </div>
 
-                      {item.help && <div className="mt-1 text-xs text-gray-500">{item.help}</div>}
-
-                      {saved && savedUrl && (
-                        <div className="mt-1">
-                          <a className="text-xs underline text-gray-600" href={savedUrl} target="_blank" rel="noreferrer">
-                            Abrir arquivo
-                          </a>
-                        </div>
-                      )}
-
-                      {pend && (
-                        <div className="mt-1 text-xs text-gray-600">
-                          Selecionada: <b>{pendingFile[item.kind]?.name ?? "foto.jpg"}</b>
-                          {pUrl && (
-                            <>
-                              {" "}
-                              -{" "}
-                              <button className="underline" onClick={() => setPreviewKind(item.kind)}>
-                                Ver
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="w-full md:w-auto">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-                        <label
-                          className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
-                            disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
-                          }`}
-                          title={disableAll ? "Somente leitura" : mismatch ? "Sem permissão" : "Abrir câmera"}
-                        >
-                          Tirar
-                          <input
-                            type="file"
-                            accept="image/*"
-                            capture="environment"
-                            className="hidden"
-                            onChange={(e) => {
-                              onPick(item.kind, e.target.files?.[0]);
-                              e.currentTarget.value = "";
-                            }}
-                            disabled={disableAll || mismatch || busy}
-                          />
-                        </label>
-
-                        <label
-                          className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl border px-4 py-2 text-sm ${
-                            disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
-                          }`}
-                          title="Selecionar da galeria"
-                        >
-                          Galeria
-                          <input
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            onChange={(e) => {
-                              onPick(item.kind, e.target.files?.[0]);
-                              e.currentTarget.value = "";
-                            }}
-                            disabled={disableAll || mismatch || busy}
-                          />
-                        </label>
-
-                        {pend && (
-                          <>
-                            <button
-                              className={`inline-flex w-full sm:w-auto items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
-                                disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
-                              }`}
-                              disabled={disableAll || mismatch || busy}
-                              onClick={() => uploadFoto(item.kind, pendingFile[item.kind] as File)}
-                              title="Enviar e salvar no sistema"
-                            >
-                              {busy ? "Enviando..." : "Salvar"}
-                            </button>
-
-                            <button
-                              className="inline-flex w-full sm:w-auto items-center justify-center rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
-                              disabled={disableAll || mismatch || busy}
-                              onClick={() => cancelPending(item.kind)}
-                              title="Descartar esta seleção"
-                            >
-                              Refazer
-                            </button>
-                          </>
-                        )}
-                      </div>
+              {/* Provetas */}
+              <div className="bg-white">
+                {qtdLavadoras <= 0 ? (
+                  <div className="p-3 text-sm text-gray-600">
+                    Não consegui identificar a quantidade de lavadoras deste condomínio.
+                    <div className="mt-1 text-xs text-gray-500">
+                      Sem esse número, não dá pra renderizar as provetas por lavadora.
                     </div>
                   </div>
-                );
-              })}
+                ) : (
+                  <div className="divide-y">
+                    {provetaItems.map((it) => (
+                      <UploadRow
+                        key={it.key}
+                        kind={it.key}
+                        title={it.label}
+                        required={true}
+                        savedUrl={provetaUrls[it.idx] ?? null}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-
-            {!concluida && (
-              <div className="mt-3 text-xs text-gray-500">Dica: o ideal é salvar todas as fotos obrigatórias antes de concluir.</div>
-            )}
           </div>
 
           {/* Ações */}
@@ -1196,7 +1145,8 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
                 <div className="min-w-0 truncate text-sm font-semibold">
                   {String(previewKind).startsWith("proveta_")
                     ? `Proveta Lavadora ${String(previewKind).replace("proveta_", "")}`
-                    : FOTO_ITEMS.find((x) => x.kind === (previewKind as any))?.label}
+                    : FOTO_ITEMS_CHECKLIST.find((x) => x.kind === (previewKind as any))?.label ??
+                      (previewKind === "bombonas" ? "Bombonas (detergente + amaciante)" : String(previewKind))}
                 </div>
                 <button
                   className="shrink-0 rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
