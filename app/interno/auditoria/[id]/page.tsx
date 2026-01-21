@@ -192,6 +192,11 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   const [uploadingComprovante, setUploadingComprovante] = useState(false);
   const [finalizando, setFinalizando] = useState(false);
 
+  // ✅ DEVOLVER PARA AUDITOR (novo)
+  const [devolverOpen, setDevolverOpen] = useState(false);
+  const [devolverMotivo, setDevolverMotivo] = useState("");
+  const [devolvendo, setDevolvendo] = useState(false);
+
   const role = me?.role ?? null;
   const isStaff = role === "interno" || role === "gestor";
 
@@ -216,6 +221,10 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
       setAud(audRow);
       setFechamentoObs(String(audRow?.fechamento_obs ?? ""));
+
+      // ao recarregar, fecha painel de devolução (pra não confundir)
+      setDevolverOpen(false);
+      setDevolverMotivo("");
 
       const ciclosJson = await fetchJSON(`/api/auditorias/${id}/ciclos`);
       const list: any[] = Array.isArray(ciclosJson?.itens)
@@ -420,6 +429,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   }, [aud?.pagamento_metodo]);
 
   const isFinal = useMemo(() => toLower(aud?.status) === "final", [aud?.status]);
+  const isEmConferencia = useMemo(() => toLower(aud?.status) === "em_conferencia", [aud?.status]);
 
   // links do relatório (somente quando FINAL)
   const reportHtmlHref = useMemo(() => `/relatorios/condominio/final/${id}`, [id]);
@@ -554,6 +564,45 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
+  // ✅ ação nova: devolver
+  async function devolverParaAuditor() {
+    const audId = String(aud?.id ?? id).trim();
+    if (!audId) return;
+
+    if (!isStaff) {
+      setErr("Sem permissão para devolver.");
+      return;
+    }
+
+    if (!isEmConferencia || isFinal) {
+      setErr("Só é possível devolver quando o status está em conferência.");
+      return;
+    }
+
+    const motivo = String(devolverMotivo ?? "").trim();
+    if (!motivo) {
+      setErr("Informe o motivo da devolução.");
+      return;
+    }
+
+    try {
+      setErr(null);
+      setDevolvendo(true);
+
+      await fetchJSON(`/api/auditorias/${audId}/devolver`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ motivo }),
+      });
+
+      await carregar();
+    } catch (e: any) {
+      setErr(e?.message ?? "Erro ao devolver");
+    } finally {
+      setDevolvendo(false);
+    }
+  }
+
   function statusLabel(s?: string | null) {
     const x = toLower(s);
     if (x === "aberta") return "aberta";
@@ -675,6 +724,21 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 />
               </label>
 
+              {/* ✅ NOVO: devolver para auditor (só em conferência) */}
+              {isStaff && isEmConferencia && !isFinal ? (
+                <button
+                  className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900 shadow-sm hover:bg-amber-100 disabled:opacity-60"
+                  onClick={() => {
+                    setErr(null);
+                    setDevolverOpen((v) => !v);
+                  }}
+                  disabled={devolvendo || loading || finalizando}
+                  title="Devolve a auditoria para o auditor corrigir leituras/fotos"
+                >
+                  {devolverOpen ? "Cancelar devolução" : "Devolver para auditor"}
+                </button>
+              ) : null}
+
               <button
                 className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600 disabled:opacity-60"
                 onClick={() => finalizarAuditoria()}
@@ -684,6 +748,50 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               </button>
             </div>
           </div>
+
+          {/* ✅ Painel devolução */}
+          {isStaff && isEmConferencia && !isFinal && devolverOpen ? (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <div className="text-sm font-semibold text-amber-900">Devolver para auditor</div>
+              <div className="mt-1 text-xs text-amber-900/80">
+                Isso volta o status para <span className="font-semibold">em andamento</span>. Ciclos não são apagados.
+              </div>
+
+              <div className="mt-3">
+                <div className="text-xs font-semibold text-amber-900">Motivo (obrigatório)</div>
+                <textarea
+                  className="mt-2 w-full rounded-xl border border-amber-200 bg-white p-3 text-sm text-gray-900 shadow-sm outline-none focus:border-amber-300"
+                  rows={3}
+                  placeholder="Ex: foto energia ilegível / leitura água incoerente / faltou proveta lavadora 2..."
+                  value={devolverMotivo}
+                  onChange={(e) => setDevolverMotivo(e.target.value)}
+                  disabled={devolvendo}
+                />
+              </div>
+
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-amber-700 disabled:opacity-60"
+                  onClick={() => devolverParaAuditor()}
+                  disabled={devolvendo || !String(devolverMotivo ?? "").trim()}
+                >
+                  {devolvendo ? "Devolvendo..." : "Confirmar devolução"}
+                </button>
+
+                <button
+                  className="rounded-xl border border-amber-200 bg-white px-4 py-2 text-sm font-semibold text-amber-900 shadow-sm hover:bg-amber-100 disabled:opacity-60"
+                  onClick={() => {
+                    setDevolverOpen(false);
+                    setDevolverMotivo("");
+                    setErr(null);
+                  }}
+                  disabled={devolvendo}
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           <div className="mt-4">
             <div className="text-sm font-semibold text-gray-700">Obs do financeiro (opcional)</div>
@@ -993,4 +1101,3 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     </AppShell>
   );
 }
-
