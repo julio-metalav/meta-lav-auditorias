@@ -96,7 +96,7 @@ export async function GET(
     }
 
     const sb = supabaseAdmin();
-    const id = params.id.replace(/"/g, "");
+    const id = params.id.replace(/[\\"]/g, "");
 
     const { data, error } = await sb
       .from("auditorias")
