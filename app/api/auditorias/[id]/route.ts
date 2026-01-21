@@ -39,8 +39,7 @@ async function fetchCondominioBasics(condominioId: string) {
     .eq("id", condominioId)
     .maybeSingle();
 
-  if (error) return { condominio: null as any, error };
-  return { condominio: data, error: null as any };
+  return { condominio: data ?? null, error };
 }
 
 function withCompatAliases(aud: any, condominio: any) {
@@ -97,11 +96,9 @@ export async function GET(
     }
 
     const sb = supabaseAdmin();
-
-    // 🔥 CORREÇÃO DEFINITIVA
     const id = params.id.replace(/"/g, "");
 
-    const { data: aud, error } = await sb
+    const { data, error } = await sb
       .from("auditorias")
       .select(AUDITORIA_SELECT)
       .eq("id", id)
@@ -110,22 +107,22 @@ export async function GET(
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
     }
-    if (!aud) {
+    if (!data) {
       return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
     }
 
-    const audRow = aud as any;
+    const aud = data as any;
 
     const isManager = roleGte(role, "interno");
-    const isOwnerAuditor = audRow.auditor_id === user.id;
-    const isUnassigned = !audRow.auditor_id;
+    const isOwnerAuditor = aud.auditor_id === user.id;
+    const isUnassigned = !aud.auditor_id;
 
     if (!isManager && !(isOwnerAuditor || isUnassigned)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
-    const { condominio } = await fetchCondominioBasics(audRow.condominio_id);
-    const payload = withCompatAliases(audRow, condominio);
+    const { condominio } = await fetchCondominioBasics(aud.condominio_id);
+    const payload = withCompatAliases(aud, condominio);
 
     return NextResponse.json({ ok: true, data: payload, auditoria: payload });
   } catch (e: any) {
@@ -150,13 +147,10 @@ export async function PATCH(
     }
 
     const sb = supabaseAdmin();
-
-    // 🔥 CORREÇÃO DEFINITIVA
     const id = params.id.replace(/"/g, "");
-
     const body = await req.json().catch(() => ({}));
 
-    const { data: aud, error } = await sb
+    const { data, error } = await sb
       .from("auditorias")
       .select("id, condominio_id, auditor_id, status")
       .eq("id", id)
@@ -165,15 +159,15 @@ export async function PATCH(
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
     }
-    if (!aud) {
+    if (!data) {
       return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
     }
 
-    const audRow = aud as any;
+    const aud = data as any;
 
     const isManager = roleGte(role, "interno");
-    const isOwnerAuditor = audRow.auditor_id === user.id;
-    const isUnassigned = !audRow.auditor_id;
+    const isOwnerAuditor = aud.auditor_id === user.id;
+    const isUnassigned = !aud.auditor_id;
 
     if (!isManager && !(isOwnerAuditor || isUnassigned)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
@@ -227,8 +221,10 @@ export async function PATCH(
       return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
     }
 
-    const { condominio } = await fetchCondominioBasics(saved.condominio_id);
-    const payload = withCompatAliases(saved, condominio);
+    const savedAud = saved as any;
+
+    const { condominio } = await fetchCondominioBasics(savedAud.condominio_id);
+    const payload = withCompatAliases(savedAud, condominio);
 
     return NextResponse.json({ ok: true, data: payload, auditoria: payload });
   } catch (e: any) {
