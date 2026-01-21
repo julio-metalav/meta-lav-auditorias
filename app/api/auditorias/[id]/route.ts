@@ -101,7 +101,7 @@ export async function GET(
     const { data, error } = await sb
       .from("auditorias")
       .select(AUDITORIA_SELECT)
-      .eq("id", id)
+      .eq("id", id as unknown as string)
       .maybeSingle();
 
     if (error) {
@@ -152,9 +152,10 @@ export async function PATCH(
 
     const { data, error } = await sb
       .from("auditorias")
-      .select("id, condominio_id, auditor_id, status")
-      .eq("id", id)
-      .maybeSingle();
+.select(AUDITORIA_SELECT)
+.filter("id", "eq", id)
+.maybeSingle();
+
 
     if (error) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
