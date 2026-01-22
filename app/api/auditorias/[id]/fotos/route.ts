@@ -113,17 +113,22 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (!file) return NextResponse.json({ error: "file é obrigatório." }, { status: 400 });
 
     const okKinds: FotoKind[] = [
-      "agua",
-      "energia",
-      "gas",
-      "quimicos",
-      "bombonas",
-      "conector_bala",
-      "comprovante_fechamento",
-    ];
-    if (!okKinds.includes(kind as FotoKind)) {
-      return NextResponse.json({ error: "kind inválido." }, { status: 400 });
-    }
+  "agua",
+  "energia",
+  "gas",
+  // "quimicos", ❌ REMOVER
+  "bombonas",
+  "conector_bala",
+  "comprovante_fechamento",
+];
+
+const isProveta = /^proveta_\d+$/.test(kind);
+
+if (!okKinds.includes(kind as FotoKind) && !isProveta) {
+  return NextResponse.json({ error: "kind inválido." }, { status: 400 });
+}
+
+
 
     // 🔒 REGRA DEFINITIVA
     if (isComprovante(kind) && !mime.startsWith("image/")) {
