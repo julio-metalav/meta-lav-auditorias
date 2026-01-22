@@ -87,20 +87,23 @@ export async function POST(req: Request) {
 
   // --- AUTH normal (exige CRON_SECRET)
   if (!envTok.token) {
-    return NextResponse.json(
-      wantDiag ? { error: "CRON_SECRET não configurado", diag: diagPayload } : { error: "CRON_SECRET não configurado" },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json(
+    { error: "CRON_SECRET não configurado", diag: diagPayload },
+    { status: 500 }
+  );
+}
 
   if (!reqTok.token || !safeEq(reqTok.token, envTok.token)) {
-    return NextResponse.json(
-      wantDiag
-        ? { error: "Não autenticado", diag_hint: "token recebido != token do env (compare sha256)", diag: diagPayload }
-        : { error: "Não autenticado" },
-      { status: 401 }
-    );
-  }
+  return NextResponse.json(
+    {
+      error: "Não autenticado",
+      diag_hint: "token recebido != token do env (compare sha256)",
+      diag: diagPayload,
+    },
+    { status: 401 }
+  );
+}
+
 
   // --- Supabase Admin client
   const sb = supabaseAdmin();
