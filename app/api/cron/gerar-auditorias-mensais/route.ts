@@ -57,6 +57,21 @@ function monthISO(d = new Date()) {
   return `${y}-${m}-01`;
 }
 
+// ✅ tenta ler vínculos (tabela real pode ser auditor_condominios OU assignments)
+async function loadAssignments(sb: ReturnType<typeof supabaseAdmin>) {
+  const a1 = await sb.from("auditor_condominios").select("auditor_id,condominio_id").limit(5000);
+  if (!a1.error && Array.isArray(a1.data)) {
+    return a1.data as Array<{ auditor_id: string; condominio_id: string }>;
+  }
+
+  const a2 = await sb.from("assignments").select("auditor_id,condominio_id").limit(5000);
+  if (!a2.error && Array.isArray(a2.data)) {
+    return a2.data as Array<{ auditor_id: string; condominio_id: string }>;
+  }
+
+  // Se nenhuma tabela existir, volta vazio (não quebra o cron; só cria sem auditor)
+  return [];
+}
 export async function POST(req: Request) {
   const url = new URL(req.url);
   const wantDiag = url.searchParams.get("diag") === "1";
@@ -103,7 +118,11 @@ export async function POST(req: Request) {
         {
           error: "Não autenticado",
           diag_hint: "Use x-emergency-pin correto para liberar diag=1",
-          received: { source: reqTok.source, token_len: reqTok.token.length, token_sha256: reqTok.token ? sha256(reqTok.token) : null },
+          received: {
+            source: reqTok.source,
+            token_len: reqTok.token.length,
+            token_sha256: reqTok.token ? sha256(reqTok.token) : null,
+          },
           env: { cron_secret_token_len: envTok.token.length, cron_secret_token_sha256: sha256(envTok.token) },
         },
         { status: 401 }
@@ -127,30 +146,73 @@ export async function POST(req: Request) {
   const ativos = rows.filter((c) => c?.ativo === true).map((c) => ({ id: String(c.id) }));
 
   if (ativos.length === 0) {
-    return NextResponse.json({ ok: true, mes_ref, criadas: 0, msg: "Nenhum condomínio ativo." });
+    return NextResponse.json({ ok: true, mes_ref, criadas: 0, corrigidas_sem_auditor: 0, msg: "Nenhum condomínio ativo." });
   }
 
-  // --- auditorias do mês (idempotente)
+  // ✅ JEITO 2: carrega vínculos auditor ↔ condomínio (tela Atribuições)
+  const links = await loadAssignments(sb);
+  const auditorByCondo = new Map<string, string>();
+
+  for (const l of links ?? []) {
+    const condominio_id = String((l as any)?.condominio_id ?? "").trim();
+    const auditor_id = String((l as any)?.auditor_id ?? "").trim();
+    if (condominio_id && auditor_id) auditorByCondo.set(condominio_id, auditor_id);
+  }
+  // --- auditorias do mês (idempotente) — cria faltantes
+  // ✅ cria já com auditor_id se existir vínculo; se não, fica null
   const payload = ativos.map((c) => ({
     condominio_id: c.id,
     mes_ref,
     status: "aberta",
-    auditor_id: null,
+    auditor_id: auditorByCondo.get(c.id) ?? null,
   }));
 
   const r2 = await sb
     .from("auditorias")
     .upsert(payload as any, { onConflict: "condominio_id,mes_ref", ignoreDuplicates: true })
-    .select("id");
+    .select("id,condominio_id");
 
   if (r2.error) return NextResponse.json({ error: r2.error.message }, { status: 500 });
 
   const criadas = Array.isArray(r2.data) ? r2.data.length : 0;
 
+  // ✅ JEITO 2 (complemento): se já existia auditoria do mês SEM auditor,
+  // e existe vínculo, preenche (sem sobrescrever auditor já definido).
+  let corrigidas_sem_auditor = 0;
+
+  // pega auditorias do mês que estão sem auditor
+  const r3 = await sb
+    .from("auditorias")
+    .select("id,condominio_id,auditor_id")
+    .eq("mes_ref", mes_ref)
+    .is("auditor_id", null);
+
+  if (r3.error) return NextResponse.json({ error: r3.error.message }, { status: 500 });
+
+  const semAuditor = (r3.data ?? []) as any[];
+
+  for (const a of semAuditor) {
+    const condominio_id = String(a.condominio_id ?? "").trim();
+    const auditor_id = auditorByCondo.get(condominio_id);
+    if (!auditor_id) continue;
+
+    const up = await sb
+      .from("auditorias")
+      .update({ auditor_id })
+      .eq("id", a.id)
+      .is("auditor_id", null)
+      .select("id")
+      .maybeSingle();
+
+    if (!up.error && up.data?.id) corrigidas_sem_auditor += 1;
+  }
+
   return NextResponse.json({
     ok: true,
     mes_ref,
     criadas,
+    corrigidas_sem_auditor,
     total_condominios_ativos: ativos.length,
+    total_vinculos: auditorByCondo.size,
   });
 }
