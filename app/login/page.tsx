@@ -12,25 +12,55 @@ export default function LoginPage() {
   async function entrar() {
     setErr(null);
     setLoading(true);
-    const { error } = await supabaseBrowser.auth.signInWithPassword({
+
+    const { data, error } = await supabaseBrowser.auth.signInWithPassword({
       email,
       password: senha,
     });
-    setLoading(false);
+
     if (error) {
+      setLoading(false);
       setErr(error.message);
       return;
     }
-    const next = new URLSearchParams(location.search).get("next") || "/";
-    location.href = next;
+
+    const access_token = data?.session?.access_token ?? "";
+    const refresh_token = data?.session?.refresh_token ?? "";
+
+    try {
+      // grava cookies httpOnly no servidor (pra middleware enxergar)
+      const r = await fetch("/api/auth/set-session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ access_token, refresh_token }),
+      });
+
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(j?.error ?? "Falha ao setar sessão");
+
+      const next = new URLSearchParams(location.search).get("next") || "/";
+      location.href = next;
+    } catch (e: any) {
+      setErr(e?.message ?? "Falha ao finalizar login");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
     <div className="card" style={{ maxWidth: 560, margin: "40px auto" }}>
       <div className="row" style={{ alignItems: "center", gap: 12 }}>
-        <img src="/logo.jpg" alt="Meta Lav" className="logo" />
+        {/* ✅ logo correta (coloque /public/logo-meta-lav.jpg) */}
+        <img
+          src="/logo-meta-lav.jpg"
+          alt="Meta Lav"
+          className="logo"
+          style={{ height: 42, width: "auto", objectFit: "contain" }}
+        />
         <div>
-          <h1 className="title" style={{ margin: 0 }}>Meta Lav Auditorias</h1>
+          <h1 className="title" style={{ margin: 0 }}>
+            Meta Lav Auditorias
+          </h1>
           <div className="small">Login por usuário (Supabase)</div>
         </div>
       </div>
