@@ -112,23 +112,22 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (!kind) return NextResponse.json({ error: "kind é obrigatório." }, { status: 400 });
     if (!file) return NextResponse.json({ error: "file é obrigatório." }, { status: 400 });
 
+    // aceita proveta_1, proveta_2, etc
+    const isProveta = /^proveta_\d+$/.test(kind);
+
+    // okKinds SEM "quimicos" (proveta é quem cobre o químico por lavadora)
     const okKinds: FotoKind[] = [
-  "agua",
-  "energia",
-  "gas",
-  // "quimicos", ❌ REMOVER
-  "bombonas",
-  "conector_bala",
-  "comprovante_fechamento",
-];
+      "agua",
+      "energia",
+      "gas",
+      "bombonas",
+      "conector_bala",
+      "comprovante_fechamento",
+    ];
 
-const isProveta = /^proveta_\d+$/.test(kind);
-
-if (!okKinds.includes(kind as FotoKind) && !isProveta) {
-  return NextResponse.json({ error: "kind inválido." }, { status: 400 });
-}
-
-
+    if (!okKinds.includes(kind as FotoKind) && !isProveta) {
+      return NextResponse.json({ error: "kind inválido." }, { status: 400 });
+    }
 
     // 🔒 REGRA DEFINITIVA
     if (isComprovante(kind) && !mime.startsWith("image/")) {
@@ -186,58 +185,44 @@ if (!okKinds.includes(kind as FotoKind) && !isProveta) {
     const ext = extFromFileName(file.name);
     const base = safeFileBase(file.name);
     const filename = `${kind}-${Date.now()}-${base}.${ext}`;
-    const path = `${auditoriaId}/${folderFor(kind)}/${filename}`;
+    const storagePath = `${auditoriaId}/${folderFor(kind)}/${filename}`;
 
-    const up = await admin.storage.from(BUCKET).upload(path, bytes, {
+    const up = await admin.storage.from(BUCKET).upload(storagePath, bytes, {
       contentType: mime,
       upsert: true,
     });
 
     if (up.error) return NextResponse.json({ error: up.error.message }, { status: 500 });
 
-    const { data: pub } = admin.storage.from(BUCKET).getPublicUrl(path);
+    const { data: pub } = admin.storage.from(BUCKET).getPublicUrl(storagePath);
     if (!pub?.publicUrl) {
-  return NextResponse.json({ error: "Falha ao obter URL pública." }, { status: 500 });
-}
+      return NextResponse.json({ error: "Falha ao obter URL pública." }, { status: 500 });
+    }
 
-/** >>>>> COLAR AQUI (ANTES do kindToColumn) <<<<< */
-if (isProveta) {
-  const maquinaTag = toShortText(form.get("maquina_tag"));
+    // ✅ PROVETAS: salva em auditoria_provetas (1 foto por proveta_X)
+    // usa maquina_tag = kind (proveta_1 / proveta_2) pra casar com o que a UI já manda
+    if (isProveta) {
+      const { data: saved, error: pErr } = await admin
+        .from("auditoria_provetas")
+        .upsert(
+          {
+            auditoria_id: auditoriaId,
+            maquina_tag: kind,
+            foto_url: pub.publicUrl,
+          },
+          { onConflict: "auditoria_id,maquina_tag" }
+        )
+        .select("*")
+        .single();
 
-  // se não vier maquina_tag, pelo menos não deixa salvar errado
-  if (!maquinaTag) {
-    return NextResponse.json(
-      { error: "maquina_tag é obrigatório para proveta." },
-      { status: 400 }
-    );
-  }
+      if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
 
-  // grava em auditoria_provetas (1 foto por lavadora/tag)
-  const { data: saved, error: pErr } = await admin
-    .from("auditoria_provetas")
-    .upsert(
-      {
-        auditoria_id: auditoriaId,
-        maquina_tag: maquinaTag,
-        foto_url: pub.publicUrl,
-      },
-      { onConflict: "auditoria_id,maquina_tag"
-    )
-    .select("*")
-    .single();
+      return NextResponse.json({ ok: true, kind, url: pub.publicUrl, proveta: saved });
+    }
 
-  if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
-
-  return NextResponse.json({ ok: true, kind, url: pub.publicUrl, proveta: saved });
-}
-/** >>>>> FIM DO BLOCO <<<<< */
-
-const col = kindToColumn(kind);
-if (!col) return NextResponse.json({ error: "kind não mapeado." }, { status: 400 });
-
-const patch: any = { [col]: pub.publicUrl };
-if (isComprovante(kind) && fechamentoObs) patch.fechamento_obs = fechamentoObs;
-
+    // ✅ FOTOS "normais": salva na auditoria (colunas)
+    const col = kindToColumn(kind);
+    if (!col) return NextResponse.json({ error: "kind não mapeado." }, { status: 400 });
 
     const patch: any = { [col]: pub.publicUrl };
     if (isComprovante(kind) && fechamentoObs) patch.fechamento_obs = fechamentoObs;
