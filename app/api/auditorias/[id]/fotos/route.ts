@@ -197,8 +197,43 @@ if (!okKinds.includes(kind as FotoKind) && !isProveta) {
 
     const { data: pub } = admin.storage.from(BUCKET).getPublicUrl(path);
     if (!pub?.publicUrl) {
-      return NextResponse.json({ error: "Falha ao obter URL pública." }, { status: 500 });
-    }
+  return NextResponse.json({ error: "Falha ao obter URL pública." }, { status: 500 });
+}
+
+/** >>>>> COLAR AQUI (ANTES do kindToColumn) <<<<< */
+if (isProveta) {
+  const maquinaTag = toShortText(form.get("maquina_tag"));
+
+  // se não vier maquina_tag, pelo menos não deixa salvar errado
+  if (!maquinaTag) {
+    return NextResponse.json(
+      { error: "maquina_tag é obrigatório para proveta." },
+      { status: 400 }
+    );
+  }
+
+  // grava em auditoria_provetas (1 foto por lavadora/tag)
+  const { data: saved, error: pErr } = await admin
+    .from("auditoria_provetas")
+    .upsert(
+      {
+        auditoria_id: auditoriaId,
+        maquina_tag: maquinaTag,
+        foto_url: pub.publicUrl,
+      },
+      { onConflict: "auditoria_id,maquina_tag" }
+    )
+    .select("*")
+    .single();
+
+  if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
+
+  return NextResponse.json({ ok: true, kind, url: pub.publicUrl, proveta: saved });
+}
+/** >>>>> FIM DO BLOCO <<<<< */
+
+const col = kindToColumn(kind);
+if (!col) return NextResponse.json({ error: "kind não mapeado." }, { status: 400 });
 
     const col = kindToColumn(kind);
     if (!col) return NextResponse.json({ error: "kind não mapeado." }, { status: 400 });
