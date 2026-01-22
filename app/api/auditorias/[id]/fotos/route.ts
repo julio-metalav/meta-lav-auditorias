@@ -221,7 +221,7 @@ if (isProveta) {
         maquina_tag: maquinaTag,
         foto_url: pub.publicUrl,
       },
-      { onConflict: "auditoria_id,maquina_tag" }
+      { onConflict: "auditoria_id,maquina_tag"
     )
     .select("*")
     .single();
@@ -235,8 +235,9 @@ if (isProveta) {
 const col = kindToColumn(kind);
 if (!col) return NextResponse.json({ error: "kind não mapeado." }, { status: 400 });
 
-    const col = kindToColumn(kind);
-    if (!col) return NextResponse.json({ error: "kind não mapeado." }, { status: 400 });
+const patch: any = { [col]: pub.publicUrl };
+if (isComprovante(kind) && fechamentoObs) patch.fechamento_obs = fechamentoObs;
+
 
     const patch: any = { [col]: pub.publicUrl };
     if (isComprovante(kind) && fechamentoObs) patch.fechamento_obs = fechamentoObs;
