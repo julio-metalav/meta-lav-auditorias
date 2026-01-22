@@ -104,7 +104,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     });
 
     const form = await req.formData();
-    const kind = String(form.get("kind") ?? "");
+    const kind = String(form.get("kind") ?? "").trim();
     const file = form.get("file") as File | null;
     const mime = file?.type ?? "";
     const fechamentoObs = toShortText(form.get("fechamento_obs"));
@@ -112,8 +112,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (!kind) return NextResponse.json({ error: "kind é obrigatório." }, { status: 400 });
     if (!file) return NextResponse.json({ error: "file é obrigatório." }, { status: 400 });
 
-    // aceita proveta_1, proveta_2, etc
-    const isProveta = /^proveta_\d+$/.test(kind);
+    // aceita: proveta_1, proveta_2, proveta-1, proveta1, proveta
+    const isProveta = /^proveta([_-]?\d+)?$/i.test(kind);
 
     // okKinds SEM "quimicos" (proveta é quem cobre o químico por lavadora)
     const okKinds: FotoKind[] = [
@@ -126,7 +126,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     ];
 
     if (!okKinds.includes(kind as FotoKind) && !isProveta) {
-      return NextResponse.json({ error: "kind inválido." }, { status: 400 });
+      return NextResponse.json({ error: `kind inválido: ${kind}` }, { status: 400 });
     }
 
     // 🔒 REGRA DEFINITIVA
@@ -199,15 +199,14 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: "Falha ao obter URL pública." }, { status: 500 });
     }
 
-    // ✅ PROVETAS: salva em auditoria_provetas (1 foto por proveta_X)
-    // usa maquina_tag = kind (proveta_1 / proveta_2) pra casar com o que a UI já manda
+    // ✅ PROVETAS: salva em auditoria_provetas (1 foto por máquina_tag)
     if (isProveta) {
       const { data: saved, error: pErr } = await admin
         .from("auditoria_provetas")
         .upsert(
           {
             auditoria_id: auditoriaId,
-            maquina_tag: kind,
+            maquina_tag: kind, // ex: proveta_1
             foto_url: pub.publicUrl,
           },
           { onConflict: "auditoria_id,maquina_tag" }
