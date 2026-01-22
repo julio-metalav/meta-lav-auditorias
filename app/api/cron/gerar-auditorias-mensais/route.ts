@@ -44,11 +44,12 @@ function pickEnvToken() {
   return { raw, token };
 }
 
-function isEmergencyOk(req: Request) {
-  const pinEnv = norm(process.env.EMERGENCY_PIN);
-  if (!pinEnv) return false;
-  const pinReq = norm(req.headers.get("x-emergency-pin"));
-  return !!pinReq && pinReq === pinEnv;
+function safeEq(a: string, b: string) {
+  // evita comparação “estranha” e dá resultado consistente
+  const aa = Buffer.from(String(a ?? ""), "utf8");
+  const bb = Buffer.from(String(b ?? ""), "utf8");
+  if (aa.length !== bb.length) return false;
+  return crypto.timingSafeEqual(aa, bb);
 }
 
 function monthISO(d = new Date()) {
@@ -57,66 +58,48 @@ function monthISO(d = new Date()) {
   return `${y}-${m}-01`;
 }
 
-type CondoRow = { id: string; ativo: boolean | null };
-type AssignRow = { condominio_id: string; auditor_id: string };
-
 export async function POST(req: Request) {
   const url = new URL(req.url);
   const wantDiag = url.searchParams.get("diag") === "1";
 
-  // --- DIAG: libera se emergency pin bater (mesmo sem token correto)
-  if (wantDiag && isEmergencyOk(req)) {
-    const reqTok = pickReqToken(req);
-    const envTok = pickEnvToken();
+  const envTok = pickEnvToken();
+  const reqTok = pickReqToken(req);
 
-    return NextResponse.json({
-      ok: true,
-      diag: true,
-      received: {
-        source: reqTok.source,
-        token_len: reqTok.token.length,
-        token_sha256: reqTok.token ? sha256(reqTok.token) : null,
-      },
-      env: {
-        cron_secret_is_set: !!norm(process.env.CRON_SECRET),
-        cron_secret_raw_len: envTok.raw.length,
-        cron_secret_token_len: envTok.token.length,
-        cron_secret_token_sha256: envTok.token ? sha256(envTok.token) : null,
-        emergency_pin_is_set: !!norm(process.env.EMERGENCY_PIN),
-      },
-      headers_seen: {
-        has_authorization: !!norm(req.headers.get("authorization")),
-        has_x_cron_secret: !!norm(req.headers.get("x-cron-secret")),
-        has_x_emergency_pin: !!norm(req.headers.get("x-emergency-pin")),
-      },
-    });
-  }
+  // --- Se quiser diag, SEMPRE devolve pista (sem vazar segredo em texto)
+  // (mostra apenas tamanho e hash)
+  const diagPayload = {
+    received: {
+      source: reqTok.source,
+      token_len: reqTok.token.length,
+      token_sha256: reqTok.token ? sha256(reqTok.token) : null,
+    },
+    env: {
+      cron_secret_is_set: !!norm(process.env.CRON_SECRET),
+      cron_secret_raw_len: envTok.raw.length,
+      cron_secret_token_len: envTok.token.length,
+      cron_secret_token_sha256: envTok.token ? sha256(envTok.token) : null,
+    },
+    headers_seen: {
+      has_authorization: !!norm(req.headers.get("authorization")),
+      has_x_cron_secret: !!norm(req.headers.get("x-cron-secret")),
+    },
+  };
 
   // --- AUTH normal (exige CRON_SECRET)
-  const envTok = pickEnvToken();
   if (!envTok.token) {
-    return NextResponse.json({ error: "CRON_SECRET não configurado" }, { status: 500 });
+    return NextResponse.json(
+      wantDiag ? { error: "CRON_SECRET não configurado", diag: diagPayload } : { error: "CRON_SECRET não configurado" },
+      { status: 500 }
+    );
   }
 
-  const reqTok = pickReqToken(req);
-  if (!reqTok.token || reqTok.token !== envTok.token) {
-    if (wantDiag) {
-      return NextResponse.json(
-        {
-          error: "Não autenticado",
-          diag_hint: "Use x-emergency-pin correto para liberar diag=1",
-          received: {
-            source: reqTok.source,
-            token_len: reqTok.token.length,
-            token_sha256: reqTok.token ? sha256(reqTok.token) : null,
-          },
-          env: { cron_secret_token_len: envTok.token.length, cron_secret_token_sha256: sha256(envTok.token) },
-        },
-        { status: 401 }
-      );
-    }
-
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  if (!reqTok.token || !safeEq(reqTok.token, envTok.token)) {
+    return NextResponse.json(
+      wantDiag
+        ? { error: "Não autenticado", diag_hint: "token recebido != token do env (compare sha256)", diag: diagPayload }
+        : { error: "Não autenticado" },
+      { status: 401 }
+    );
   }
 
   // --- Supabase Admin client
@@ -129,35 +112,19 @@ export async function POST(req: Request) {
   const r1 = await sb.from("condominios").select("id, ativo");
   if (r1.error) return NextResponse.json({ error: r1.error.message }, { status: 500 });
 
-  const condos = (r1.data ?? []) as CondoRow[];
-  const ativos = condos.filter((c) => c?.ativo === true).map((c) => String(c.id));
+  const rows = (r1.data ?? []) as any[];
+  const ativos = rows.filter((c) => c?.ativo === true).map((c) => ({ id: String(c.id) }));
 
   if (ativos.length === 0) {
     return NextResponse.json({ ok: true, mes_ref, criadas: 0, msg: "Nenhum condomínio ativo." });
   }
 
-  // ✅ NOVO: mapear auditor padrão por condominio (auditor_condominios)
-  // Obs: se não existir vínculo, auditor_id fica null (normal).
-  const rA = await sb
-    .from("auditor_condominios")
-    .select("condominio_id, auditor_id")
-    .in("condominio_id", ativos);
-
-  if (rA.error) return NextResponse.json({ error: rA.error.message }, { status: 500 });
-
-  const assigns = (rA.data ?? []) as AssignRow[];
-  const auditorByCondo = new Map<string, string>();
-  for (const a of assigns) {
-    if (a?.condominio_id && a?.auditor_id) auditorByCondo.set(String(a.condominio_id), String(a.auditor_id));
-  }
-
   // --- auditorias do mês (idempotente)
-  // ✅ auditoria nova já nasce com auditor_id do vínculo (sem sobrescrever auditorias já existentes)
-  const payload = ativos.map((condominio_id) => ({
-    condominio_id,
+  const payload = ativos.map((c) => ({
+    condominio_id: c.id,
     mes_ref,
     status: "aberta",
-    auditor_id: auditorByCondo.get(condominio_id) ?? null,
+    auditor_id: null,
   }));
 
   const r2 = await sb
@@ -174,6 +141,5 @@ export async function POST(req: Request) {
     mes_ref,
     criadas,
     total_condominios_ativos: ativos.length,
-    total_vinculos_encontrados: assigns.length,
   });
 }
