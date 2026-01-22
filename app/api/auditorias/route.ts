@@ -64,13 +64,27 @@ export async function GET() {
   const admin = supabaseAdmin();
   const sch = await detectSchema(admin);
 
+  // 🔒 Auditor só vê auditorias dos condomínios atribuídos (auditor_condominios)
+  let filtroCondoIds: string[] | null = null;
+
+  if (isAuditor && !isStaff) {
+    const { data: atribuicoes, error: atrErr } = await admin
+      .from("auditor_condominios")
+      .select("condominio_id")
+      .eq("auditor_id", ctx.user.id);
+
+    if (atrErr) return NextResponse.json({ error: "Falha ao buscar atribuições", details: atrErr.message }, { status: 500 });
+
+    const ids = (atribuicoes ?? []).map((x: any) => x.condominio_id).filter(Boolean);
+    filtroCondoIds = ids.length ? ids : [];
+  }
+
   let q = admin.from(sch.table).select("*").order(sch.monthCol, { ascending: false });
 
-  // ✅ REGRA NOVA (fila aberta):
-  // Auditor vê (auditor_id = user.id) OU (auditor_id IS NULL)
-  // e NÃO vê auditorias de outros auditores.
-  if (isAuditor && !isStaff) {
-    q = q.or(`${sch.auditorCol}.eq.${ctx.user.id},${sch.auditorCol}.is.null`);
+  if (filtroCondoIds) {
+    // auditor sem atribuição => lista vazia
+    if (filtroCondoIds.length === 0) return NextResponse.json({ data: [] });
+    q = q.in(sch.condoCol, filtroCondoIds);
   }
 
   const { data: rows, error } = await q;
@@ -78,7 +92,6 @@ export async function GET() {
 
   const list = rows ?? [];
   const condoIds = Array.from(new Set(list.map((r: any) => r[sch.condoCol]).filter(Boolean)));
-
   const auditorIds = Array.from(new Set(list.map((r: any) => r[sch.auditorCol]).filter(Boolean)));
 
   const [{ data: condos, error: condoErr }, { data: profs, error: profErr }] = await Promise.all([
@@ -103,7 +116,7 @@ export async function GET() {
     return {
       ...r,
       condominio_id,
-      auditor_id, // ✅ aqui é o REAL do banco (null = fila aberta)
+      auditor_id,
       mes_ref: pickMonthISO(r, sch),
       status: normalizeStatus(r[sch.statusCol]),
       condominios: condoMap.get(condominio_id) ?? null,
@@ -137,19 +150,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "mes_ref inválido. Use YYYY-MM-01" }, { status: 400 });
   }
 
-  // auditor_id NÃO é obrigatório na criação.
   const insertRow: any = {
     [sch.condoCol]: condominio_id,
     [sch.monthCol]: mes_ref,
     [sch.statusCol]: status,
   };
 
-  // se vier no payload, aceita
   if (body?.auditor_id) {
     insertRow[sch.auditorCol] = String(body.auditor_id).trim();
   }
 
-  // evita duplicidade (condominio + mês)
   const { data: existing, error: exErr } = await admin
     .from(sch.table)
     .select("id")
