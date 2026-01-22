@@ -7,6 +7,25 @@ import { supabaseAdmin } from "@/lib/auth";
 
 type Role = "auditor" | "interno" | "gestor";
 
+type ProfileRow = {
+  id: string;
+  email: string | null;
+  role: Role | null;
+};
+
+type CondominioRow = {
+  id: string;
+  nome: string;
+  cidade: string;
+  uf: string;
+};
+
+type AuditorCondominioRow = {
+  auditor_id: string;
+  condominio_id: string;
+  created_at: string;
+};
+
 function norm(v: any) {
   return String(v ?? "").trim();
 }
@@ -34,29 +53,33 @@ export async function GET() {
   const r = await sb.from("auditor_condominios").select("auditor_id,condominio_id,created_at");
   if (r.error) return NextResponse.json({ error: r.error.message }, { status: 500 });
 
-  const rows = (r.data ?? []) as Array<{ auditor_id: string; condominio_id: string; created_at: string }>;
+  const rows = (r.data ?? []) as AuditorCondominioRow[];
 
   const auditorIds = Array.from(new Set(rows.map((x) => x.auditor_id).filter(Boolean)));
   const condoIds = Array.from(new Set(rows.map((x) => x.condominio_id).filter(Boolean)));
 
-  const [p, c] = await Promise.all([
+  const [pRes, cRes] = await Promise.all([
     auditorIds.length
       ? sb.from("profiles").select("id,email,role").in("id", auditorIds)
-      : Promise.resolve({ data: [], error: null } as any),
+      : Promise.resolve({ data: [] as ProfileRow[], error: null as any }),
     condoIds.length
       ? sb.from("condominios").select("id,nome,cidade,uf").in("id", condoIds)
-      : Promise.resolve({ data: [], error: null } as any),
+      : Promise.resolve({ data: [] as CondominioRow[], error: null as any }),
   ]);
 
-  if (p.error) return NextResponse.json({ error: p.error.message }, { status: 500 });
-  if (c.error) return NextResponse.json({ error: c.error.message }, { status: 500 });
+  if (pRes.error) return NextResponse.json({ error: pRes.error.message }, { status: 500 });
+  if (cRes.error) return NextResponse.json({ error: cRes.error.message }, { status: 500 });
 
-  const profById = new Map((p.data ?? []).map((x: any) => [x.id, x]));
-  const condoById = new Map((c.data ?? []).map((x: any) => [x.id, x]));
+  const profiles = (pRes.data ?? []) as ProfileRow[];
+  const condominios = (cRes.data ?? []) as CondominioRow[];
+
+  const profById = new Map<string, ProfileRow>(profiles.map((x) => [x.id, x]));
+  const condoById = new Map<string, CondominioRow>(condominios.map((x) => [x.id, x]));
 
   const out = rows.map((x) => {
-    const prof = profById.get(x.auditor_id);
-    const condo = condoById.get(x.condominio_id);
+    const prof = profById.get(x.auditor_id) ?? null;
+    const condo = condoById.get(x.condominio_id) ?? null;
+
     return {
       auditor_id: x.auditor_id,
       condominio_id: x.condominio_id,
@@ -85,8 +108,7 @@ export async function POST(req: Request) {
 
   const sb = supabaseAdmin();
 
-  // ✅ REGRA: 1 condomínio = 1 auditor (SUBSTITUI AUTOMATICAMENTE)
-  // Com seu índice único em (condominio_id), o certo é UPSERT por condominio_id.
+  // ✅ 1 condomínio = 1 auditor (substitui automaticamente)
   const r = await sb
     .from("auditor_condominios")
     .upsert({ condominio_id, auditor_id }, { onConflict: "condominio_id" })
