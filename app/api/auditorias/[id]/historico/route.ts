@@ -39,10 +39,10 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: "Auditoria não encontrada." }, { status: 404 });
     }
 
-    // logs: colunas reais
+    // logs: colunas reais da tabela auditoria_status_logs
     const { data: logs, error: logErr } = await supabase
       .from("auditoria_status_logs")
-      .select("id, auditoria_id, de_status, para_status, user_id, created_at")
+      .select("id, auditoria_id, from_status, to_status, actor_id, actor_role, note, created_at")
       .eq("auditoria_id", auditoriaId)
       .order("created_at", { ascending: false });
 
@@ -52,7 +52,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     // busca emails/roles no profiles (sem FK, via IN)
     const userIds = Array.from(
-      new Set((logs ?? []).map((l: any) => l.user_id).filter(Boolean))
+      new Set((logs ?? []).map((l: any) => l.actor_id).filter(Boolean))
     ) as string[];
 
     let byId = new Map<string, { email: string | null; role: Role | null }>();
@@ -63,7 +63,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
         .select("id, email, role")
         .in("id", userIds);
 
-      // Se der erro por RLS, só cai no fallback (mostra user_id mesmo)
+      // Se der erro por RLS, só cai no fallback (mostra actor_id mesmo)
       if (!profErr && Array.isArray(profs)) {
         byId = new Map(
           profs.map((p: any) => [
@@ -75,17 +75,18 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     }
 
     const data = (logs ?? []).map((l: any) => {
-      const actor = byId.get(l.user_id) ?? null;
+      const actor = byId.get(l.actor_id) ?? null;
       return {
         id: l.id,
         auditoria_id: l.auditoria_id,
-        de_status: l.de_status,
-        para_status: l.para_status,
+        from_status: l.from_status,
+        to_status: l.to_status,
+        note: l.note ?? null,
         created_at: l.created_at,
         actor: {
-          id: l.user_id,
+          id: l.actor_id,
           email: actor?.email ?? null,
-          role: actor?.role ?? null,
+          role: actor?.role ?? ((l.actor_role ?? null) as Role | null),
         },
       };
     });
