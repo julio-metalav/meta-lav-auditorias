@@ -13,10 +13,10 @@ function roleGte(role: Role | null, min: Role) {
 
 type Schema = {
   table: string;
-  condoCol: string; // condominio_id
-  monthCol: string; // mes_ref ou ano_mes
-  auditorCol: string; // auditor_id
-  statusCol: string; // status
+  condoCol: string;
+  monthCol: string;
+  auditorCol: string;
+  statusCol: string;
 };
 
 async function detectSchema(admin: ReturnType<typeof supabaseAdmin>): Promise<Schema> {
@@ -48,66 +48,64 @@ function pickMonthISO(row: any, sch: Schema) {
   return raw ? String(raw) : null;
 }
 
-function validMonthISO(s: string) {
-  return /^\d{4}-\d{2}-01$/.test(s);
-}
-
 export async function GET() {
   const ctx = await getUserAndRole();
-  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  if (!ctx?.user) {
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  }
 
   const role = (ctx.role ?? null) as Role | null;
   const isAuditor = role === "auditor";
   const isStaff = roleGte(role, "interno");
-  if (!isAuditor && !isStaff) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+
+  if (!isAuditor && !isStaff) {
+    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  }
 
   const admin = supabaseAdmin();
   const sch = await detectSchema(admin);
 
-  // 🔒 Auditor só vê auditorias dos condomínios atribuídos (auditor_condominios)
-  let filtroCondoIds: string[] | null = null;
+  let q = admin
+    .from(sch.table)
+    .select("*")
+    .order(sch.monthCol, { ascending: false });
 
+  // ✅ REGRA FINAL:
+  // Auditor vê:
+  // - auditorias SEM auditor (fila aberta)
+  // - auditorias atribuídas A ELE
+  // Não vê auditorias atribuídas a outros
   if (isAuditor && !isStaff) {
-    const { data: atribuicoes, error: atrErr } = await admin
-      .from("auditor_condominios")
-      .select("condominio_id")
-      .eq("auditor_id", ctx.user.id);
-
-    if (atrErr) return NextResponse.json({ error: "Falha ao buscar atribuições", details: atrErr.message }, { status: 500 });
-
-    const ids = (atribuicoes ?? []).map((x: any) => x.condominio_id).filter(Boolean);
-    filtroCondoIds = ids.length ? ids : [];
-  }
-
-  let q = admin.from(sch.table).select("*").order(sch.monthCol, { ascending: false });
-
-  if (filtroCondoIds) {
-    // auditor sem atribuição => lista vazia
-    if (filtroCondoIds.length === 0) return NextResponse.json({ data: [] });
-    q = q.in(sch.condoCol, filtroCondoIds);
+    q = q.or(
+      `${sch.auditorCol}.is.null,${sch.auditorCol}.eq.${ctx.user.id}`
+    );
   }
 
   const { data: rows, error } = await q;
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 400 });
+  }
 
   const list = rows ?? [];
-  const condoIds = Array.from(new Set(list.map((r: any) => r[sch.condoCol]).filter(Boolean)));
-  const auditorIds = Array.from(new Set(list.map((r: any) => r[sch.auditorCol]).filter(Boolean)));
 
-  const [{ data: condos, error: condoErr }, { data: profs, error: profErr }] = await Promise.all([
+  const condoIds = Array.from(
+    new Set(list.map((r: any) => r[sch.condoCol]).filter(Boolean))
+  );
+  const auditorIds = Array.from(
+    new Set(list.map((r: any) => r[sch.auditorCol]).filter(Boolean))
+  );
+
+  const [{ data: condos }, { data: profs }] = await Promise.all([
     condoIds.length
       ? admin.from("condominios").select("id,nome,cidade,uf").in("id", condoIds)
-      : Promise.resolve({ data: [] as any[], error: null as any }),
+      : Promise.resolve({ data: [] }),
     auditorIds.length
       ? admin.from("profiles").select("id,email,role").in("id", auditorIds)
-      : Promise.resolve({ data: [] as any[], error: null as any }),
+      : Promise.resolve({ data: [] }),
   ]);
 
-  if (condoErr) return NextResponse.json({ error: condoErr.message }, { status: 400 });
-  if (profErr) return NextResponse.json({ error: profErr.message }, { status: 400 });
-
-  const condoMap = new Map<string, any>((condos ?? []).map((c: any) => [c.id, c]));
-  const profMap = new Map<string, any>((profs ?? []).map((p: any) => [p.id, p]));
+  const condoMap = new Map((condos ?? []).map((c: any) => [c.id, c]));
+  const profMap = new Map((profs ?? []).map((p: any) => [p.id, p]));
 
   const normalized = list.map((r: any) => {
     const condominio_id = r[sch.condoCol];
@@ -125,55 +123,4 @@ export async function GET() {
   });
 
   return NextResponse.json({ data: normalized });
-}
-
-export async function POST(req: Request) {
-  const ctx = await getUserAndRole();
-  if (!ctx?.user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-
-  const role = (ctx.role ?? null) as Role | null;
-  if (!roleGte(role, "interno")) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
-
-  const admin = supabaseAdmin();
-  const sch = await detectSchema(admin);
-
-  const body = await req.json().catch(() => ({}));
-
-  const condominio_id = String(body?.condominio_id ?? "").trim();
-  const mes_ref = String(body?.mes_ref ?? body?.ano_mes ?? "").trim();
-  const status = normalizeStatus(body?.status ?? "aberta");
-
-  if (!condominio_id) {
-    return NextResponse.json({ error: "condominio_id é obrigatório" }, { status: 400 });
-  }
-  if (!mes_ref || !validMonthISO(mes_ref)) {
-    return NextResponse.json({ error: "mes_ref inválido. Use YYYY-MM-01" }, { status: 400 });
-  }
-
-  const insertRow: any = {
-    [sch.condoCol]: condominio_id,
-    [sch.monthCol]: mes_ref,
-    [sch.statusCol]: status,
-  };
-
-  if (body?.auditor_id) {
-    insertRow[sch.auditorCol] = String(body.auditor_id).trim();
-  }
-
-  const { data: existing, error: exErr } = await admin
-    .from(sch.table)
-    .select("id")
-    .eq(sch.condoCol, condominio_id)
-    .eq(sch.monthCol, mes_ref)
-    .maybeSingle();
-
-  if (exErr) return NextResponse.json({ error: exErr.message }, { status: 400 });
-  if (existing?.id) {
-    return NextResponse.json({ error: "Já existe auditoria para este condomínio e mês" }, { status: 409 });
-  }
-
-  const { data, error } = await admin.from(sch.table).insert(insertRow).select("*").maybeSingle();
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-
-  return NextResponse.json({ data });
 }
