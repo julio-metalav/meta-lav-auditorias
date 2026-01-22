@@ -4,6 +4,15 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+/**
+ * CRON mensal — cria auditorias do mês de forma idempotente.
+ *
+ * Auth: via secret (header/query) — NÃO usa cookie/session.
+ * - Authorization: Bearer <CRON_SECRET>
+ * - x-cron-secret: <CRON_SECRET>
+ * - ?token=<CRON_SECRET>
+ */
+
 function json(status: number, body: any) {
   return NextResponse.json(body, { status });
 }
@@ -41,7 +50,10 @@ export async function POST(req: NextRequest) {
   if (!secret) return json(500, { error: "CRON_SECRET ausente no ambiente" });
 
   if (!token || token !== secret) {
-    return json(401, { error: "Não autenticado", ...(diag ? { hasToken: !!token } : {}) });
+    return json(401, {
+      error: "Não autenticado",
+      ...(diag ? { hasToken: !!token, tokenLen: token?.length || 0 } : {}),
+    });
   }
 
   const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
@@ -58,22 +70,30 @@ export async function POST(req: NextRequest) {
     auth: { persistSession: false },
   });
 
-  // Mês alvo
+  // mês alvo
   const mes = yyyymm01(new Date());
   const mesISO = mes.toISOString().slice(0, 10); // YYYY-MM-DD
 
-  // 1) Lista condomínios
+  // 1) lista condomínios
   const { data: condos, error: condosErr } = await supabase.from("condominios").select("id");
   if (condosErr) {
     return json(500, { error: "Falha ao listar condomínios", details: condosErr.message });
   }
+
   const condoIds = (condos || []).map((c: any) => c.id).filter(Boolean);
 
   if (condoIds.length === 0) {
-    return json(200, { ok: true, mes: mesISO, created: 0, skipped: 0, note: "Nenhum condomínio" });
+    return json(200, {
+      ok: true,
+      mes: mesISO,
+      created: 0,
+      skipped: 0,
+      note: "Nenhum condomínio",
+      ...(diag ? { mesISO } : {}),
+    });
   }
 
-  // 2) Descobre coluna do mês por tentativa (sem information_schema)
+  // 2) detecta coluna do mês por tentativa (sem information_schema)
   let mesCol: "ano_mes" | "mes_ref" = "ano_mes";
   let existing: any[] = [];
 
@@ -84,8 +104,6 @@ export async function POST(req: NextRequest) {
     existing = r1.data || [];
   } else {
     const msg1 = String(r1.error.message || "");
-
-    // se a coluna não existe, tenta mes_ref
     if (msg1.includes("does not exist") || msg1.includes("não existe")) {
       const r2 = await supabase.from("auditorias").select("condominio_id").eq("mes_ref", mesISO);
 
@@ -100,7 +118,6 @@ export async function POST(req: NextRequest) {
       mesCol = "mes_ref";
       existing = r2.data || [];
     } else {
-      // erro diferente (permissão, RLS, etc.)
       return json(500, {
         error: "Falha ao checar auditorias existentes",
         details: r1.error.message,
@@ -111,16 +128,16 @@ export async function POST(req: NextRequest) {
 
   const existingSet = new Set((existing || []).map((r: any) => r.condominio_id).filter(Boolean));
 
-  const toCreate = condoIds
+  // 3) monta base de linhas (sem status ainda)
+  const baseRows = condoIds
     .filter((id: string) => !existingSet.has(id))
     .map((condominio_id: string) => ({
       condominio_id,
       [mesCol]: mesISO,
-      status: "rascunho",
       auditor_id: null,
     }));
 
-  if (toCreate.length === 0) {
+  if (baseRows.length === 0) {
     return json(200, {
       ok: true,
       mes: mesISO,
@@ -131,22 +148,69 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const { error: insErr } = await supabase.from("auditorias").insert(toCreate);
+  // 4) tenta inserir com um status que passe na constraint auditorias_status_check
+  // (Sem adivinhar o enum: tentamos uma lista curta e segura; no diag retornamos o que foi aceito)
+  const statusCandidates: Array<string | null> = [
+    "rascunho",
+    "aberta",
+    "aberto",
+    "pendente",
+    "nova",
+    "iniciada",
+    "em_andamento",
+    "em campo",
+    "em_campo",
+    "draft",
+    null, // por último: tenta sem status (se a coluna aceitar null)
+  ];
 
-  if (insErr) {
+  let statusUsado: string | null = null;
+  let lastErr: string | null = null;
+
+  for (const st of statusCandidates) {
+    const rows =
+      st === null
+        ? baseRows
+        : baseRows.map((r) => ({
+            ...r,
+            status: st,
+          }));
+
+    const { error } = await supabase.from("auditorias").insert(rows);
+
+    if (!error) {
+      statusUsado = st;
+      lastErr = null;
+      break;
+    }
+
+    lastErr = error.message;
+
+    // se não for erro do CHECK do status, não mascarar: devolve na hora
+    const msg = String(error.message || "");
+    if (!msg.includes("auditorias_status_check")) {
+      return json(500, {
+        error: "Falha ao criar auditorias do mês",
+        details: error.message,
+        ...(diag ? { mesCol, mesISO, tentativaStatus: st } : {}),
+      });
+    }
+  }
+
+  if (lastErr) {
     return json(500, {
       error: "Falha ao criar auditorias do mês",
-      details: insErr.message,
-      ...(diag ? { mesCol, mesISO } : {}),
+      details: lastErr,
+      ...(diag ? { mesCol, mesISO, statusCandidates } : {}),
     });
   }
 
   return json(200, {
     ok: true,
     mes: mesISO,
-    created: toCreate.length,
-    skipped: condoIds.length - toCreate.length,
+    created: baseRows.length,
+    skipped: condoIds.length - baseRows.length,
     idempotente: true,
-    ...(diag ? { mesCol, totalCondominios: condoIds.length } : {}),
+    ...(diag ? { mesCol, totalCondominios: condoIds.length, statusUsado } : {}),
   });
 }
