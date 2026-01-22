@@ -164,6 +164,110 @@ async function fetchJSON(input: RequestInfo, init?: RequestInit) {
   return json;
 }
 
+/* =========================
+   UI helpers (só visual)
+   Troque as cores aqui depois (Meta-Lav)
+========================= */
+const BRAND = {
+  primary: "#104774",     // Azul Meta-Lav
+  primaryDark: "#0D3A60", // Azul mais escuro (hover)
+  ink: "#0B2B24",
+  accent: "#F79232",      // Laranja Meta-Lav (se quiser usar depois)
+  aqua: "#1BABCD",        // Azul claro (água)
+};
+
+
+function cx(...xs: Array<string | false | null | undefined>) {
+  return xs.filter(Boolean).join(" ");
+}
+
+function Badge({ children, tone = "neutral" }: { children: any; tone?: "neutral" | "success" | "warn" | "danger" | "brand" }) {
+  const cls =
+    tone === "success"
+      ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+      : tone === "warn"
+      ? "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+      : tone === "danger"
+      ? "bg-red-50 text-red-700 ring-1 ring-red-200"
+      : tone === "brand"
+      ? "bg-[color:var(--ml-primary-50)] text-[color:var(--ml-primary)] ring-1 ring-[color:var(--ml-primary-200)]"
+      : "bg-gray-50 text-gray-700 ring-1 ring-gray-200";
+
+  return <span className={cx("inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold", cls)}>{children}</span>;
+}
+
+function Section({
+  title,
+  subtitle,
+  right,
+  children,
+}: {
+  title: string;
+  subtitle?: any;
+  right?: any;
+  children: any;
+}) {
+  return (
+    <div className="rounded-3xl border border-gray-100 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-gray-100 px-5 py-4 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="text-base font-semibold text-gray-900">{title}</div>
+          {subtitle ? <div className="mt-1 text-sm text-gray-600">{subtitle}</div> : null}
+        </div>
+        {right ? <div className="flex flex-wrap items-center gap-2">{right}</div> : null}
+      </div>
+      <div className="px-5 py-5">{children}</div>
+    </div>
+  );
+}
+
+function Btn({
+  children,
+  onClick,
+  disabled,
+  variant = "secondary",
+  title,
+  as = "button",
+  href,
+  target,
+  rel,
+}: {
+  children: any;
+  onClick?: () => void;
+  disabled?: boolean;
+  variant?: "brand" | "secondary" | "danger";
+  title?: string;
+  as?: "button" | "a";
+  href?: string;
+  target?: string;
+  rel?: string;
+}) {
+  const base =
+    "inline-flex items-center justify-center rounded-2xl px-4 py-2 text-sm font-semibold shadow-sm transition active:scale-[0.99] focus:outline-none focus:ring-2 focus:ring-offset-2";
+  const v =
+    variant === "brand"
+      ? "bg-[color:var(--ml-primary)] text-white hover:bg-[color:var(--ml-primary-dark)] focus:ring-[color:var(--ml-primary)]"
+      : variant === "danger"
+      ? "bg-red-600 text-white hover:bg-red-700 focus:ring-red-600"
+      : "border border-gray-200 bg-white text-gray-800 hover:bg-gray-50 focus:ring-gray-300";
+
+  const cls = cx(base, v, disabled && "opacity-60 pointer-events-none");
+
+  if (as === "a") {
+    return (
+      <a className={cls} href={href} target={target} rel={rel} title={title}>
+        {children}
+      </a>
+    );
+  }
+
+  return (
+    <button className={cls} onClick={onClick} disabled={disabled} title={title}>
+      {children}
+    </button>
+  );
+}
+
 export default function InternoAuditoriaPage({ params }: { params: { id: string } }) {
   const id = params.id;
 
@@ -192,6 +296,9 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   const [uploadingComprovante, setUploadingComprovante] = useState(false);
   const [finalizando, setFinalizando] = useState(false);
 
+  // feedback visual (sem mudar lógica)
+  const [toast, setToast] = useState<{ type: "ok" | "warn" | "err"; msg: string } | null>(null);
+
   const role = me?.role ?? null;
   const isStaff = role === "interno" || role === "gestor";
 
@@ -202,6 +309,12 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  function showToast(type: "ok" | "warn" | "err", msg: string) {
+    setToast({ type, msg });
+    window.clearTimeout((showToast as any)._t);
+    (showToast as any)._t = window.setTimeout(() => setToast(null), 3500);
+  }
 
   async function carregar() {
     setLoading(true);
@@ -289,9 +402,11 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
       setNeedBase(false);
       setBaseEditMode(false);
+      showToast("ok", "Base salva.");
       await carregar();
     } catch (e: any) {
       setErr(e?.message ?? "Erro inesperado ao salvar base");
+      showToast("err", "Falha ao salvar base.");
     } finally {
       setSavingBase(false);
     }
@@ -348,8 +463,10 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       setCiclos(normalized);
       setCiclosOrig(normalized);
       setCiclosEditMode(false);
+      showToast("ok", "Ciclos salvos.");
     } catch (e: any) {
       setErr(e?.message ?? String(e));
+      showToast("err", "Falha ao salvar ciclos.");
     } finally {
       setSavingCiclos(false);
     }
@@ -392,9 +509,11 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "Falha ao enviar comprovante");
 
+      showToast("ok", "Comprovante anexado.");
       await carregar();
     } catch (e: any) {
       setErr(e?.message ?? "Erro ao enviar comprovante");
+      showToast("err", "Falha ao anexar comprovante.");
     } finally {
       setUploadingComprovante(false);
     }
@@ -410,8 +529,10 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ fechamento_obs: String(fechamentoObs ?? "") }),
       });
+      showToast("ok", "Observação salva.");
     } catch (e: any) {
       setErr(e?.message ?? "Erro ao salvar observação");
+      showToast("err", "Falha ao salvar observação.");
     }
   }
 
@@ -546,9 +667,11 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
       }
 
       await fetchJSON(`/api/auditorias/${audId}/finalizar`, { method: "POST" });
+      showToast("ok", "Auditoria finalizada.");
       await carregar();
     } catch (e: any) {
       setErr(e?.message ?? "Erro ao finalizar");
+      showToast("err", "Falha ao finalizar auditoria.");
     } finally {
       setFinalizando(false);
     }
@@ -563,6 +686,15 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     return s ?? "-";
   }
 
+  function statusTone(s?: string | null): "brand" | "neutral" | "success" | "warn" | "danger" {
+    const x = toLower(s);
+    if (x === "final") return "success";
+    if (x === "aberta") return "brand";
+    if (x.includes("confer")) return "warn";
+    if (x.includes("andamento")) return "neutral";
+    return "neutral";
+  }
+
   const condNome = aud?.condominio?.nome ?? aud?.condominios?.nome ?? "—";
   const condCidadeUf =
     (aud?.condominio?.cidade ?? aud?.condominios?.cidade ?? "") && (aud?.condominio?.uf ?? aud?.condominios?.uf ?? "")
@@ -571,95 +703,111 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
 
   const bloqueadoCiclos = !isStaff || !ciclosEditMode || savingCiclos || loading || isFinal;
 
+  const toastCls =
+    toast?.type === "ok"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : toast?.type === "warn"
+      ? "border-amber-200 bg-amber-50 text-amber-800"
+      : "border-red-200 bg-red-50 text-red-800";
+
   return (
     <AppShell title="Fechamento (Interno)">
-      <div className="mx-auto max-w-5xl px-4 py-6">
-        <div className="mb-6 flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Fechamento (Interno)</h1>
-            <div className="mt-1 text-sm text-gray-600">
-              <div>
-                {condNome} - {condCidadeUf}
-              </div>
-              <div className="mt-0.5">
-                Mês: <span className="font-medium">{mesRef}</span> — Anterior: <span className="font-medium">{mesPrev}</span> — Status:{" "}
-                <span className="font-medium">{statusLabel(aud?.status)}</span> — Pagamento:{" "}
-                <span className="font-medium">{aud?.pagamento_metodo ?? "—"}</span> — ID: <span className="font-mono text-xs">{id}</span>
+      <div
+        className="mx-auto max-w-5xl px-4 py-6"
+        style={
+          {
+            // tema Meta-Lav (ajuste os HEX acima)
+            ["--ml-primary" as any]: BRAND.primary,
+            ["--ml-primary-dark" as any]: BRAND.primaryDark,
+            ["--ml-primary-50" as any]: "#E7F0F7",
+            ["--ml-primary-200" as any]: "#B9D2E6",
+
+            ["--ml-ink" as any]: BRAND.ink,
+          } as any
+        }
+      >
+        {/* Header “bonito” */}
+        <div className="mb-6 overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-sm">
+          <div className="relative">
+            <div className="h-2 w-full bg-[color:var(--ml-primary)]" />
+            <div className="px-5 py-5">
+              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h1 className="text-2xl font-extrabold tracking-tight text-[color:var(--ml-ink)]">Fechamento (Interno)</h1>
+                    <Badge tone={statusTone(aud?.status)}>{statusLabel(aud?.status)}</Badge>
+                    {aud?.pagamento_metodo ? <Badge tone="neutral">pagamento: {aud.pagamento_metodo}</Badge> : null}
+                    {isFinal ? <Badge tone="success">final</Badge> : null}
+                  </div>
+
+                  <div className="mt-2 text-sm text-gray-600">
+                    <div className="font-semibold text-gray-900">{condNome}</div>
+                    <div className="mt-0.5">
+                      <span className="text-gray-500">{condCidadeUf}</span>
+                      <span className="mx-2 text-gray-300">•</span>
+                      <span>
+                        Mês: <span className="font-semibold">{mesRef}</span>
+                      </span>
+                      <span className="mx-2 text-gray-300">•</span>
+                      <span>
+                        Anterior: <span className="font-semibold">{mesPrev}</span>
+                      </span>
+                      <span className="mx-2 text-gray-300">•</span>
+                      <span className="font-mono text-xs text-gray-500">ID {id}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {isFinal ? (
+                    <>
+                      <Btn as="a" href={reportHtmlHref} target="_blank" rel="noreferrer" variant="secondary" title="Abrir relatório final (visualização)">
+                        Ver relatório
+                      </Btn>
+                      <Btn as="a" href={reportPdfHref} target="_blank" rel="noreferrer" variant="brand" title="Baixar PDF do relatório final">
+                        Baixar PDF
+                      </Btn>
+                    </>
+                  ) : null}
+
+                  <Btn variant="secondary" onClick={() => carregar()} disabled={loading}>
+                    Recarregar
+                  </Btn>
+                  <Btn variant="secondary" onClick={() => history.back()}>
+                    Voltar
+                  </Btn>
+                </div>
               </div>
             </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {/* ✅ Botões do relatório (somente quando FINAL) */}
-            {isFinal ? (
-              <>
-                <a
-                  href={reportHtmlHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
-                  title="Abrir relatório final (visualização)"
-                >
-                  Ver relatório
-                </a>
-                <a
-                  href={reportPdfHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-black/90"
-                  title="Baixar PDF do relatório final"
-                >
-                  Baixar PDF
-                </a>
-              </>
-            ) : null}
-
-            <button
-              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
-              onClick={() => carregar()}
-              disabled={loading}
-            >
-              Recarregar
-            </button>
-            <button
-              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
-              onClick={() => history.back()}
-            >
-              Voltar
-            </button>
           </div>
         </div>
 
-        {err ? <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div> : null}
+        {/* Toast/Alert */}
+        {toast ? <div className={cx("mb-4 rounded-2xl border px-4 py-3 text-sm font-semibold", toastCls)}>{toast.msg}</div> : null}
+        {err ? <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div> : null}
 
         {/* Comprovante + obs */}
-        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div>
-              <div className="text-base font-semibold text-gray-900">Comprovante de fechamento</div>
-              <div className="mt-1 text-sm text-gray-600">
-                {exigeComprovante ? (
-                  <>Pagamento direto: anexe o comprovante (PDF ou imagem) para conseguir finalizar.</>
-                ) : (
-                  <>Boleto: pode finalizar sem comprovante (pagamento será feito depois).</>
-                )}{" "}
-                {aud?.comprovante_fechamento_url ? (
-                  <span className="ml-2 inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">
-                    anexado
-                  </span>
-                ) : (
-                  <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
-                    pendente
-                  </span>
-                )}
-              </div>
-            </div>
-
+        <Section
+          title="Comprovante de fechamento"
+          subtitle={
             <div className="flex flex-wrap items-center gap-2">
+              {exigeComprovante ? (
+                <span>Pagamento direto: anexe o comprovante (PDF ou imagem) para conseguir finalizar.</span>
+              ) : (
+                <span>Boleto: pode finalizar sem comprovante (pagamento será feito depois).</span>
+              )}
+              {aud?.comprovante_fechamento_url ? <Badge tone="success">anexado</Badge> : <Badge tone="warn">pendente</Badge>}
+            </div>
+          }
+          right={
+            <>
               <label
-                className={`cursor-pointer rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50 ${
-                  isFinal ? "opacity-60 pointer-events-none" : ""
-                }`}
+                className={cx(
+                  "cursor-pointer",
+                  "inline-flex items-center justify-center rounded-2xl px-4 py-2 text-sm font-semibold shadow-sm transition active:scale-[0.99] focus:outline-none focus:ring-2 focus:ring-offset-2",
+                  "border border-gray-200 bg-white text-gray-800 hover:bg-gray-50 focus:ring-gray-300",
+                  isFinal && "opacity-60 pointer-events-none"
+                )}
               >
                 {uploadingComprovante ? "Enviando..." : "Anexar comprovante"}
                 <input
@@ -675,20 +823,16 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
                 />
               </label>
 
-              <button
-                className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600 disabled:opacity-60"
-                onClick={() => finalizarAuditoria()}
-                disabled={finalizando || loading || isFinal}
-              >
+              <Btn variant="brand" onClick={() => finalizarAuditoria()} disabled={finalizando || loading || isFinal} title="Finalizar auditoria">
                 {isFinal ? "Auditoria finalizada" : finalizando ? "Finalizando..." : "Finalizar auditoria"}
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-4">
+              </Btn>
+            </>
+          }
+        >
+          <div>
             <div className="text-sm font-semibold text-gray-700">Obs do financeiro (opcional)</div>
             <textarea
-              className="mt-2 w-full rounded-xl border border-gray-200 bg-white p-3 text-sm text-gray-900 shadow-sm outline-none focus:border-gray-300 disabled:bg-gray-50"
+              className="mt-2 w-full rounded-2xl border border-gray-200 bg-white p-3 text-sm text-gray-900 shadow-sm outline-none focus:border-gray-300 focus:ring-2 focus:ring-[color:var(--ml-primary-200)] disabled:bg-gray-50"
               rows={3}
               placeholder="Ex: pago via PIX em 2 parcelas / ajuste de valor / observações..."
               value={fechamentoObs}
@@ -696,301 +840,279 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
               onBlur={() => salvarObsFinanceiro()}
               disabled={isFinal}
             />
-            <div className="mt-2 text-xs text-gray-500">Se você preencher isso e anexar o comprovante, a observação vai junto.</div>
+            <div className="mt-2 text-xs text-gray-500">Dica: preencher isso antes de anexar o comprovante ajuda o financeiro.</div>
           </div>
-        </div>
+        </Section>
 
         {/* Consumo calculado */}
-        <div className="mt-6 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-base font-semibold text-gray-900">Consumo do mês (calculado)</div>
-              <div className="mt-1 text-sm text-gray-600">
-                Base: informada manualmente{" "}
-                <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-700">
-                  {needBase ? "pendente" : "travada"}
-                </span>
+        <div className="mt-6">
+          <Section
+            title="Consumo do mês (calculado)"
+            subtitle={
+              <div className="flex flex-wrap items-center gap-2">
+                <span>Base: informada manualmente.</span>
+                <Badge tone={needBase ? "warn" : "neutral"}>{needBase ? "pendente" : "travada"}</Badge>
               </div>
+            }
+            right={
+              isStaff ? (
+                <Btn variant="secondary" onClick={() => abrirModalBaseParaEditar()} disabled={isFinal}>
+                  Alterar/corrigir base
+                </Btn>
+              ) : null
+            }
+          >
+            <div className="grid gap-3 md:grid-cols-3">
+              {[
+                {
+                  label: "Água",
+                  atual: safeNumber(aud?.agua_leitura, 0),
+                  base: calculos.baseA,
+                  consumo: calculos.consumoAgua,
+                },
+                {
+                  label: "Energia",
+                  atual: safeNumber(aud?.energia_leitura, 0),
+                  base: calculos.baseE,
+                  consumo: calculos.consumoEnergia,
+                },
+                {
+                  label: "Gás",
+                  atual: safeNumber(aud?.gas_leitura, 0),
+                  base: calculos.baseG,
+                  consumo: calculos.consumoGas,
+                },
+              ].map((x) => (
+                <div key={x.label} className="rounded-3xl border border-gray-100 bg-white p-4">
+                  <div className="text-sm font-semibold text-gray-800">{x.label}</div>
+                  <div className="mt-3 grid gap-1 text-sm text-gray-700">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-500">Atual</span>
+                      <span className="font-semibold text-gray-900">{x.atual}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-500">Base</span>
+                      <span className="font-semibold text-gray-900">{x.base}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-500">Consumo</span>
+                      <span className="font-semibold text-gray-900">{x.consumo}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
 
-            {isStaff ? (
-              <button
-                className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50 disabled:opacity-60"
-                onClick={() => abrirModalBaseParaEditar()}
-                disabled={isFinal}
-              >
-                Alterar/corrigir base
-              </button>
+            {baseEditMode ? (
+              <div className="mt-5 rounded-3xl border border-gray-100 bg-[color:var(--ml-primary-50)] p-4">
+                <div className="text-sm font-semibold text-[color:var(--ml-ink)]">Editar base (manual)</div>
+
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  <div>
+                    <label className="text-xs font-semibold text-gray-700">Base água</label>
+                    <input
+                      className="mt-1 w-full rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:ring-2 focus:ring-[color:var(--ml-primary-200)] disabled:bg-gray-50"
+                      value={baseAgua}
+                      onChange={(e) => setBaseAgua(e.target.value)}
+                      inputMode="decimal"
+                      disabled={isFinal}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-gray-700">Base energia</label>
+                    <input
+                      className="mt-1 w-full rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:ring-2 focus:ring-[color:var(--ml-primary-200)] disabled:bg-gray-50"
+                      value={baseEnergia}
+                      onChange={(e) => setBaseEnergia(e.target.value)}
+                      inputMode="decimal"
+                      disabled={isFinal}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-gray-700">Base gás</label>
+                    <input
+                      className="mt-1 w-full rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:ring-2 focus:ring-[color:var(--ml-primary-200)] disabled:bg-gray-50"
+                      value={baseGas}
+                      onChange={(e) => setBaseGas(e.target.value)}
+                      inputMode="decimal"
+                      disabled={isFinal}
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <Btn variant="brand" onClick={() => salvarBaseManual()} disabled={savingBase || isFinal}>
+                    {savingBase ? "Salvando..." : "Salvar base"}
+                  </Btn>
+
+                  <Btn
+                    variant="secondary"
+                    onClick={() => {
+                      setBaseEditMode(false);
+                      setNeedBase(false);
+                      carregar();
+                    }}
+                    disabled={savingBase}
+                  >
+                    Cancelar
+                  </Btn>
+                </div>
+              </div>
             ) : null}
-          </div>
-
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <div className="rounded-2xl border border-gray-100 bg-white p-4">
-              <div className="text-sm font-semibold text-gray-700">Água</div>
-              <div className="mt-2 text-sm text-gray-700">
-                Atual: <span className="font-semibold">{safeNumber(aud?.agua_leitura, 0)}</span>
-              </div>
-              <div className="text-sm text-gray-700">
-                Base: <span className="font-semibold">{calculos.baseA}</span>
-              </div>
-              <div className="text-sm text-gray-700">
-                Consumo: <span className="font-semibold">{calculos.consumoAgua}</span>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-gray-100 bg-white p-4">
-              <div className="text-sm font-semibold text-gray-700">Energia</div>
-              <div className="mt-2 text-sm text-gray-700">
-                Atual: <span className="font-semibold">{safeNumber(aud?.energia_leitura, 0)}</span>
-              </div>
-              <div className="text-sm text-gray-700">
-                Base: <span className="font-semibold">{calculos.baseE}</span>
-              </div>
-              <div className="text-sm text-gray-700">
-                Consumo: <span className="font-semibold">{calculos.consumoEnergia}</span>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-gray-100 bg-white p-4">
-              <div className="text-sm font-semibold text-gray-700">Gás</div>
-              <div className="mt-2 text-sm text-gray-700">
-                Atual: <span className="font-semibold">{safeNumber(aud?.gas_leitura, 0)}</span>
-              </div>
-              <div className="text-sm text-gray-700">
-                Base: <span className="font-semibold">{calculos.baseG}</span>
-              </div>
-              <div className="text-sm text-gray-700">
-                Consumo: <span className="font-semibold">{calculos.consumoGas}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Editor de base */}
-          {baseEditMode ? (
-            <div className="mt-5 rounded-2xl border border-gray-100 bg-gray-50 p-4">
-              <div className="text-sm font-semibold text-gray-800">Editar base (manual)</div>
-
-              <div className="mt-3 grid gap-3 md:grid-cols-3">
-                <div>
-                  <label className="text-xs font-semibold text-gray-700">Base água</label>
-                  <input
-                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm disabled:bg-gray-50"
-                    value={baseAgua}
-                    onChange={(e) => setBaseAgua(e.target.value)}
-                    inputMode="decimal"
-                    disabled={isFinal}
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-semibold text-gray-700">Base energia</label>
-                  <input
-                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm disabled:bg-gray-50"
-                    value={baseEnergia}
-                    onChange={(e) => setBaseEnergia(e.target.value)}
-                    inputMode="decimal"
-                    disabled={isFinal}
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-semibold text-gray-700">Base gás</label>
-                  <input
-                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm disabled:bg-gray-50"
-                    value={baseGas}
-                    onChange={(e) => setBaseGas(e.target.value)}
-                    inputMode="decimal"
-                    disabled={isFinal}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-4 flex items-center gap-2">
-                <button
-                  className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
-                  onClick={() => salvarBaseManual()}
-                  disabled={savingBase || isFinal}
-                >
-                  {savingBase ? "Salvando..." : "Salvar base"}
-                </button>
-
-                <button
-                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
-                  onClick={() => {
-                    setBaseEditMode(false);
-                    setNeedBase(false);
-                    carregar();
-                  }}
-                  disabled={savingBase}
-                >
-                  Cancelar
-                </button>
-              </div>
-            </div>
-          ) : null}
+          </Section>
         </div>
 
         {/* Ciclos */}
-        <div className="mt-6 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-base font-semibold text-gray-900">Ciclos (categoria + capacidade)</div>
-              <div className="mt-1 text-sm text-gray-600">
-                O Interno lança ciclos por <span className="font-semibold">Lavadora/Secadora</span> e{" "}
-                <span className="font-semibold">10/15kg</span>.
-                <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-700">
-                  {ciclosEditMode ? "editando" : "travado"}
+        <div className="mt-6">
+          <Section
+            title="Ciclos (categoria + capacidade)"
+            subtitle={
+              <div className="flex flex-wrap items-center gap-2">
+                <span>
+                  Lançar ciclos por <span className="font-semibold">Lavadora/Secadora</span> e <span className="font-semibold">10/15kg</span>.
                 </span>
+                <Badge tone={ciclosEditMode ? "brand" : "neutral"}>{ciclosEditMode ? "editando" : "travado"}</Badge>
               </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {!ciclosEditMode ? (
-                <button
-                  className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50 disabled:opacity-60"
-                  onClick={() => setCiclosEditMode(true)}
-                  disabled={!isStaff || loading || isFinal}
-                >
+            }
+            right={
+              !ciclosEditMode ? (
+                <Btn variant="secondary" onClick={() => setCiclosEditMode(true)} disabled={!isStaff || loading || isFinal}>
                   Editar
-                </button>
+                </Btn>
               ) : (
                 <>
-                  <button
-                    className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
-                    onClick={() => cancelarEdicaoCiclos()}
-                    disabled={savingCiclos}
-                  >
+                  <Btn variant="secondary" onClick={() => cancelarEdicaoCiclos()} disabled={savingCiclos}>
                     Cancelar
-                  </button>
-
-                  <button
-                    className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
-                    onClick={() => salvarCiclos()}
-                    disabled={savingCiclos || isFinal}
-                  >
+                  </Btn>
+                  <Btn variant="brand" onClick={() => salvarCiclos()} disabled={savingCiclos || isFinal}>
                     {savingCiclos ? "Salvando..." : "Salvar ciclos"}
-                  </button>
+                  </Btn>
                 </>
-              )}
-            </div>
-          </div>
+              )
+            }
+          >
+            <div className="overflow-hidden rounded-3xl border border-gray-100">
+              <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
+                <div className="col-span-6">Tipo</div>
+                <div className="col-span-3 text-right">Valor ciclo</div>
+                <div className="col-span-3 text-right">Ciclos</div>
+              </div>
 
-          <div className="mt-4 overflow-hidden rounded-2xl border border-gray-100">
-            <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
-              <div className="col-span-6">Tipo</div>
-              <div className="col-span-3 text-right">Valor ciclo</div>
-              <div className="col-span-3 text-right">Ciclos</div>
-            </div>
+              <div className="divide-y divide-gray-100">
+                {(ciclos ?? []).length === 0 ? (
+                  <div className="px-4 py-4 text-sm text-gray-600">Lista de ciclos vazia.</div>
+                ) : (
+                  (ciclos ?? []).map((it, idx) => {
+                    const key = `${String(it.categoria ?? "x")}-${String(it.capacidade_kg ?? "x")}`;
+                    return (
+                      <div key={key} className="grid grid-cols-12 items-center px-4 py-3">
+                        <div className="col-span-6">
+                          <div className="text-sm font-semibold text-gray-900">{cicloLabel(it)}</div>
+                          <div className="text-xs text-gray-500">
+                            categoria: {String(it.categoria ?? "—")} — capacidade: {it.capacidade_kg ? `${it.capacidade_kg}kg` : "—"}
+                          </div>
+                        </div>
 
-            <div className="divide-y divide-gray-100">
-              {(ciclos ?? []).length === 0 ? (
-                <div className="px-4 py-4 text-sm text-gray-600">Lista de ciclos vazia.</div>
-              ) : (
-                (ciclos ?? []).map((it, idx) => {
-                  const key = `${String(it.categoria ?? "x")}-${String(it.capacidade_kg ?? "x")}`;
-                  return (
-                    <div key={key} className="grid grid-cols-12 items-center px-4 py-3">
-                      <div className="col-span-6">
-                        <div className="text-sm font-semibold text-gray-900">{cicloLabel(it)}</div>
-                        <div className="text-xs text-gray-500">
-                          categoria: {String(it.categoria ?? "—")} — capacidade: {it.capacidade_kg ? `${it.capacidade_kg}kg` : "—"}
+                        <div className="col-span-3 text-right text-sm font-semibold text-gray-900">
+                          {it.valor_ciclo !== null && it.valor_ciclo !== undefined ? moneyBRL(Number(it.valor_ciclo)) : "—"}
+                        </div>
+
+                        <div className="col-span-3 flex justify-end">
+                          <input
+                            className="w-28 rounded-2xl border border-gray-200 bg-white px-3 py-2 text-right text-sm shadow-sm outline-none focus:ring-2 focus:ring-[color:var(--ml-primary-200)] disabled:bg-gray-50"
+                            value={String(it.ciclos ?? 0)}
+                            disabled={bloqueadoCiclos}
+                            inputMode="numeric"
+                            onChange={(e) => {
+                              const v = e.target.value.replace(/[^\d]/g, "");
+                              const n = v ? Number(v) : 0;
+                              setCiclos((prev) => prev.map((p, j) => (j === idx ? { ...p, ciclos: n } : p)));
+                            }}
+                          />
                         </div>
                       </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
 
-                      <div className="col-span-3 text-right text-sm font-semibold text-gray-900">
-                        {it.valor_ciclo !== null && it.valor_ciclo !== undefined ? moneyBRL(Number(it.valor_ciclo)) : "—"}
-                      </div>
-
-                      <div className="col-span-3 flex justify-end">
-                        <input
-                          className="w-28 rounded-xl border border-gray-200 bg-white px-3 py-2 text-right text-sm shadow-sm outline-none focus:border-gray-300 disabled:bg-gray-50"
-                          value={String(it.ciclos ?? 0)}
-                          disabled={bloqueadoCiclos}
-                          inputMode="numeric"
-                          onChange={(e) => {
-                            const v = e.target.value.replace(/[^\d]/g, "");
-                            const n = v ? Number(v) : 0;
-                            setCiclos((prev) => prev.map((p, j) => (j === idx ? { ...p, ciclos: n } : p)));
-                          }}
-                        />
+            {/* Prévia financeira */}
+            <div className="mt-6 rounded-3xl border border-gray-100 bg-white p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-gray-900">Resumo financeiro (repasse + cashback)</div>
+                  <div className="mt-1 text-xs text-gray-600">
+                    Cashback = % sobre a <span className="font-semibold">receita bruta</span>. Repasse = consumo × tarifa do condomínio.
+                  </div>
+                  {relPrev.faltou_preco ? (
+                    <div className="mt-2">
+                      <Badge tone="warn">faltou valor_ciclo</Badge>
+                      <div className="mt-1 text-xs text-amber-700">
+                        A receita/cashback não será calculada até o preço vir do backend.
                       </div>
                     </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          {/* Prévia financeira */}
-          <div className="mt-6 rounded-2xl border border-gray-100 bg-white p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-gray-900">Resumo financeiro (repasse + cashback)</div>
-                <div className="mt-1 text-xs text-gray-600">
-                  Cashback = % sobre a <span className="font-semibold">receita bruta</span>. Repasse = consumo × tarifa do condomínio.
+                  ) : null}
                 </div>
-                {relPrev.faltou_preco ? (
-                  <div className="mt-2 text-xs text-amber-700">
-                    Atenção: faltou <span className="font-semibold">valor_ciclo</span> em pelo menos um item com ciclos &gt; 0. A receita/cashback não
-                    será calculada até o preço vir do backend.
+
+                <div className="rounded-3xl bg-[color:var(--ml-primary-50)] px-4 py-3 text-right">
+                  <div className="text-xs font-semibold text-gray-600">Total a pagar</div>
+                  <div className="text-lg font-extrabold text-[color:var(--ml-ink)]">
+                    {financeiro.totalPagar === null ? "—" : moneyBRL(financeiro.totalPagar)}
                   </div>
-                ) : null}
+                </div>
               </div>
 
-              <div className="text-right">
-                <div className="text-xs font-semibold text-gray-600">Total a pagar</div>
-                <div className="text-lg font-bold text-gray-900">{financeiro.totalPagar === null ? "—" : moneyBRL(financeiro.totalPagar)}</div>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-3xl border border-gray-100 p-3">
+                  <div className="text-xs font-semibold text-gray-600">Receita bruta</div>
+                  <div className="mt-1 text-sm font-semibold text-gray-900">{relPrev.receita_total === null ? "—" : moneyBRL(relPrev.receita_total)}</div>
+                  <div className="mt-1 text-xs text-gray-500">
+                    Lavadoras: {relPrev.lavadoras_ciclos} — Secadoras: {relPrev.secadoras_ciclos}
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-gray-100 p-3">
+                  <div className="text-xs font-semibold text-gray-600">Cashback</div>
+                  <div className="mt-1 text-sm text-gray-700">
+                    %: <span className="font-semibold">{Number(financeiro.cashbackPct ?? 0).toFixed(2)}%</span>
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-gray-900">{financeiro.cashback === null ? "—" : moneyBRL(financeiro.cashback)}</div>
+                </div>
+
+                <div className="rounded-3xl border border-gray-100 p-3">
+                  <div className="text-xs font-semibold text-gray-600">Repasse (insumos)</div>
+
+                  <div className="mt-1 text-xs text-gray-700">
+                    Água: <span className="font-semibold">{relPrev.consumo_agua}</span> × <span className="font-semibold">{moneyBRL(financeiro.aguaV)}</span>{" "}
+                    = <span className="font-semibold">{moneyBRL(financeiro.repAgua)}</span>
+                  </div>
+
+                  <div className="mt-1 text-xs text-gray-700">
+                    Energia: <span className="font-semibold">{relPrev.consumo_energia}</span> ×{" "}
+                    <span className="font-semibold">{moneyBRL(financeiro.energiaV)}</span> ={" "}
+                    <span className="font-semibold">{moneyBRL(financeiro.repEnergia)}</span>
+                  </div>
+
+                  <div className="mt-1 text-xs text-gray-700">
+                    Gás: <span className="font-semibold">{relPrev.consumo_gas}</span> × <span className="font-semibold">{moneyBRL(financeiro.gasV)}</span> ={" "}
+                    <span className="font-semibold">{moneyBRL(financeiro.repGas)}</span>
+                  </div>
+
+                  <div className="mt-2 text-sm font-semibold text-gray-900">Repasse total: {moneyBRL(financeiro.repasse)}</div>
+                </div>
+              </div>
+
+              <div className="mt-4 text-xs text-gray-500">
+                (Opcional) Líquido Meta-Lav = Receita — Cashback — Repasse:{" "}
+                <span className="font-semibold">{financeiro.liquidoMetaLav === null ? "—" : moneyBRL(financeiro.liquidoMetaLav)}</span>
               </div>
             </div>
-
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              <div className="rounded-2xl border border-gray-100 p-3">
-                <div className="text-xs font-semibold text-gray-600">Receita bruta</div>
-                <div className="mt-1 text-sm font-semibold text-gray-900">{relPrev.receita_total === null ? "—" : moneyBRL(relPrev.receita_total)}</div>
-                <div className="mt-1 text-xs text-gray-500">
-                  Lavadoras: {relPrev.lavadoras_ciclos} — Secadoras: {relPrev.secadoras_ciclos}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-gray-100 p-3">
-                <div className="text-xs font-semibold text-gray-600">Cashback</div>
-                <div className="mt-1 text-sm text-gray-700">
-                  %: <span className="font-semibold">{Number(financeiro.cashbackPct ?? 0).toFixed(2)}%</span>
-                </div>
-                <div className="mt-1 text-sm font-semibold text-gray-900">{financeiro.cashback === null ? "—" : moneyBRL(financeiro.cashback)}</div>
-              </div>
-
-              <div className="rounded-2xl border border-gray-100 p-3">
-                <div className="text-xs font-semibold text-gray-600">Repasse (insumos)</div>
-
-                <div className="mt-1 text-xs text-gray-700">
-                  Água: <span className="font-semibold">{relPrev.consumo_agua}</span> × <span className="font-semibold">{moneyBRL(financeiro.aguaV)}</span>{" "}
-                  = <span className="font-semibold">{moneyBRL(financeiro.repAgua)}</span>
-                </div>
-
-                <div className="mt-1 text-xs text-gray-700">
-                  Energia: <span className="font-semibold">{relPrev.consumo_energia}</span> ×{" "}
-                  <span className="font-semibold">{moneyBRL(financeiro.energiaV)}</span> ={" "}
-                  <span className="font-semibold">{moneyBRL(financeiro.repEnergia)}</span>
-                </div>
-
-                <div className="mt-1 text-xs text-gray-700">
-                  Gás: <span className="font-semibold">{relPrev.consumo_gas}</span> × <span className="font-semibold">{moneyBRL(financeiro.gasV)}</span> ={" "}
-                  <span className="font-semibold">{moneyBRL(financeiro.repGas)}</span>
-                </div>
-
-                <div className="mt-2 text-sm font-semibold text-gray-900">Repasse total: {moneyBRL(financeiro.repasse)}</div>
-              </div>
-            </div>
-
-            <div className="mt-4 text-xs text-gray-500">
-              (Opcional) Líquido Meta-Lav = Receita — Cashback — Repasse:{" "}
-              <span className="font-semibold">{financeiro.liquidoMetaLav === null ? "—" : moneyBRL(financeiro.liquidoMetaLav)}</span>
-            </div>
-          </div>
+          </Section>
         </div>
       </div>
     </AppShell>
   );
 }
-
