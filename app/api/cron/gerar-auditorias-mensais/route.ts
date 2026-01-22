@@ -1,165 +1,162 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/auth";
-import crypto from "crypto";
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
-function sha256(s: string) {
-  return crypto.createHash("sha256").update(String(s ?? ""), "utf8").digest("hex");
+/**
+ * CRON mensal — cria auditorias do mês de forma idempotente.
+ *
+ * Auth: via secret (header/query) — NÃO usa cookie/session.
+ * - Authorization: Bearer <CRON_SECRET>
+ * - x-cron-secret: <CRON_SECRET>
+ * - ?token=<CRON_SECRET>
+ */
+
+function json(status: number, body: any) {
+  return NextResponse.json(body, { status });
 }
 
-function norm(s: string | null | undefined) {
-  return String(s ?? "").trim();
-}
+function getToken(req: NextRequest) {
+  const auth = req.headers.get("authorization") || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (m?.[1]) return m[1].trim();
 
-function takeBearerOrRaw(auth: string | null) {
-  const raw = norm(auth);
-  if (!raw) return "";
-  if (raw.toLowerCase().startsWith("bearer ")) return raw.slice(7).trim();
-  return raw;
-}
+  const x = req.headers.get("x-cron-secret");
+  if (x) return x.trim();
 
-function pickReqToken(req: Request) {
   const url = new URL(req.url);
+  const q = url.searchParams.get("token");
+  if (q) return q.trim();
 
-  // 1) Authorization: Bearer TOKEN
-  const t1 = takeBearerOrRaw(req.headers.get("authorization"));
-  if (t1) return { token: t1, source: "authorization" as const };
-
-  // 2) x-cron-secret: TOKEN
-  const t2 = norm(req.headers.get("x-cron-secret"));
-  if (t2) return { token: t2, source: "x-cron-secret" as const };
-
-  // 3) ?token=TOKEN
-  const t3 = norm(url.searchParams.get("token"));
-  if (t3) return { token: t3, source: "query" as const };
-
-  return { token: "", source: "none" as const };
+  return "";
 }
 
-function pickEnvToken() {
-  // aceita CRON_SECRET = "TOKEN" ou "Bearer TOKEN"
-  const raw = norm(process.env.CRON_SECRET);
-  const token = raw.toLowerCase().startsWith("bearer ") ? raw.slice(7).trim() : raw;
-  return { raw, token };
+function yyyymm01(d: Date) {
+  const year = d.getFullYear();
+  const month = d.getMonth(); // 0-based
+  return new Date(year, month, 1);
 }
 
-function safeEq(a: string, b: string) {
-  // evita comparação “estranha” e dá resultado consistente
-  const aa = Buffer.from(String(a ?? ""), "utf8");
-  const bb = Buffer.from(String(b ?? ""), "utf8");
-  if (aa.length !== bb.length) return false;
-  return crypto.timingSafeEqual(aa, bb);
+export async function GET(req: NextRequest) {
+  return POST(req);
 }
 
-function monthISO(d = new Date()) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}-01`;
-}
+export async function POST(req: NextRequest) {
+  const secret = process.env.CRON_SECRET || "";
+  const token = getToken(req);
 
-export async function POST(req: Request) {
-  const url = new URL(req.url);
-  const wantDiag = url.searchParams.get("diag") === "1";
+  const diag = req.nextUrl.searchParams.get("diag") === "1";
 
-  const headers = {
-    "Cache-Control": "no-store, max-age=0",
-    "CDN-Cache-Control": "no-store",
-    "Vercel-CDN-Cache-Control": "no-store",
-  };
+  // build id opcional (se você quiser setar no env BUILD_SHA)
+  const build = process.env.BUILD_SHA || undefined;
 
-  const build = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local";
-
-  const envTok = pickEnvToken();
-  const reqTok = pickReqToken(req);
-
-  // --- Se quiser diag, devolve pista (sem vazar segredo em texto)
-  // (mostra apenas tamanho e hash)
-  const diagPayload = {
-    received: {
-      source: reqTok.source,
-      token_len: reqTok.token.length,
-      token_sha256: reqTok.token ? sha256(reqTok.token) : null,
-    },
-    env: {
-      cron_secret_is_set: !!norm(process.env.CRON_SECRET),
-      cron_secret_raw_len: envTok.raw.length,
-      cron_secret_token_len: envTok.token.length,
-      cron_secret_token_sha256: envTok.token ? sha256(envTok.token) : null,
-    },
-    headers_seen: {
-      has_authorization: !!norm(req.headers.get("authorization")),
-      has_x_cron_secret: !!norm(req.headers.get("x-cron-secret")),
-    },
-  };
-
-  // --- AUTH normal (exige CRON_SECRET)
-  if (!envTok.token) {
-    return NextResponse.json(
-      wantDiag
-        ? { error: "CRON_SECRET não configurado", diag: diagPayload, build }
-        : { error: "CRON_SECRET não configurado", build },
-      { status: 500, headers }
-    );
+  if (!secret) {
+    return json(500, { error: "CRON_SECRET ausente no ambiente", ...(build ? { build } : {}) });
+  }
+  if (!token || token !== secret) {
+    return json(401, {
+      error: "Não autenticado",
+      ...(diag ? { hasToken: !!token, tokenLen: token?.length || 0 } : {}),
+      ...(build ? { build } : {}),
+    });
   }
 
-  if (!reqTok.token || !safeEq(reqTok.token, envTok.token)) {
-    return NextResponse.json(
-      wantDiag
-        ? {
-            error: "Não autenticado",
-            diag_hint: "token recebido != token do env (compare sha256)",
-            diag: diagPayload,
-            build,
-          }
-        : { error: "Não autenticado", build },
-      { status: 401, headers }
-    );
+  const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+  if (!SUPABASE_URL || !SERVICE_ROLE) {
+    return json(500, {
+      error: "Env do Supabase incompleta",
+      details: {
+        hasUrl: !!SUPABASE_URL,
+        hasServiceRole: !!SERVICE_ROLE,
+      },
+      ...(build ? { build } : {}),
+    });
   }
 
-  // --- Supabase Admin client
-  const sb = supabaseAdmin();
+  const supabase = createClient(SUPABASE_URL, SERVICE_ROLE, {
+    auth: { persistSession: false },
+  });
 
-  // --- mês (corrente)
-  const mes_ref = monthISO(new Date());
+  // mês alvo
+  const mes = yyyymm01(new Date());
+  const ano_mes = mes.toISOString().slice(0, 10); // YYYY-MM-DD
 
-  // --- condomínios ativos
-  const r1 = await sb.from("condominios").select("id, ativo");
-  if (r1.error) return NextResponse.json({ error: r1.error.message, build }, { status: 500, headers });
-
-  const rows = (r1.data ?? []) as any[];
-  const ativos = rows.filter((c) => c?.ativo === true).map((c) => ({ id: String(c.id) }));
-
-  if (ativos.length === 0) {
-    return NextResponse.json({ ok: true, mes_ref, criadas: 0, msg: "Nenhum condomínio ativo.", build }, { headers });
-  }
-
-  // --- auditorias do mês (idempotente)
-  const payload = ativos.map((c) => ({
-    condominio_id: c.id,
-    mes_ref,
-    status: "aberta",
-    auditor_id: null,
-  }));
-
-  const r2 = await sb
-    .from("auditorias")
-    .upsert(payload as any, { onConflict: "condominio_id,mes_ref", ignoreDuplicates: true })
+  // 1) lista condomínios (SEM filtro 'ativo' porque essa coluna não existe)
+  const { data: condos, error: condosErr } = await supabase
+    .from("condominios")
     .select("id");
 
-  if (r2.error) return NextResponse.json({ error: r2.error.message, build }, { status: 500, headers });
+  if (condosErr) {
+    return json(500, {
+      error: "Falha ao listar condomínios",
+      details: condosErr.message,
+      ...(build ? { build } : {}),
+    });
+  }
 
-  const criadas = Array.isArray(r2.data) ? r2.data.length : 0;
+  const condoIds = (condos || []).map((c: any) => c.id).filter(Boolean);
 
-  return NextResponse.json(
-    {
+  if (condoIds.length === 0) {
+    return json(200, { ok: true, ano_mes, created: 0, skipped: 0, note: "Nenhum condomínio", ...(build ? { build } : {}) });
+  }
+
+  // 2) auditorias existentes do mês
+  const { data: existing, error: existErr } = await supabase
+    .from("auditorias")
+    .select("condominio_id")
+    .eq("ano_mes", ano_mes);
+
+  if (existErr) {
+    return json(500, {
+      error: "Falha ao checar auditorias existentes",
+      details: existErr.message,
+      ...(build ? { build } : {}),
+    });
+  }
+
+  const existingSet = new Set((existing || []).map((r: any) => r.condominio_id).filter(Boolean));
+
+  const toCreate = condoIds
+    .filter((id: string) => !existingSet.has(id))
+    .map((condominio_id: string) => ({
+      condominio_id,
+      ano_mes,
+      status: "rascunho",
+      auditor_id: null,
+    }));
+
+  if (toCreate.length === 0) {
+    return json(200, {
       ok: true,
-      mes_ref,
-      criadas,
-      total_condominios_ativos: ativos.length,
-      build,
-    },
-    { headers }
-  );
+      ano_mes,
+      created: 0,
+      skipped: condoIds.length,
+      idempotente: true,
+      ...(diag ? { totalCondominios: condoIds.length } : {}),
+      ...(build ? { build } : {}),
+    });
+  }
+
+  const { error: insErr } = await supabase.from("auditorias").insert(toCreate);
+
+  if (insErr) {
+    return json(500, {
+      error: "Falha ao criar auditorias do mês",
+      details: insErr.message,
+      ...(build ? { build } : {}),
+    });
+  }
+
+  return json(200, {
+    ok: true,
+    ano_mes,
+    created: toCreate.length,
+    skipped: condoIds.length - toCreate.length,
+    idempotente: true,
+    ...(diag ? { totalCondominios: condoIds.length } : {}),
+    ...(build ? { build } : {}),
+  });
 }
