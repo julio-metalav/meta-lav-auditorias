@@ -1,4 +1,5 @@
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/auth";
@@ -62,10 +63,18 @@ export async function POST(req: Request) {
   const url = new URL(req.url);
   const wantDiag = url.searchParams.get("diag") === "1";
 
+  const headers = {
+    "Cache-Control": "no-store, max-age=0",
+    "CDN-Cache-Control": "no-store",
+    "Vercel-CDN-Cache-Control": "no-store",
+  };
+
+  const build = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local";
+
   const envTok = pickEnvToken();
   const reqTok = pickReqToken(req);
 
-  // --- Se quiser diag, SEMPRE devolve pista (sem vazar segredo em texto)
+  // --- Se quiser diag, devolve pista (sem vazar segredo em texto)
   // (mostra apenas tamanho e hash)
   const diagPayload = {
     received: {
@@ -87,23 +96,27 @@ export async function POST(req: Request) {
 
   // --- AUTH normal (exige CRON_SECRET)
   if (!envTok.token) {
-  return NextResponse.json(
-    { error: "CRON_SECRET não configurado", diag: diagPayload },
-    { status: 500 }
-  );
-}
+    return NextResponse.json(
+      wantDiag
+        ? { error: "CRON_SECRET não configurado", diag: diagPayload, build }
+        : { error: "CRON_SECRET não configurado", build },
+      { status: 500, headers }
+    );
+  }
 
   if (!reqTok.token || !safeEq(reqTok.token, envTok.token)) {
-  return NextResponse.json(
-    {
-      error: "Não autenticado",
-      diag_hint: "token recebido != token do env (compare sha256)",
-      diag: diagPayload,
-    },
-    { status: 401 }
-  );
-}
-
+    return NextResponse.json(
+      wantDiag
+        ? {
+            error: "Não autenticado",
+            diag_hint: "token recebido != token do env (compare sha256)",
+            diag: diagPayload,
+            build,
+          }
+        : { error: "Não autenticado", build },
+      { status: 401, headers }
+    );
+  }
 
   // --- Supabase Admin client
   const sb = supabaseAdmin();
@@ -113,13 +126,13 @@ export async function POST(req: Request) {
 
   // --- condomínios ativos
   const r1 = await sb.from("condominios").select("id, ativo");
-  if (r1.error) return NextResponse.json({ error: r1.error.message }, { status: 500 });
+  if (r1.error) return NextResponse.json({ error: r1.error.message, build }, { status: 500, headers });
 
   const rows = (r1.data ?? []) as any[];
   const ativos = rows.filter((c) => c?.ativo === true).map((c) => ({ id: String(c.id) }));
 
   if (ativos.length === 0) {
-    return NextResponse.json({ ok: true, mes_ref, criadas: 0, msg: "Nenhum condomínio ativo." });
+    return NextResponse.json({ ok: true, mes_ref, criadas: 0, msg: "Nenhum condomínio ativo.", build }, { headers });
   }
 
   // --- auditorias do mês (idempotente)
@@ -135,14 +148,18 @@ export async function POST(req: Request) {
     .upsert(payload as any, { onConflict: "condominio_id,mes_ref", ignoreDuplicates: true })
     .select("id");
 
-  if (r2.error) return NextResponse.json({ error: r2.error.message }, { status: 500 });
+  if (r2.error) return NextResponse.json({ error: r2.error.message, build }, { status: 500, headers });
 
   const criadas = Array.isArray(r2.data) ? r2.data.length : 0;
 
-  return NextResponse.json({
-    ok: true,
-    mes_ref,
-    criadas,
-    total_condominios_ativos: ativos.length,
-  });
+  return NextResponse.json(
+    {
+      ok: true,
+      mes_ref,
+      criadas,
+      total_condominios_ativos: ativos.length,
+      build,
+    },
+    { headers }
+  );
 }
