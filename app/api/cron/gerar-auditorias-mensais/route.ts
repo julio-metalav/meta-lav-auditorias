@@ -74,6 +74,10 @@ export async function POST(req: NextRequest) {
   const mes = yyyymm01(new Date());
   const mesISO = mes.toISOString().slice(0, 10); // YYYY-MM-DD
 
+  // neste ambiente a coluna correta é mes_ref e o status válido é "aberta"
+  const mesCol = "mes_ref";
+  const statusInicial = "aberta";
+
   // 1) lista condomínios
   const { data: condos, error: condosErr } = await supabase.from("condominios").select("id");
   if (condosErr) {
@@ -89,55 +93,36 @@ export async function POST(req: NextRequest) {
       created: 0,
       skipped: 0,
       note: "Nenhum condomínio",
-      ...(diag ? { mesISO } : {}),
+      ...(diag ? { mesCol, statusInicial } : {}),
     });
   }
 
-  // 2) detecta coluna do mês por tentativa (sem information_schema)
-  let mesCol: "ano_mes" | "mes_ref" = "ano_mes";
-  let existing: any[] = [];
+  // 2) auditorias existentes do mês (idempotência)
+  const { data: existing, error: existErr } = await supabase
+    .from("auditorias")
+    .select("condominio_id")
+    .eq(mesCol, mesISO);
 
-  const r1 = await supabase.from("auditorias").select("condominio_id").eq("ano_mes", mesISO);
-
-  if (!r1.error) {
-    mesCol = "ano_mes";
-    existing = r1.data || [];
-  } else {
-    const msg1 = String(r1.error.message || "");
-    if (msg1.includes("does not exist") || msg1.includes("não existe")) {
-      const r2 = await supabase.from("auditorias").select("condominio_id").eq("mes_ref", mesISO);
-
-      if (r2.error) {
-        return json(500, {
-          error: "Falha ao checar auditorias existentes",
-          details: r2.error.message,
-          ...(diag ? { tentativas: ["ano_mes", "mes_ref"], mesISO } : {}),
-        });
-      }
-
-      mesCol = "mes_ref";
-      existing = r2.data || [];
-    } else {
-      return json(500, {
-        error: "Falha ao checar auditorias existentes",
-        details: r1.error.message,
-        ...(diag ? { tentativas: ["ano_mes"], mesISO } : {}),
-      });
-    }
+  if (existErr) {
+    return json(500, {
+      error: "Falha ao checar auditorias existentes",
+      details: existErr.message,
+      ...(diag ? { mesCol, mesISO } : {}),
+    });
   }
 
   const existingSet = new Set((existing || []).map((r: any) => r.condominio_id).filter(Boolean));
 
-  // 3) monta base de linhas (sem status ainda)
-  const baseRows = condoIds
+  const toCreate = condoIds
     .filter((id: string) => !existingSet.has(id))
     .map((condominio_id: string) => ({
       condominio_id,
       [mesCol]: mesISO,
+      status: statusInicial,
       auditor_id: null,
     }));
 
-  if (baseRows.length === 0) {
+  if (toCreate.length === 0) {
     return json(200, {
       ok: true,
       mes: mesISO,
@@ -148,69 +133,22 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // 4) tenta inserir com um status que passe na constraint auditorias_status_check
-  // (Sem adivinhar o enum: tentamos uma lista curta e segura; no diag retornamos o que foi aceito)
-  const statusCandidates: Array<string | null> = [
-    "rascunho",
-    "aberta",
-    "aberto",
-    "pendente",
-    "nova",
-    "iniciada",
-    "em_andamento",
-    "em campo",
-    "em_campo",
-    "draft",
-    null, // por último: tenta sem status (se a coluna aceitar null)
-  ];
+  const { error: insErr } = await supabase.from("auditorias").insert(toCreate);
 
-  let statusUsado: string | null = null;
-  let lastErr: string | null = null;
-
-  for (const st of statusCandidates) {
-    const rows =
-      st === null
-        ? baseRows
-        : baseRows.map((r) => ({
-            ...r,
-            status: st,
-          }));
-
-    const { error } = await supabase.from("auditorias").insert(rows);
-
-    if (!error) {
-      statusUsado = st;
-      lastErr = null;
-      break;
-    }
-
-    lastErr = error.message;
-
-    // se não for erro do CHECK do status, não mascarar: devolve na hora
-    const msg = String(error.message || "");
-    if (!msg.includes("auditorias_status_check")) {
-      return json(500, {
-        error: "Falha ao criar auditorias do mês",
-        details: error.message,
-        ...(diag ? { mesCol, mesISO, tentativaStatus: st } : {}),
-      });
-    }
-  }
-
-  if (lastErr) {
+  if (insErr) {
     return json(500, {
       error: "Falha ao criar auditorias do mês",
-      details: lastErr,
-      ...(diag ? { mesCol, mesISO, statusCandidates } : {}),
+      details: insErr.message,
+      ...(diag ? { mesCol, mesISO, statusInicial } : {}),
     });
   }
 
   return json(200, {
     ok: true,
     mes: mesISO,
-    created: baseRows.length,
-    skipped: condoIds.length - baseRows.length,
+    created: toCreate.length,
+    skipped: condoIds.length - toCreate.length,
     idempotente: true,
-    ...(diag ? { mesCol, totalCondominios: condoIds.length, statusUsado } : {}),
+    ...(diag ? { mesCol, totalCondominios: condoIds.length, statusInicial } : {}),
   });
 }
