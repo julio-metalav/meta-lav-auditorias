@@ -81,6 +81,24 @@ function toShortText(v: any, max = 800) {
   return s ? s.slice(0, max) : null;
 }
 
+// ✅ NORMALIZA "kind" de proveta para (tag + idx)
+// Aceita: proveta_1, proveta_2, proveta-2, proveta2, proveta (vira proveta_1)
+function parseProvetaKind(kindRaw: string): { tag: string; idx: number } | null {
+  const k = String(kindRaw ?? "").trim().toLowerCase();
+  if (!k) return null;
+
+  // proveta (sem número) -> assume 1
+  if (k === "proveta") return { tag: "proveta_1", idx: 1 };
+
+  // proveta_2 / proveta-2 / proveta2
+  const m = /^proveta(?:[_-]?)(\d+)$/.exec(k);
+  if (!m) return null;
+
+  const idx = Number(m[1]);
+  if (!Number.isFinite(idx) || idx <= 0) return null;
+
+  return { tag: `proveta_${idx}`, idx };
+}
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {
     const auditoriaId = params.id;
@@ -112,8 +130,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (!kind) return NextResponse.json({ error: "kind é obrigatório." }, { status: 400 });
     if (!file) return NextResponse.json({ error: "file é obrigatório." }, { status: 400 });
 
-    // aceita: proveta_1, proveta_2, proveta-1, proveta1, proveta
-    const isProveta = /^proveta([_-]?\d+)?$/i.test(kind);
+    // ✅ proveta detecta e normaliza (tag+idx)
+    const proveta = parseProvetaKind(kind);
+    const isProveta = !!proveta;
 
     // okKinds SEM "quimicos" (proveta é quem cobre o químico por lavadora)
     const okKinds: FotoKind[] = [
@@ -184,6 +203,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const bytes = new Uint8Array(await file.arrayBuffer());
     const ext = extFromFileName(file.name);
     const base = safeFileBase(file.name);
+
+    // usa o kind original no nome do arquivo (ok), mas proveta salva com tag normalizada
     const filename = `${kind}-${Date.now()}-${base}.${ext}`;
     const storagePath = `${auditoriaId}/${folderFor(kind)}/${filename}`;
 
@@ -198,17 +219,20 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (!pub?.publicUrl) {
       return NextResponse.json({ error: "Falha ao obter URL pública." }, { status: 500 });
     }
-
-    // ✅ PROVETAS: salva em auditoria_provetas (1 foto por máquina_tag)
-    if (isProveta) {
+    // ✅ PROVETAS: salva em auditoria_provetas (1 foto por maquina_tag)
+    if (isProveta && proveta) {
+      // ✅ FIX DEFINITIVO DO ERRO:
+      // a tabela tem coluna maquina_idx NOT NULL -> precisamos mandar.
+      // NÃO usamos maquina_id.
       const { data: saved, error: pErr } = await admin
         .from("auditoria_provetas")
         .upsert(
           {
             auditoria_id: auditoriaId,
-            maquina_tag: kind, // ex: proveta_1
+            maquina_tag: proveta.tag, // sempre proveta_N
+            maquina_idx: proveta.idx, // ✅ evita null value em maquina_idx
             foto_url: pub.publicUrl,
-          },
+          } as any,
           { onConflict: "auditoria_id,maquina_tag" }
         )
         .select("*")
@@ -216,7 +240,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
       if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
 
-      return NextResponse.json({ ok: true, kind, url: pub.publicUrl, proveta: saved });
+      return NextResponse.json({
+        ok: true,
+        kind: proveta.tag,
+        url: pub.publicUrl,
+        proveta: saved,
+      });
     }
 
     // ✅ FOTOS "normais": salva na auditoria (colunas)
