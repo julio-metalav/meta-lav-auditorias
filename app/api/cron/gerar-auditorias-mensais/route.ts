@@ -74,10 +74,6 @@ export async function POST(req: NextRequest) {
   const mes = yyyymm01(new Date());
   const mesISO = mes.toISOString().slice(0, 10); // YYYY-MM-DD
 
-  // neste ambiente a coluna correta é mes_ref e o status válido é "aberta"
-  const mesCol = "mes_ref";
-  const statusInicial = "aberta";
-
   // 1) lista condomínios
   const { data: condos, error: condosErr } = await supabase.from("condominios").select("id");
   if (condosErr) {
@@ -93,36 +89,54 @@ export async function POST(req: NextRequest) {
       created: 0,
       skipped: 0,
       note: "Nenhum condomínio",
-      ...(diag ? { mesCol, statusInicial } : {}),
     });
   }
 
-  // 2) auditorias existentes do mês (idempotência)
-  const { data: existing, error: existErr } = await supabase
-    .from("auditorias")
-    .select("condominio_id")
-    .eq(mesCol, mesISO);
+  // 2) detecta coluna do mês por tentativa (sem information_schema)
+  let mesCol: "ano_mes" | "mes_ref" = "ano_mes";
+  let existing: any[] = [];
 
-  if (existErr) {
-    return json(500, {
-      error: "Falha ao checar auditorias existentes",
-      details: existErr.message,
-      ...(diag ? { mesCol, mesISO } : {}),
-    });
+  const r1 = await supabase.from("auditorias").select("condominio_id").eq("ano_mes", mesISO);
+
+  if (!r1.error) {
+    mesCol = "ano_mes";
+    existing = r1.data || [];
+  } else {
+    const msg1 = String(r1.error.message || "");
+    if (msg1.includes("does not exist") || msg1.includes("não existe")) {
+      const r2 = await supabase.from("auditorias").select("condominio_id").eq("mes_ref", mesISO);
+
+      if (r2.error) {
+        return json(500, {
+          error: "Falha ao checar auditorias existentes",
+          details: r2.error.message,
+          ...(diag ? { tentativasMes: ["ano_mes", "mes_ref"], mesISO } : {}),
+        });
+      }
+
+      mesCol = "mes_ref";
+      existing = r2.data || [];
+    } else {
+      return json(500, {
+        error: "Falha ao checar auditorias existentes",
+        details: r1.error.message,
+        ...(diag ? { tentativasMes: ["ano_mes"], mesISO } : {}),
+      });
+    }
   }
 
   const existingSet = new Set((existing || []).map((r: any) => r.condominio_id).filter(Boolean));
 
-  const toCreate = condoIds
+  // 3) monta linhas base (sem status ainda)
+  const baseRows = condoIds
     .filter((id: string) => !existingSet.has(id))
     .map((condominio_id: string) => ({
       condominio_id,
       [mesCol]: mesISO,
-      status: statusInicial,
       auditor_id: null,
     }));
 
-  if (toCreate.length === 0) {
+  if (baseRows.length === 0) {
     return json(200, {
       ok: true,
       mes: mesISO,
@@ -133,22 +147,56 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const { error: insErr } = await supabase.from("auditorias").insert(toCreate);
+  // 4) tenta inserir com status permitido (fallback curto e seguro)
+  const statusCandidates: Array<string | null> = ["aberta", "rascunho", null];
 
-  if (insErr) {
+  let statusUsado: string | null = null;
+  let lastErr: string | null = null;
+
+  for (const st of statusCandidates) {
+    const rows =
+      st === null
+        ? baseRows
+        : baseRows.map((r) => ({
+            ...r,
+            status: st,
+          }));
+
+    const { error } = await supabase.from("auditorias").insert(rows);
+
+    if (!error) {
+      statusUsado = st;
+      lastErr = null;
+      break;
+    }
+
+    lastErr = error.message;
+
+    // se não for erro do CHECK do status, não mascarar: devolve na hora
+    const msg = String(error.message || "");
+    if (!msg.includes("auditorias_status_check")) {
+      return json(500, {
+        error: "Falha ao criar auditorias do mês",
+        details: error.message,
+        ...(diag ? { mesCol, mesISO, tentativaStatus: st } : {}),
+      });
+    }
+  }
+
+  if (lastErr) {
     return json(500, {
       error: "Falha ao criar auditorias do mês",
-      details: insErr.message,
-      ...(diag ? { mesCol, mesISO, statusInicial } : {}),
+      details: lastErr,
+      ...(diag ? { mesCol, mesISO, statusCandidates } : {}),
     });
   }
 
   return json(200, {
     ok: true,
     mes: mesISO,
-    created: toCreate.length,
-    skipped: condoIds.length - toCreate.length,
+    created: baseRows.length,
+    skipped: condoIds.length - baseRows.length,
     idempotente: true,
-    ...(diag ? { mesCol, totalCondominios: condoIds.length, statusInicial } : {}),
+    ...(diag ? { mesCol, totalCondominios: condoIds.length, statusUsado } : {}),
   });
 }
