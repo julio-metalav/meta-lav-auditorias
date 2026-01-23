@@ -17,6 +17,12 @@ function monthISO(d = new Date()) {
   return `${y}-${m}-01`;
 }
 
+function asDate(v: any): Date | null {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
 export async function GET() {
   try {
     const { role } = await getUserAndRole();
@@ -27,7 +33,7 @@ export async function GET() {
     const admin = supabaseAdmin();
     const mes_ref = monthISO();
 
-    // Auditorias do mês (pega só status para agregação)
+    // Auditorias do mês (agrega por status)
     const { data: auds, error: audErr } = await admin
       .from("auditorias")
       .select("status")
@@ -61,18 +67,44 @@ export async function GET() {
 
     if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 });
 
-    // Últimos logs do job (se existir)
-    const { data: logs, error: logErr } = await admin
+    // Últimos logs do job (schema pode variar: NÃO ordenar por coluna que pode não existir)
+    const { data: rawLogs, error: logErr } = await admin
       .from("auditorias_jobs_log")
       .select("*")
-      .order("inicio", { ascending: false })
-      .limit(20);
+      .limit(50);
+
+    // Se erro (ex: tabela não existe), devolve vazio mas não quebra a tela
+    const logs = logErr ? [] : (rawLogs ?? []);
+
+    // Ordena em memória pelo melhor "timestamp" disponível
+    logs.sort((a: any, b: any) => {
+      const da =
+        asDate(a?.inicio) ??
+        asDate(a?.inicio_em) ??
+        asDate(a?.started_at) ??
+        asDate(a?.created_at) ??
+        asDate(a?.updated_at);
+
+      const db =
+        asDate(b?.inicio) ??
+        asDate(b?.inicio_em) ??
+        asDate(b?.started_at) ??
+        asDate(b?.created_at) ??
+        asDate(b?.updated_at);
+
+      const ta = da ? da.getTime() : 0;
+      const tb = db ? db.getTime() : 0;
+      return tb - ta;
+    });
+
+    // Mantém só 20 (como antes)
+    const topLogs = logs.slice(0, 20);
 
     return NextResponse.json({
       mes_ref,
       counts,
       condominios_total: condominios_total ?? 0,
-      logs: logErr ? [] : logs,
+      logs: topLogs,
       logs_error: logErr ? logErr.message : null,
     });
   } catch (e: any) {
