@@ -42,6 +42,7 @@ export default function UsuariosPage() {
   const [loading, setLoading] = useState(false);
 
   const [meRole, setMeRole] = useState<Role | null>(null);
+  const [meId, setMeId] = useState<string | null>(null);
 
   const [form, setForm] = useState<{ email: string; senha: string; role: Role }>({
     email: "",
@@ -54,6 +55,9 @@ export default function UsuariosPage() {
   const [editRole, setEditRole] = useState<Role>("auditor");
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // excluir
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   const canEdit = useMemo(() => meRole === "gestor", [meRole]);
 
   async function carregarMe() {
@@ -63,6 +67,7 @@ export default function UsuariosPage() {
       if (res.ok) {
         const role = (json?.role ?? null) as Role | null;
         setMeRole(role);
+        setMeId(json?.user?.id ?? null);
       }
     } catch {
       // ignora
@@ -155,6 +160,43 @@ export default function UsuariosPage() {
       setErr(e?.message ?? "Erro inesperado ao salvar edição");
     } finally {
       setSavingEdit(false);
+    }
+  }
+
+  async function excluirUsuario(u: UserRow) {
+    if (!canEdit) return;
+
+    setErr(null);
+
+    if (meId && u.id === meId) {
+      setErr("Você não pode excluir seu próprio usuário.");
+      return;
+    }
+
+    const ok = confirm(`Excluir o usuário ${u.email ?? u.id}?\n\nIsso é irreversível.`);
+    if (!ok) return;
+
+    setDeletingId(u.id);
+    try {
+      const res = await fetch(`/api/admin/usuarios/${u.id}`, { method: "DELETE" });
+      const json = await safeReadJson(res);
+
+      if (!res.ok) {
+        const msg = json?.error ?? "Falha ao excluir usuário";
+        // Mostra detalhes se for histórico
+        if (res.status === 409 && json?.details) {
+          setErr(`${msg} Detalhes: auditor_id=${json.details.auditor_id}, created_by=${json.details.created_by}, fechado_por=${json.details.fechado_por}`);
+        } else {
+          setErr(msg);
+        }
+        return;
+      }
+
+      await carregar();
+    } catch (e: any) {
+      setErr(e?.message ?? "Erro inesperado ao excluir usuário");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -269,7 +311,7 @@ export default function UsuariosPage() {
 
             {!canEdit && (
               <div style={{ fontSize: 12, color: "#999" }}>
-                Edição de usuário só para <b>gestor</b>.
+                Edição/Exclusão de usuário só para <b>gestor</b>.
               </div>
             )}
           </div>
@@ -297,7 +339,7 @@ export default function UsuariosPage() {
                   <th style={{ padding: "10px 8px", borderBottom: "1px solid #eee" }}>Email</th>
                   <th style={{ padding: "10px 8px", borderBottom: "1px solid #eee" }}>Role</th>
                   <th style={{ padding: "10px 8px", borderBottom: "1px solid #eee" }}>Criado em</th>
-                  <th style={{ padding: "10px 8px", borderBottom: "1px solid #eee", width: 120 }}>Ações</th>
+                  <th style={{ padding: "10px 8px", borderBottom: "1px solid #eee", width: 180 }}>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -309,21 +351,46 @@ export default function UsuariosPage() {
                       {u.created_at ? new Date(u.created_at).toLocaleString() : "-"}
                     </td>
                     <td style={{ padding: "10px 8px", borderBottom: "1px solid #f3f3f3" }}>
-                      <button
-                        onClick={() => abrirEditar(u)}
-                        disabled={!canEdit}
-                        style={{
-                          padding: "8px 12px",
-                          borderRadius: 12,
-                          border: "1px solid #d8d8d8",
-                          background: canEdit ? "white" : "#f6f6f6",
-                          cursor: canEdit ? "pointer" : "not-allowed",
-                          opacity: canEdit ? 1 : 0.6,
-                        }}
-                        title={canEdit ? "Editar role" : "Somente gestor pode editar"}
-                      >
-                        Editar
-                      </button>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() => abrirEditar(u)}
+                          disabled={!canEdit}
+                          style={{
+                            padding: "8px 12px",
+                            borderRadius: 12,
+                            border: "1px solid #d8d8d8",
+                            background: canEdit ? "white" : "#f6f6f6",
+                            cursor: canEdit ? "pointer" : "not-allowed",
+                            opacity: canEdit ? 1 : 0.6,
+                          }}
+                          title={canEdit ? "Editar role" : "Somente gestor pode editar"}
+                        >
+                          Editar
+                        </button>
+
+                        <button
+                          onClick={() => excluirUsuario(u)}
+                          disabled={!canEdit || deletingId === u.id || (meId ? u.id === meId : false)}
+                          style={{
+                            padding: "8px 12px",
+                            borderRadius: 12,
+                            border: "1px solid #ffd0d0",
+                            background: canEdit ? "#fff5f5" : "#f6f6f6",
+                            color: "#a40000",
+                            cursor: canEdit ? "pointer" : "not-allowed",
+                            opacity: !canEdit ? 0.6 : deletingId === u.id ? 0.7 : 1,
+                          }}
+                          title={
+                            !canEdit
+                              ? "Somente gestor pode excluir"
+                              : meId && u.id === meId
+                              ? "Você não pode excluir seu próprio usuário"
+                              : "Excluir usuário"
+                          }
+                        >
+                          {deletingId === u.id ? "Excluindo..." : "Excluir"}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
