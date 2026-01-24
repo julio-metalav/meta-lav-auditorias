@@ -48,6 +48,9 @@ function pickMonthISO(row: any, sch: Schema) {
   return raw ? String(raw) : null;
 }
 
+/* =========================================================
+   GET  /api/auditorias
+   ========================================================= */
 export async function GET() {
   const ctx = await getUserAndRole();
   if (!ctx?.user) {
@@ -70,11 +73,9 @@ export async function GET() {
     .select("*")
     .order(sch.monthCol, { ascending: false });
 
-  // ✅ REGRA FINAL:
-  // Auditor vê:
-  // - auditorias SEM auditor (fila aberta)
-  // - auditorias atribuídas A ELE
-  // Não vê auditorias atribuídas a outros
+  // Auditor vê apenas:
+  // - sem auditor
+  // - atribuídas a ele
   if (isAuditor && !isStaff) {
     q = q.or(
       `${sch.auditorCol}.is.null,${sch.auditorCol}.eq.${ctx.user.id}`
@@ -123,4 +124,58 @@ export async function GET() {
   });
 
   return NextResponse.json({ data: normalized });
+}
+
+/* =========================================================
+   POST  /api/auditorias  (CRIAR AUDITORIA)
+   ========================================================= */
+export async function POST(req: Request) {
+  try {
+    const ctx = await getUserAndRole();
+    if (!ctx?.user) {
+      return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+    }
+
+    const role = (ctx.role ?? null) as Role | null;
+    const isStaff = roleGte(role, "interno");
+    if (!isStaff) {
+      return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const condominio_id = String(body?.condominio_id ?? "").trim();
+    const mes_ref = String(body?.mes_ref ?? "").trim(); // YYYY-MM-01
+    const status = normalizeStatus(body?.status ?? "aberta");
+
+    if (!condominio_id) {
+      return NextResponse.json({ error: "condominio_id é obrigatório" }, { status: 400 });
+    }
+    if (!mes_ref) {
+      return NextResponse.json({ error: "mes_ref é obrigatório" }, { status: 400 });
+    }
+
+    const admin = supabaseAdmin();
+    const sch = await detectSchema(admin);
+
+    const insertRow: any = {
+      [sch.condoCol]: condominio_id,
+      [sch.monthCol]: mes_ref,
+      [sch.statusCol]: status,
+      [sch.auditorCol]: null,
+    };
+
+    const { data, error } = await admin
+      .from(sch.table)
+      .insert([insertRow])
+      .select("id")
+      .single();
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
+    return NextResponse.json({ id: data?.id }, { status: 201 });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
+  }
 }
