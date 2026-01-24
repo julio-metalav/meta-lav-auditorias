@@ -1,776 +1,178 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
-
-import { getUserAndRole, roleGte, supabaseAdmin } from "@/lib/auth";
+import { NextResponse } from "next/server";
+import { renderToBuffer } from "@react-pdf/renderer";
+import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
+import { getUserAndRole, roleGte } from "@/lib/auth";
 
 type Role = "auditor" | "interno" | "gestor";
+type ImgFormat = "png" | "jpg";
 
-function bad(message: string, status = 400, extra?: any) {
-  return NextResponse.json({ error: message, ...extra }, { status });
-}
+type ImageSrcObj = { data: Buffer; format: ImgFormat };
+type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
-function safeText(v: any) {
-  return String(v ?? "");
-}
-function n(v: any) {
-  const x = Number(v);
-  return Number.isFinite(x) ? x : 0;
+function bad(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
 }
 
-function fmtBRL(v: any) {
-  const x = n(v);
-  return x.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
-function fmtNum(v: any) {
-  const x = Number(v);
-  return Number.isFinite(x) ? x.toLocaleString("pt-BR") : "—";
-}
-function fmtLeitura(v: any) {
-  if (v === null || v === undefined) return "—";
-  const x = Number(v);
-  return Number.isFinite(x) ? x.toLocaleString("pt-BR") : "—";
-}
-
-function getOrigin(req: NextRequest) {
-  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
-  const proto = req.headers.get("x-forwarded-proto") || "https";
-  return host ? `${proto}://${host}` : "http://localhost";
-}
-
-/**
- * ============ PDF MINIMAL (IGUAL AO FINANCEIRO) ============
- * - fontes Type1 base (Helvetica / Helvetica-Bold)
- * - texto em CP1252/WinAnsi (hex)
- * - imagem: SOMENTE JPEG via DCTDecode (logo e anexos jpg)
- */
-
-function toCp1252Bytes(str: string): Uint8Array {
-  const map: Record<string, number> = {
-    "€": 0x80, "‚": 0x82, "ƒ": 0x83, "„": 0x84, "…": 0x85, "†": 0x86, "‡": 0x87,
-    "ˆ": 0x88, "‰": 0x89, "Š": 0x8a, "‹": 0x8b, "Œ": 0x8c, "Ž": 0x8e,
-    "‘": 0x91, "’": 0x92, "“": 0x93, "”": 0x94, "•": 0x95, "–": 0x96, "—": 0x97,
-    "˜": 0x98, "™": 0x99, "š": 0x9a, "›": 0x9b, "œ": 0x9c, "ž": 0x9e, "Ÿ": 0x9f,
-  };
-  const out: number[] = [];
-  for (const ch of str) {
-    const code = ch.charCodeAt(0);
-    if (code <= 0x7f) out.push(code);
-    else if (code >= 0xa0 && code <= 0xff) out.push(code);
-    else if (map[ch] !== undefined) out.push(map[ch]);
-    else out.push(0x3f); // '?'
-  }
-  return Uint8Array.from(out);
-}
-function hexOfBytes(b: Uint8Array) {
-  let s = "";
-  for (const x of b) s += x.toString(16).padStart(2, "0");
-  return s.toUpperCase();
-}
-function escapeHexText(s: string) {
-  return `<${hexOfBytes(toCp1252Bytes(s))}>`;
-}
-
-function strBytes(s: string) {
-  return new TextEncoder().encode(s);
-}
-function concatBytes(chunks: Uint8Array[]) {
-  const total = chunks.reduce((a, b) => a + b.length, 0);
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
-}
-
-type PdfObj = { id: number; body: Uint8Array };
-
-function pdfText(font: "F1" | "F2", size: number, x: number, y: number, s: string) {
-  return `BT /${font} ${size} Tf ${x.toFixed(2)} ${y.toFixed(2)} Td ${escapeHexText(s)} Tj ET\n`;
-}
-function pdfLine(x1: number, y1: number, x2: number, y2: number, w = 0.7) {
-  return `${w.toFixed(2)} w ${x1.toFixed(2)} ${y1.toFixed(2)} m ${x2.toFixed(2)} ${y2.toFixed(2)} l S\n`;
-}
-function pdfRect(x: number, y: number, w: number, h: number, lineW = 0.7) {
-  // apenas stroke (sem fill)
-  return `${lineW.toFixed(2)} w ${x.toFixed(2)} ${y.toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re S\n`;
-}
-function pdfImage(x: number, y: number, w: number, h: number, name: string) {
-  return `q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm /${name} Do Q\n`;
-}
-
-// JPEG helpers
-function isJpeg(bytes: Uint8Array) {
-  return bytes?.[0] === 0xff && bytes?.[1] === 0xd8;
-}
-function getJpegSize(bytes: Uint8Array): { w: number; h: number } | null {
+function getOriginFromRequest(req: Request) {
+  const h = req.headers;
+  const proto = h.get("x-forwarded-proto") || "https";
+  const host = h.get("x-forwarded-host") || h.get("host");
+  if (host) return `${proto}://${host}`;
   try {
-    let i = 0;
-    if (!isJpeg(bytes)) return null;
-    i += 2; // SOI
-    while (i < bytes.length) {
-      if (bytes[i] !== 0xff) {
-        i++;
-        continue;
-      }
-      const marker = bytes[i + 1];
-      i += 2;
-      if (marker === 0xd9 || marker === 0xda) break; // EOI/SOS
-      const len = (bytes[i] << 8) + bytes[i + 1];
-      if (len < 2) return null;
+    return new URL(req.url).origin;
+  } catch {
+    return "http://localhost";
+  }
+}
 
-      const isSOF =
-        (marker >= 0xc0 && marker <= 0xc3) ||
-        (marker >= 0xc5 && marker <= 0xc7) ||
-        (marker >= 0xc9 && marker <= 0xcb) ||
-        (marker >= 0xcd && marker <= 0xcf);
+function detectFormat(url: string, contentType?: string | null): ImgFormat | null {
+  const ct = (contentType || "").toLowerCase();
+  if (ct.includes("image/png")) return "png";
+  if (ct.includes("image/jpeg") || ct.includes("image/jpg")) return "jpg";
 
-      if (isSOF) {
-        const h = (bytes[i + 3] << 8) + bytes[i + 4];
-        const w = (bytes[i + 5] << 8) + bytes[i + 6];
-        return { w, h };
-      }
-      i += len;
-    }
-  } catch {}
+  const u = url.toLowerCase();
+  if (u.endsWith(".png")) return "png";
+  if (u.endsWith(".jpg") || u.endsWith(".jpeg")) return "jpg";
   return null;
 }
 
-function readLogoJpegFromPublic(): { bytes: Uint8Array; w: number; h: number } | null {
-  const candidates = [
-    path.join(process.cwd(), "public", "logo Meta Lav.jpg"),
-    path.join(process.cwd(), "public", "logo.jpg"),
+async function fetchImageAsBuffer(url: string): Promise<ImageSrcObj | null> {
+  if (!url) return null;
+
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) return null;
+
+  const ct = res.headers.get("content-type");
+  const format = detectFormat(url, ct);
+  if (!format) return null; // se vier PDF etc, ignora (do jeito que você quer)
+
+  const ab = await res.arrayBuffer();
+  return { data: Buffer.from(ab), format };
+}
+
+type ReportDTO = {
+  meta: { auditoria_id: string; condominio_nome: string; competencia: string; gerado_em: string };
+  vendas_por_maquina: {
+    itens: Array<{ maquina: string; ciclos: number; valor_unitario: number; valor_total: number }>;
+    receita_bruta_total: number;
+    cashback_percent: number;
+    valor_cashback: number;
+  };
+  consumo_insumos: {
+    itens: Array<{ insumo: string; leitura_anterior: number | null; leitura_atual: number | null; consumo: number; valor_total: number }>;
+    total_repasse_consumo: number;
+  };
+  totalizacao_final: { cashback: number; repasse_consumo: number; total_a_pagar_condominio: number };
+  observacoes: string | null;
+  anexos: {
+    foto_agua_url?: string | null;
+    foto_energia_url?: string | null;
+    foto_gas_url?: string | null;
+    comprovante_fechamento_url?: string | null;
+  };
+};
+
+export async function GET(req: Request, { params }: { params: { id: string } }) {
+  const { user, role } = await getUserAndRole();
+  if (!user) return bad("Não autenticado", 401);
+  if (!roleGte(role as Role, "interno")) return bad("Sem permissão", 403);
+
+  const auditoriaId = String(params.id || "").trim();
+  if (!auditoriaId) return bad("ID inválido", 400);
+
+  const origin = getOriginFromRequest(req);
+  const cookie = req.headers.get("cookie") || "";
+  const authorization = req.headers.get("authorization") || "";
+
+  // 1) pega o JSON do relatório (teu endpoint existente)
+  const dtoRes = await fetch(`${origin}/api/relatorios/condominio/final/${auditoriaId}`, {
+    headers: {
+      Accept: "application/json",
+      ...(cookie ? { cookie } : {}),
+      ...(authorization ? { authorization } : {}),
+    },
+    cache: "no-store",
+  });
+
+  const dtoJson = await dtoRes.json().catch(() => null);
+  if (!dtoRes.ok) return bad(dtoJson?.error ?? "Falha ao obter dados do relatório", 500);
+
+  const data: ReportDTO = dtoJson?.data ?? null;
+  if (!data) return bad("Sem dados do relatório", 500);
+
+  // 2) monta anexos (ORDEM IMPORTANTE: Água, Energia, Comprovante, Gás)
+  const a = data.anexos || {};
+
+  const anexosOrdem: Array<{ tipo: string; url?: string | null }> = [
+    { tipo: "Foto do medidor de Água", url: a.foto_agua_url },
+    { tipo: "Foto do medidor de Energia", url: a.foto_energia_url },
+    { tipo: "Comprovante de pagamento", url: a.comprovante_fechamento_url },
+    { tipo: "Foto do medidor de Gás", url: a.foto_gas_url },
   ];
 
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) {
-        const buf = fs.readFileSync(p);
-        const bytes = new Uint8Array(buf);
-        if (!isJpeg(bytes)) continue;
-        const sz = getJpegSize(bytes);
-        if (!sz) continue;
-        return { bytes, w: sz.w, h: sz.h };
-      }
-    } catch {}
-  }
-  return null;
-}
+  const anexos: AnexoPdf[] = [];
+  for (const it of anexosOrdem) {
+    if (!it.url) continue;
 
-/**
- * ============ SUPABASE STORAGE ============
- * Baixa via service role (resolve signed/private/public)
- */
-function parseSupabaseStorageUrl(u: string): { bucket: string; objectPath: string } | null {
-  try {
-    const url = new URL(u);
-    const p = url.pathname || "";
-    const idx = p.indexOf("/storage/v1/object/");
-    if (idx === -1) return null;
-
-    const rest = p.slice(idx + "/storage/v1/object/".length);
-    const parts = rest.split("/").filter(Boolean);
-    if (parts.length < 2) return null;
-
-    let offset = 0;
-    if (parts[0] === "public" || parts[0] === "sign" || parts[0] === "authenticated") {
-      offset = 1;
+    const img = await fetchImageAsBuffer(it.url);
+    if (!img) {
+      // mantém o card no PDF com msg "Não foi possível incorporar..." (se você quiser)
+      anexos.push({ tipo: it.tipo, isImagem: true, src: undefined });
+      continue;
     }
 
-    const bucket = parts[offset];
-    const objectPath = parts.slice(offset + 1).join("/");
-    if (!bucket || !objectPath) return null;
-    return { bucket, objectPath };
-  } catch {
-    return null;
+    anexos.push({ tipo: it.tipo, isImagem: true, src: img });
   }
-}
 
-async function downloadViaSupabaseStorage(url: string): Promise<Uint8Array | null> {
-  const parsed = parseSupabaseStorageUrl(url);
-  if (!parsed) return null;
+  // 3) monta props pro PDF (bate 1:1 com RelatorioFinalPdf.tsx)
+  const props = {
+    logo: null as any, // se você já tem logo no PDF antigo, me manda esse trecho que eu encaixo aqui
+    condominio: { nome: data.meta.condominio_nome, pagamento_texto: "—" }, // pagamento_texto vem do condo no PDF; se quiser puxar do JSON, me diga onde está
+    periodo: data.meta.competencia,
+    gerado_em: data.meta.gerado_em,
 
-  try {
-    const admin = supabaseAdmin();
-    const { data, error } = await admin.storage.from(parsed.bucket).download(parsed.objectPath);
-    if (error || !data) return null;
+    vendas: (data.vendas_por_maquina?.itens ?? []).map((x) => ({
+      maquina: x.maquina,
+      ciclos: Number(x.ciclos) || 0,
+      valor_unitario: Number(x.valor_unitario) || 0,
+      valor_total: Number(x.valor_total) || 0,
+    })),
 
-    const ab = await data.arrayBuffer();
-    return new Uint8Array(ab);
-  } catch {
-    return null;
-  }
-}
+    kpis: {
+      receita_bruta: Number(data.vendas_por_maquina?.receita_bruta_total) || 0,
+      cashback_percentual: Number(data.vendas_por_maquina?.cashback_percent) || 0,
+      cashback_valor: Number(data.vendas_por_maquina?.valor_cashback) || 0,
+    },
 
-async function fetchImageAsJpeg(
-  url: string,
-  timeoutMs = 15000
-): Promise<{ bytes: Uint8Array; w: number; h: number } | null> {
-  const u = safeText(url).trim();
-  if (!u) return null;
+    consumos: (data.consumo_insumos?.itens ?? []).map((x) => ({
+      nome: x.insumo,
+      anterior: x.leitura_anterior ?? null,
+      atual: x.leitura_atual ?? null,
+      consumo: Number(x.consumo) || 0,
+      valor_total: Number(x.valor_total) || 0,
+    })),
 
-  const normalize = async (
-    raw: Uint8Array
-  ): Promise<{ bytes: Uint8Array; w: number; h: number } | null> => {
-    if (!isJpeg(raw)) return null;
-    const sz = getJpegSize(raw);
-    if (!sz) return null;
-    return { bytes: raw, w: sz.w, h: sz.h };
+    total_consumo: Number(data.consumo_insumos?.total_repasse_consumo) || 0,
+    total_cashback: Number(data.totalizacao_final?.cashback) || 0,
+    total_pagar: Number(data.totalizacao_final?.total_a_pagar_condominio) || 0,
+
+    observacoes: data.observacoes ?? "",
+    anexos,
   };
 
-  // 1) via Supabase Storage
-  const viaStorage = await downloadViaSupabaseStorage(u);
-  if (viaStorage && viaStorage.length <= 6 * 1024 * 1024) {
-    const ok = await normalize(viaStorage);
-    if (ok) return ok;
-  }
+  // 4) gera PDF
+  const pdfBuffer = await renderToBuffer(<RelatorioFinalPdf {...(props as any)} />);
 
-  // 2) fetch direto
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
+  const fileName = `relatorio-final-${auditoriaId}.pdf`;
 
-  try {
-    const res = await fetch(u, {
-      cache: "no-store",
-      redirect: "follow",
-      signal: controller.signal,
-      headers: { Accept: "image/*" },
-    });
-    if (!res.ok) return null;
-
-    const ab = await res.arrayBuffer();
-    const raw = new Uint8Array(ab);
-
-    if (raw.length > 6 * 1024 * 1024) return null;
-
-    const ok = await normalize(raw);
-    if (ok) return ok;
-
-    return null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-function buildPdf(
-  pages: { content: string; xobjects: Record<string, { bytes: Uint8Array; w: number; h: number }> }[]
-) {
-  // A4 points
-  const W = 595.28;
-  const H = 841.89;
-
-  let nextId = 1;
-  const objs: PdfObj[] = [];
-  const newObjId = () => nextId++;
-
-  // fonts
-  const fontRegularId = newObjId();
-  objs.push({
-    id: fontRegularId,
-    body: strBytes(`<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>`),
+  return new NextResponse(pdfBuffer, {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="${fileName}"`,
+      "Cache-Control": "no-store, max-age=0",
+    },
   });
-  const fontBoldId = newObjId();
-  objs.push({
-    id: fontBoldId,
-    body: strBytes(`<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>`),
-  });
-
-  // per page image objects
-  const pageImageObjIds: Array<Record<string, number>> = [];
-
-  for (const pg of pages) {
-    const map: Record<string, number> = {};
-    for (const [name, im] of Object.entries(pg.xobjects)) {
-      const imageId = newObjId();
-      map[name] = imageId;
-      const imgStream = concatBytes([
-        strBytes(
-          `<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.bytes.length} >>\nstream\n`
-        ),
-        im.bytes,
-        strBytes(`\nendstream`),
-      ]);
-      objs.push({ id: imageId, body: imgStream });
-    }
-    pageImageObjIds.push(map);
-  }
-
-  // content streams
-  const contentIds: number[] = [];
-  for (const pg of pages) {
-    const cid = newObjId();
-    const data = strBytes(pg.content);
-    const stream = concatBytes([
-      strBytes(`<< /Length ${data.length} >>\nstream\n`),
-      data,
-      strBytes(`\nendstream`),
-    ]);
-    objs.push({ id: cid, body: stream });
-    contentIds.push(cid);
-  }
-
-  // pages + catalog
-  const pagesId = newObjId();
-  const pageIds: number[] = [];
-
-  for (let i = 0; i < pages.length; i++) {
-    const pid = newObjId();
-    pageIds.push(pid);
-
-    const xobj = pageImageObjIds[i] || {};
-    const xobjPart =
-      Object.keys(xobj).length > 0
-        ? `/XObject << ${Object.entries(xobj)
-            .map(([name, id]) => `/${name} ${id} 0 R`)
-            .join(" ")} >>`
-        : "";
-
-    const resources = `<< /Font << /F1 ${fontRegularId} 0 R /F2 ${fontBoldId} 0 R >> ${xobjPart} >>`;
-
-    objs.push({
-      id: pid,
-      body: strBytes(
-        `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${W} ${H}] /Resources ${resources} /Contents ${contentIds[i]} 0 R >>`
-      ),
-    });
-  }
-
-  objs.push({
-    id: pagesId,
-    body: strBytes(`<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] >>`),
-  });
-
-  const catalogId = newObjId();
-  objs.push({ id: catalogId, body: strBytes(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`) });
-
-  // xref
-  const header = strBytes(`%PDF-1.4\n%\xE2\xE3\xCF\xD3\n`);
-  let offset = header.length;
-  const parts: Uint8Array[] = [header];
-
-  const xref: number[] = [];
-  xref[0] = 0;
-
-  for (const o of objs) {
-    xref[o.id] = offset;
-    const chunk = concatBytes([strBytes(`${o.id} 0 obj\n`), o.body, strBytes(`\nendobj\n`)]);
-    parts.push(chunk);
-    offset += chunk.length;
-  }
-
-  const xrefStart = offset;
-  const maxId = objs.reduce((m, o) => Math.max(m, o.id), 0);
-
-  let xrefText = `xref\n0 ${maxId + 1}\n`;
-  xrefText += `0000000000 65535 f \n`;
-  for (let i = 1; i <= maxId; i++) {
-    const off = xref[i] ?? 0;
-    xrefText += `${String(off).padStart(10, "0")} 00000 n \n`;
-  }
-
-  const trailer = `trailer\n<< /Size ${maxId + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
-
-  parts.push(strBytes(xrefText));
-  parts.push(strBytes(trailer));
-
-  return concatBytes(parts);
-}
-
-/**
- * ============ DADOS ============
- */
-async function fetchReportJson(req: NextRequest, origin: string, auditoriaId: string) {
-  const cookie = req.headers.get("cookie") || "";
-  const res = await fetch(`${origin}/api/relatorios/condominio/final/${auditoriaId}`, {
-    cache: "no-store",
-    headers: { "Content-Type": "application/json", cookie, Accept: "application/json" },
-  });
-
-  const json = await res.json().catch(() => null);
-  if (!res.ok) {
-    const msg = json?.error ? safeText(json.error) : `Falha ao obter dados (HTTP ${res.status})`;
-    throw new Error(msg);
-  }
-
-  return json?.data ?? json;
-}
-
-function compactObs(s: string) {
-  const t = safeText(s).trim();
-  if (!t) return "—";
-  return t.length > 220 ? t.slice(0, 217) + "…" : t;
-}
-
-/**
- * ============ RENDER ============
- */
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  try {
-    const { user, role } = await getUserAndRole();
-    if (!user) return bad("Não autenticado", 401);
-    if (!roleGte(role as any, "interno")) return bad("Sem permissão", 403);
-
-    const auditoriaId = safeText(params?.id).trim();
-    if (!auditoriaId) return bad("ID inválido", 400);
-
-    const origin = getOrigin(req);
-    const data = await fetchReportJson(req, origin, auditoriaId);
-    if (!data) return bad("Relatório sem dados", 404);
-
-    const meta = data?.meta || {};
-    const condominioNome = safeText(meta?.condominio_nome) || safeText(data?.condominio?.nome) || "—";
-    const periodo = safeText(meta?.competencia) || safeText(data?.periodo) || "—";
-    const geradoEm = safeText(meta?.gerado_em) || "";
-
-    // vendas
-    const vendas = Array.isArray(data?.vendas_por_maquina?.itens)
-      ? data.vendas_por_maquina.itens.map((v: any) => ({
-          maquina: safeText(v?.maquina),
-          ciclos: n(v?.ciclos),
-          valor_unitario: n(v?.valor_unitario),
-          valor_total: n(v?.valor_total),
-        }))
-      : [];
-
-    const receitaBruta = n(data?.vendas_por_maquina?.receita_bruta_total);
-    const cashbackPct = n(data?.vendas_por_maquina?.cashback_percent);
-    const cashbackValor = n(data?.vendas_por_maquina?.valor_cashback);
-
-    // consumos
-    const consumos = Array.isArray(data?.consumo_insumos?.itens)
-      ? data.consumo_insumos.itens.map((c: any) => ({
-          nome: safeText(c?.insumo),
-          anterior: c?.leitura_anterior ?? null,
-          atual: c?.leitura_atual ?? null,
-          consumo: n(c?.consumo),
-          valor_total: n(c?.valor_total),
-        }))
-      : [];
-
-    const totalConsumo = n(data?.consumo_insumos?.total_repasse_consumo);
-    const totalCashback = n(data?.totalizacao_final?.cashback);
-    const totalPagar = n(data?.totalizacao_final?.total_a_pagar_condominio);
-
-    const obs = compactObs(data?.observacoes);
-
-    // anexos (embutimos JPEG; outros formatos caem no fallback sem quebrar layout)
-    const anexosRaw = data?.anexos || {};
-    const candidates: Array<{ tipo: string; url: string }> = [
-      { tipo: "Foto do medidor de Água", url: safeText(anexosRaw?.foto_agua_url) },
-      { tipo: "Foto do medidor de Energia", url: safeText(anexosRaw?.foto_energia_url) },
-      { tipo: "Foto do medidor de Gás", url: safeText(anexosRaw?.foto_gas_url) },
-      { tipo: "Comprovante de pagamento", url: safeText(anexosRaw?.comprovante_fechamento_url) },
-    ].filter((x) => x.url);
-
-    const logo = readLogoJpegFromPublic();
-
-    /**
-     * ============ LAYOUT ============
-     */
-    const left = 48;
-    const right = 547;
-    const top = 800;
-    const bottom = 60;
-    const footerY = 28;
-
-    const titleX = left + 150;
-
-    function header(pageNo: number, totalPages: number, hasLogo: boolean) {
-      let s = "";
-      const y0 = top;
-
-      // linha topo
-      s += pdfLine(left, y0, right, y0, 1.2);
-
-      // logo (não empurra mais nada, porque o título tem X fixo)
-      if (hasLogo) {
-        const targetH = 34;
-        const scale = targetH / (logo?.h || 34);
-        const w = (logo?.w || 120) * scale;
-        const h = targetH;
-        s += pdfImage(left, y0 - 48, w, h, "Logo");
-      }
-
-      // títulos
-      s += pdfText("F2", 16, titleX, y0 - 18, "Prestação de Contas");
-      s += pdfText("F1", 10, titleX, y0 - 34, "Lavanderia Compartilhada — Relatório final");
-
-      // card compacto (SÓ competência + gerado em) — menor e sem invadir linhas
-      const cardW = 190;
-      const cardH = 40;
-      const cx = right - cardW;
-      const cyTop = y0 - 58; // topo do card
-      const cy = cyTop - cardH;
-
-      s += pdfRect(cx, cy, cardW, cardH, 0.8);
-
-      s += pdfText("F1", 8.5, cx + 10, cyTop - 16, "Competência");
-      s += pdfText("F2", 10.5, cx + 10, cyTop - 30, periodo);
-
-      s += pdfText("F1", 8.2, cx + 90, cyTop - 16, "Gerado em");
-      const geradoTxt = geradoEm ? new Date(geradoEm).toLocaleString("pt-BR") : "—";
-      s += pdfText("F2", 8.5, cx + 90, cyTop - 30, geradoTxt);
-
-      // linha separadora header
-      s += pdfLine(left, y0 - 95, right, y0 - 95, 0.8);
-
-      // footer
-      s += pdfLine(left, footerY + 18, right, footerY + 18, 0.6);
-      s += pdfText("F1", 8, left, footerY + 6, "META LAV • Relatório gerado automaticamente");
-      s += pdfText("F1", 8, right - 90, footerY + 6, `Página ${pageNo} de ${totalPages}`);
-
-      return s;
-    }
-
-    // páginas
-    const pages: { content: string; xobjects: Record<string, { bytes: Uint8Array; w: number; h: number }> }[] = [];
-
-    // ======= PAGE 1
-    let y = top - 120;
-    let body = "";
-
-    // Condomínio em destaque (fora do card, do jeito certo)
-    body += pdfText("F2", 12.5, left, y + 26, `Condomínio: ${condominioNome}`);
-    body += pdfLine(left, y + 16, right, y + 16, 0.6);
-
-    // KPIs
-    const boxH = 54;
-    const gap = 10;
-    const totalW = right - left;
-    const boxW = (totalW - gap * 3) / 4;
-
-    function kpiBox(ix: number, label: string, value: string) {
-      const x = left + ix * (boxW + gap);
-      body += pdfRect(x, y - boxH, boxW, boxH, 0.8);
-      body += pdfText("F1", 8.2, x + 10, y - 16, label);
-      body += pdfText("F2", 12, x + 10, y - 36, value);
-    }
-
-    kpiBox(0, "Receita bruta", fmtBRL(receitaBruta));
-    kpiBox(1, "Cashback", fmtBRL(cashbackValor));
-    kpiBox(2, "Repasse (consumo)", fmtBRL(totalConsumo));
-    kpiBox(3, "TOTAL A PAGAR", fmtBRL(totalPagar));
-
-    y -= boxH + 18;
-
-    function ensureSpace(need: number) {
-      if (y - need < bottom + 40) {
-        pages.push({ content: body, xobjects: {} });
-        body = "";
-        y = top - 120;
-      }
-    }
-
-    function sectionTitle(idx: number, title: string, sub?: string) {
-      ensureSpace(40);
-      body += pdfText("F2", 12, left, y, `${idx}. ${title}`);
-      y -= 14;
-      if (sub) {
-        body += pdfText("F1", 9, left, y, sub);
-        y -= 10;
-      }
-      body += pdfLine(left, y, right, y, 0.6);
-      y -= 14;
-    }
-
-    // 1 Vendas
-    sectionTitle(1, "Vendas", "Vendas por máquina");
-
-    ensureSpace(90);
-    const tX = left;
-    const tW = right - left;
-    const rowH = 16;
-
-    body += pdfRect(tX, y - rowH, tW, rowH, 0.8);
-    body += pdfText("F2", 9, tX + 8, y - 12, "Máquina");
-    body += pdfText("F2", 9, tX + tW * 0.55, y - 12, "Ciclos");
-    body += pdfText("F2", 9, tX + tW * 0.7, y - 12, "V. unit.");
-    body += pdfText("F2", 9, tX + tW * 0.86, y - 12, "Receita");
-    y -= rowH;
-
-    for (const v of vendas) {
-      ensureSpace(20);
-      body += pdfRect(tX, y - rowH, tW, rowH, 0.6);
-      body += pdfText("F1", 9.5, tX + 8, y - 12, safeText(v.maquina) || "—");
-      body += pdfText("F1", 9.5, tX + tW * 0.55, y - 12, fmtNum(v.ciclos));
-      body += pdfText("F1", 9.5, tX + tW * 0.7, y - 12, fmtBRL(v.valor_unitario));
-      body += pdfText("F2", 9.5, tX + tW * 0.84, y - 12, fmtBRL(v.valor_total));
-      y -= rowH;
-    }
-
-    y -= 8;
-    body += pdfText(
-      "F1",
-      9.5,
-      left,
-      y,
-      `Receita bruta: ${fmtBRL(receitaBruta)} • Cashback: ${cashbackPct.toLocaleString("pt-BR")} % (${fmtBRL(cashbackValor)})`
-    );
-    y -= 18;
-
-    // 2 Insumos
-    sectionTitle(2, "Insumos", "Leitura anterior, leitura atual, consumo e repasse");
-
-    ensureSpace(110);
-    body += pdfRect(tX, y - rowH, tW, rowH, 0.8);
-    body += pdfText("F2", 9, tX + 8, y - 12, "Insumo");
-    body += pdfText("F2", 9, tX + tW * 0.42, y - 12, "Anterior");
-    body += pdfText("F2", 9, tX + tW * 0.56, y - 12, "Atual");
-    body += pdfText("F2", 9, tX + tW * 0.68, y - 12, "Consumo");
-    body += pdfText("F2", 9, tX + tW * 0.82, y - 12, "Repasse");
-    y -= rowH;
-
-    for (const c of consumos) {
-      ensureSpace(20);
-      body += pdfRect(tX, y - rowH, tW, rowH, 0.6);
-      body += pdfText("F1", 9.5, tX + 8, y - 12, safeText(c.nome) || "—");
-      body += pdfText("F1", 9.5, tX + tW * 0.42, y - 12, fmtLeitura(c.anterior));
-      body += pdfText("F1", 9.5, tX + tW * 0.56, y - 12, fmtLeitura(c.atual));
-      body += pdfText("F1", 9.5, tX + tW * 0.68, y - 12, fmtNum(c.consumo));
-      body += pdfText("F2", 9.5, tX + tW * 0.8, y - 12, fmtBRL(c.valor_total));
-      y -= rowH;
-    }
-
-    y -= 10;
-    body += pdfText("F1", 9.5, left, y, `Total do repasse de consumo: ${fmtBRL(totalConsumo)}`);
-    y -= 18;
-
-    // 3 Financeiro
-    sectionTitle(3, "Financeiro", "Composição do valor final");
-
-    ensureSpace(75);
-    const boxYTop = y;
-    const boxHeight = 58;
-    body += pdfRect(left, boxYTop - boxHeight, right - left, boxHeight, 0.8);
-    body += pdfText("F1", 10, left + 10, boxYTop - 18, `Cashback: ${fmtBRL(totalCashback)}`);
-    body += pdfText("F1", 10, left + 10, boxYTop - 34, `Repasse de consumo: ${fmtBRL(totalConsumo)}`);
-    body += pdfText("F2", 12, left + 10, boxYTop - 52, `TOTAL A PAGAR AO CONDOMÍNIO: ${fmtBRL(totalPagar)}`);
-    y -= boxHeight + 18;
-
-    // 4 Observações
-    sectionTitle(4, "Observações", "Notas do auditor / conferência");
-    ensureSpace(50);
-    body += pdfText("F1", 10, left, y, obs);
-    y -= 20;
-
-    // fecha page 1
-    const page1XObjects: Record<string, { bytes: Uint8Array; w: number; h: number }> = {};
-    if (logo) page1XObjects["Logo"] = { bytes: logo.bytes, w: logo.w, h: logo.h };
-    pages.push({ content: body, xobjects: page1XObjects });
-
-    // ======= ANEXOS: 4 por página (2x2)
-    // Cada célula com título + imagem "contain" dentro do quadrado
-    const perPage = 4;
-    for (let base = 0; base < candidates.length; base += perPage) {
-      const batch = candidates.slice(base, base + perPage);
-
-      let c = "";
-      const xobjects: Record<string, { bytes: Uint8Array; w: number; h: number }> = {};
-      if (logo) xobjects["Logo"] = { bytes: logo.bytes, w: logo.w, h: logo.h };
-
-      // título
-      let yy = top - 120;
-      c += pdfText("F2", 12, left, yy, "Anexos");
-      yy -= 14;
-      c += pdfText("F1", 9.5, left, yy, `Evidências do fechamento — ${periodo}`);
-      yy -= 10;
-      c += pdfLine(left, yy, right, yy, 0.6);
-
-      // grid
-      const gridTop = yy - 16;
-      const gridW = right - left;
-      const gridH = 620;
-
-      const colGap = 12;
-      const rowGap = 12;
-      const cols = 2;
-      const rows = 2;
-
-      const cellW = (gridW - colGap) / 2;
-      const cellH = (gridH - rowGap) / 2;
-
-      async function renderCell(slot: number, a: { tipo: string; url: string }) {
-        const col = slot % 2;
-        const row = Math.floor(slot / 2);
-
-        const x = left + col * (cellW + colGap);
-        const yTop = gridTop - row * (cellH + rowGap);
-
-        // caixa
-        c += pdfRect(x, yTop - cellH, cellW, cellH, 0.8);
-
-        // título
-        c += pdfText("F2", 10.5, x + 10, yTop - 18, a.tipo);
-
-        const img = await fetchImageAsJpeg(a.url, 20000);
-
-        // área interna de imagem
-        const innerX = x + 10;
-        const innerY = yTop - cellH + 12;
-        const innerW = cellW - 20;
-        const innerH = cellH - 38;
-
-        if (img) {
-          const name = `A${base + slot + 1}`;
-          xobjects[name] = { bytes: img.bytes, w: img.w, h: img.h };
-
-          // contain
-          const scale = Math.min(innerW / img.w, innerH / img.h);
-          const w = img.w * scale;
-          const h = img.h * scale;
-          const px = innerX + (innerW - w) / 2;
-          const py = innerY + (innerH - h) / 2;
-
-          c += pdfImage(px, py, w, h, name);
-        } else {
-          c += pdfText("F1", 9.2, innerX, yTop - 44, "Não foi possível incorporar este anexo no PDF (somente JPG).");
-          c += pdfText("F1", 8.5, innerX, yTop - 58, "Arquivo no sistema:");
-
-          const u = safeText(a.url);
-          const short = u.length > 140 ? u.slice(0, 137) + "..." : u;
-
-          const line1 = short.slice(0, 70);
-          const line2 = short.slice(70, 140);
-
-          c += pdfText("F1", 8.0, innerX, yTop - 72, line1);
-          if (line2.trim()) c += pdfText("F1", 8.0, innerX, yTop - 84, line2);
-        }
-      }
-
-      for (let i = 0; i < batch.length; i++) {
-        // eslint-disable-next-line no-await-in-loop
-        await renderCell(i, batch[i]);
-      }
-
-      pages.push({ content: c, xobjects });
-    }
-
-    // ======= aplica header/footer
-    const totalPages = pages.length;
-    const withHeader = pages.map((pg, idx) => {
-      const hasLogo = !!pg.xobjects["Logo"];
-      const h = header(idx + 1, totalPages, hasLogo);
-      return { ...pg, content: h + pg.content };
-    });
-
-    const pdfBytes = buildPdf(withHeader);
-
-    return new NextResponse(pdfBytes, {
-      status: 200,
-      headers: {
-        "Content-Type": "application/pdf",
-        "Content-Disposition": `inline; filename="relatorio-final-${auditoriaId}.pdf"`,
-        "Cache-Control": "no-store",
-      },
-    });
-  } catch (e: any) {
-    return bad("Falha ao gerar PDF", 500, { details: e?.message ?? String(e) });
-  }
 }
