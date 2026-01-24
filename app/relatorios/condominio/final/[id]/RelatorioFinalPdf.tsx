@@ -214,7 +214,7 @@ function resolveLogoUri(logo?: Props["logo"]) {
 
 function AnexoBox({ item, full }: { item: AnexoPdf; full?: boolean }) {
   return (
-    <View style={[S.anexoBox, full ? S.anexoBoxFull : null]}>
+    <View style={[S.anexoBox, full ? S.anexoBoxFull : undefined]}>
       <Text style={S.anexoName}>{item.tipo}</Text>
       {item?.src?.data ? (
         <Image src={imgDataUri(item.src!)} style={S.anexoImg} />
