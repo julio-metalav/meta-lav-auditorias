@@ -168,9 +168,12 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const pdfBuffer = await renderToBuffer(React.createElement(RelatorioFinalPdf as any, props as any));
 
 
-  const fileName = `relatorio-final-${auditoriaId}.pdf`;
+    const fileName = `relatorio-final-${auditoriaId}.pdf`;
 
-  return new NextResponse(pdfBuffer, {
+  // ✅ NextResponse não tipa Buffer como BodyInit, então converte para Uint8Array
+  const body = new Uint8Array(pdfBuffer);
+
+  return new NextResponse(body, {
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `inline; filename="${fileName}"`,
