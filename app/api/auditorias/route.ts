@@ -48,6 +48,11 @@ function pickMonthISO(row: any, sch: Schema) {
   return raw ? String(raw) : null;
 }
 
+function isValidMesRef(v: any) {
+  const s = String(v ?? "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s); // esperamos YYYY-MM-01
+}
+
 /**
  * Busca emails dos usuários (auth.users) por id.
  * Usa service role (supabaseAdmin) e chama admin.auth.admin.getUserById.
@@ -73,8 +78,9 @@ async function fetchAuthEmailsByIds(admin: ReturnType<typeof supabaseAdmin>, ids
 
 /* =========================================================
    GET  /api/auditorias
+   opcional: ?mes_ref=YYYY-MM-01  (filtra por competência)
    ========================================================= */
-export async function GET() {
+export async function GET(req: Request) {
   const ctx = await getUserAndRole();
   if (!ctx?.user) {
     return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
@@ -91,10 +97,20 @@ export async function GET() {
   const admin = supabaseAdmin();
   const sch = await detectSchema(admin);
 
+  // ✅ filtro por mês (se vier)
+  const url = new URL(req.url);
+  const mesRefParam = url.searchParams.get("mes_ref");
+  const mes_ref = isValidMesRef(mesRefParam) ? String(mesRefParam) : null;
+
   let q = admin
     .from(sch.table)
     .select("*")
     .order(sch.monthCol, { ascending: false });
+
+  // ✅ aplica filtro por competência (mes_ref/ano_mes)
+  if (mes_ref) {
+    q = q.eq(sch.monthCol, mes_ref);
+  }
 
   // Auditor vê:
   // - sem auditor (pool)
@@ -110,12 +126,8 @@ export async function GET() {
 
   const list = rows ?? [];
 
-  const condoIds = Array.from(
-    new Set(list.map((r: any) => r[sch.condoCol]).filter(Boolean))
-  );
-  const auditorIds = Array.from(
-    new Set(list.map((r: any) => r[sch.auditorCol]).filter(Boolean))
-  );
+  const condoIds = Array.from(new Set(list.map((r: any) => r[sch.condoCol]).filter(Boolean)));
+  const auditorIds = Array.from(new Set(list.map((r: any) => r[sch.auditorCol]).filter(Boolean)));
 
   // Condos
   const { data: condos } = await (condoIds.length
@@ -204,11 +216,7 @@ export async function POST(req: Request) {
       [sch.auditorCol]: null, // pool
     };
 
-    const { data, error } = await admin
-      .from(sch.table)
-      .insert([insertRow])
-      .select("id")
-      .single();
+    const { data, error } = await admin.from(sch.table).insert([insertRow]).select("id").single();
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
