@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import React from "react";
 import { NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
@@ -164,7 +165,8 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   };
 
   // 4) gera PDF
-  const pdfBuffer = await renderToBuffer(<RelatorioFinalPdf {...(props as any)} />);
+  const pdfBuffer = await renderToBuffer(React.createElement(RelatorioFinalPdf as any, props as any));
+
 
   const fileName = `relatorio-final-${auditoriaId}.pdf`;
 
