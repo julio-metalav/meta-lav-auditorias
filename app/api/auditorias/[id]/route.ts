@@ -2,9 +2,9 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { getUserAndRole, supabaseAdmin } from "@/lib/auth";
+import { supabaseServer } from "@/lib/supabaseServer";
 
 type Role = "auditor" | "interno" | "gestor";
-type Status = "aberta" | "em_andamento" | "em_conferencia" | "final";
 
 function roleGte(role: Role | null, min: Role) {
   const rank: Record<Role, number> = { auditor: 1, interno: 2, gestor: 3 };
@@ -105,8 +105,9 @@ export async function GET(
 ) {
   try {
     const { user, role } = await getUserAndRole();
-    if (!user)
+    if (!user) {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    }
 
     const sb = supabaseAdmin();
     const id = params.id;
@@ -117,14 +118,12 @@ export async function GET(
       .eq("id", id)
       .maybeSingle();
 
-    if (audErr)
-      return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
-    if (!aud)
-      return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+    if (audErr) return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
+    if (!aud) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
     const audRow: any = aud;
 
-    const isManager = roleGte(role, "interno");
+    const isManager = roleGte(role as any, "interno");
     const isOwnerAuditor = audRow.auditor_id === user.id;
     const isUnassigned = !audRow.auditor_id;
 
@@ -132,10 +131,7 @@ export async function GET(
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
-    const { condominio, error: condoErr } = await fetchCondominioBasics(
-      audRow.condominio_id
-    );
-
+    const { condominio, error: condoErr } = await fetchCondominioBasics(audRow.condominio_id);
     const payload = withCompatAliases(audRow, condoErr ? null : condominio);
 
     return NextResponse.json({ ok: true, data: payload, auditoria: payload });
@@ -153,27 +149,26 @@ export async function PATCH(
 ) {
   try {
     const { user, role } = await getUserAndRole();
-    if (!user)
+    if (!user) {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    }
 
-    const sb = supabaseAdmin();
+    const admin = supabaseAdmin();
     const id = params.id;
     const body = await req.json().catch(() => ({}));
 
-    const { data: aud, error: audErr } = await sb
+    const { data: aud, error: audErr } = await admin
       .from("auditorias")
       .select("id, condominio_id, auditor_id, status")
       .eq("id", id)
       .maybeSingle();
 
-    if (audErr)
-      return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
-    if (!aud)
-      return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+    if (audErr) return NextResponse.json({ ok: false, error: audErr.message }, { status: 400 });
+    if (!aud) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
 
     const audRow: any = aud;
 
-    const isManager = roleGte(role, "interno");
+    const isManager = roleGte(role as any, "interno");
     const isOwnerAuditor = audRow.auditor_id === user.id;
     const isUnassigned = !audRow.auditor_id;
 
@@ -210,23 +205,113 @@ export async function PATCH(
       }
     }
 
+    // auditor (não manager): só permite status "em_conferencia" e nunca "final"
     if (!isManager && patch.status === "final") delete patch.status;
-    if (!isManager && patch.status && patch.status !== "em_conferencia")
-      delete patch.status;
+    if (!isManager && patch.status && patch.status !== "em_conferencia") delete patch.status;
 
-    const { data: saved, error: saveErr } = await sb
-  .from("auditorias")
-  .update(patch)
-  .eq("id", id)
-  .select(AUDITORIA_SELECT)
-  .maybeSingle();
+    // ==========================
+    // AUDITOR: RPC (CLAIM ATÔMICO)
+    // ==========================
+    if (!isManager) {
+      // 1) chama RPC com sessão do usuário (auth.uid() funcionando)
+      const sbUser = supabaseServer();
 
-if (saveErr) return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
-if (!saved) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+      const rpcPayload = {
+        p_auditoria_id: id,
+        p_leitura_agua: patch.agua_leitura ?? null,
+        p_leitura_energia: patch.energia_leitura ?? null,
+        p_leitura_gas: patch.gas_leitura ?? null,
+        p_observacoes: patch.observacoes ?? null,
+      };
 
-const { condominio } = await fetchCondominioBasics((saved as any).condominio_id);
-const payload = withCompatAliases(saved as any, condominio);
+      const { data: rpcRows, error: rpcErr } = await sbUser.rpc(
+        "claim_and_patch_auditoria",
+        rpcPayload as any
+      );
 
+      if (rpcErr) {
+        return NextResponse.json({ ok: false, error: rpcErr.message }, { status: 400 });
+      }
+
+      const claimed = Array.isArray(rpcRows) ? rpcRows[0] : null;
+
+      // 0 rows => outro auditor já pegou (ou auth.uid null)
+      if (!claimed) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "claimed_by_other",
+            message: "Essa auditoria acabou de ser assumida por outro auditor. Recarregue.",
+          },
+          { status: 409 }
+        );
+      }
+
+      // 2) campos extras (fotos / fechamento_obs / status etc.)
+      const extraPatch: any = { ...patch };
+      delete extraPatch.agua_leitura;
+      delete extraPatch.energia_leitura;
+      delete extraPatch.gas_leitura;
+      delete extraPatch.observacoes;
+
+      let savedFull: any = null;
+
+      if (Object.keys(extraPatch).length > 0) {
+        // garante que só atualiza se auditor_id já é do user (claim já fez isso)
+        const { data: saved, error: saveErr } = await admin
+          .from("auditorias")
+          .update(extraPatch)
+          .eq("id", id)
+          .eq("auditor_id", user.id)
+          .select(AUDITORIA_SELECT)
+          .maybeSingle();
+
+        if (saveErr) return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
+
+        // se por algum motivo não salvou, trata como conflito
+        if (!saved) {
+          return NextResponse.json(
+            { ok: false, error: "claimed_by_other", message: "Conflito ao salvar. Recarregue." },
+            { status: 409 }
+          );
+        }
+
+        savedFull = saved;
+      } else {
+        // se não tem extraPatch, busca o registro completo (já com auditor_id setado)
+        const { data: full, error: fullErr } = await admin
+          .from("auditorias")
+          .select(AUDITORIA_SELECT)
+          .eq("id", id)
+          .maybeSingle();
+
+        if (fullErr) return NextResponse.json({ ok: false, error: fullErr.message }, { status: 400 });
+        if (!full) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+
+        savedFull = full;
+      }
+
+      const { condominio } = await fetchCondominioBasics((savedFull as any).condominio_id);
+      const payload = withCompatAliases(savedFull as any, condominio);
+
+      return NextResponse.json({ ok: true, data: payload, auditoria: payload });
+    }
+
+    // ==========================
+    // MANAGER (INTERNO/GESTOR): update direto
+    // ==========================
+    const { data: saved, error: saveErr } = await admin
+      .from("auditorias")
+      .update(patch)
+      .eq("id", id)
+      .select(AUDITORIA_SELECT)
+      .maybeSingle();
+
+    if (saveErr) return NextResponse.json({ ok: false, error: saveErr.message }, { status: 400 });
+    if (!saved) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+
+    const { condominio } = await fetchCondominioBasics((saved as any).condominio_id);
+    const payload = withCompatAliases(saved as any, condominio);
 
     return NextResponse.json({ ok: true, data: payload, auditoria: payload });
   } catch (e: any) {
