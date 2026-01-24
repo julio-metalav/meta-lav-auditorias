@@ -8,6 +8,7 @@ type Props = {
   // logo vem do route.ts (Buffer + format). Se quiser no futuro, pode mandar string (URL) também.
   logo?: ImageSrcObj | string | null;
 
+  // pagamento_texto fica no tipo por compatibilidade, mas NÃO é exibido no relatório final
   condominio: { nome: string; pagamento_texto?: string | null };
   periodo: string;
   gerado_em?: string;
@@ -48,7 +49,7 @@ const S = StyleSheet.create({
     paddingTop: 22,
     paddingHorizontal: 28,
     paddingBottom: 22,
-    fontSize: 10,
+    fontSize: 9, // ✅ menor
     fontFamily: "Helvetica",
     color: C.ink,
     backgroundColor: C.bg,
@@ -66,8 +67,8 @@ const S = StyleSheet.create({
   logo: { width: 128, height: 42, objectFit: "contain" },
 
   titleBlock: { flexDirection: "column" },
-  title: { fontSize: 18, fontWeight: 700, letterSpacing: 0.2, color: C.ink },
-  subtitle: { marginTop: 2, fontSize: 9.5, color: C.muted },
+  title: { fontSize: 16, fontWeight: 700, letterSpacing: 0.2, color: C.ink }, // ✅ menor
+  subtitle: { marginTop: 2, fontSize: 9, color: C.muted },
 
   badge: {
     marginTop: 8,
@@ -78,7 +79,7 @@ const S = StyleSheet.create({
     backgroundColor: C.soft,
     borderWidth: 1,
     borderColor: "#CFE2F1",
-    fontSize: 8.5,
+    fontSize: 8,
     color: C.brand,
     fontWeight: 700,
   },
@@ -92,7 +93,7 @@ const S = StyleSheet.create({
     padding: 10,
   },
   metaLabel: { fontSize: 8, color: C.muted },
-  metaValue: { marginTop: 2, fontSize: 10.5, fontWeight: 700, color: C.ink },
+  metaValue: { marginTop: 2, fontSize: 10, fontWeight: 700, color: C.ink },
   metaDivider: { height: 1, backgroundColor: C.line, marginVertical: 8 },
 
   hr: { height: 1, backgroundColor: C.line, marginBottom: 12 },
@@ -101,13 +102,13 @@ const S = StyleSheet.create({
   kpiSpacer: { width: 10 },
 
   kpi: { flexGrow: 1, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 10 },
-  kpiLabel: { fontSize: 8.5, color: C.muted },
-  kpiValue: { marginTop: 4, fontSize: 13, fontWeight: 700, color: C.ink },
-  kpiHint: { marginTop: 3, fontSize: 8.5, color: C.muted },
+  kpiLabel: { fontSize: 8, color: C.muted },
+  kpiValue: { marginTop: 4, fontSize: 12, fontWeight: 700, color: C.ink }, // ✅ menor
+  kpiHint: { marginTop: 3, fontSize: 8, color: C.muted },
 
   kpiTotal: { flexGrow: 1.3, backgroundColor: C.brand, borderRadius: 10, padding: 10 },
-  kpiTotalLabel: { fontSize: 8.5, color: "#DCEAF6", fontWeight: 700 },
-  kpiTotalValue: { marginTop: 4, fontSize: 16, fontWeight: 700, color: C.white },
+  kpiTotalLabel: { fontSize: 8, color: "#DCEAF6", fontWeight: 700 },
+  kpiTotalValue: { marginTop: 4, fontSize: 14, fontWeight: 700, color: C.white }, // ✅ menor
 
   card: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 12, marginBottom: 12 },
 
@@ -126,18 +127,18 @@ const S = StyleSheet.create({
     paddingTop: 3,
   },
   sectionHeaderSpacer: { width: 8 },
-  sectionTitle: { fontSize: 12.5, fontWeight: 700, color: C.ink },
-  sectionSub: { marginTop: 2, fontSize: 9, color: C.muted },
+  sectionTitle: { fontSize: 11.5, fontWeight: 700, color: C.ink }, // ✅ menor
+  sectionSub: { marginTop: 2, fontSize: 8.5, color: C.muted },
 
   table: { borderWidth: 1, borderColor: C.line, borderRadius: 10, overflow: "hidden" },
   trHead: { flexDirection: "row", backgroundColor: C.head, borderBottomWidth: 1, borderBottomColor: C.line },
   tr: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: C.line },
   trAlt: { backgroundColor: C.altRow },
-  th: { paddingVertical: 7, paddingHorizontal: 8, fontSize: 9, fontWeight: 700, color: C.ink },
-  td: { paddingVertical: 7, paddingHorizontal: 8, fontSize: 9.5, color: C.ink },
+  th: { paddingVertical: 7, paddingHorizontal: 8, fontSize: 8.5, fontWeight: 700, color: C.ink },
+  td: { paddingVertical: 7, paddingHorizontal: 8, fontSize: 9, color: C.ink },
   r: { textAlign: "right" },
 
-  note: { marginTop: 8, fontSize: 9.5, color: C.ink },
+  note: { marginTop: 8, fontSize: 9, color: C.ink },
   strong: { fontWeight: 700 },
 
   financeBox: {
@@ -149,7 +150,7 @@ const S = StyleSheet.create({
     padding: 10,
   },
 
-  obsText: { fontSize: 9.5, color: C.ink, lineHeight: 1.35 },
+  obsText: { fontSize: 9, color: C.ink, lineHeight: 1.35 },
 
   footer: {
     position: "absolute",
@@ -165,12 +166,16 @@ const S = StyleSheet.create({
     color: C.muted,
   },
 
-  // anexos: 2 por pagina
-  anexoGrid: { flexDirection: "row" },
+  // anexos: 4 por pagina (2x2)
+  anexoGrid: { flexDirection: "column" },
+  anexoRow: { flexDirection: "row" },
+  anexoRowSpacer: { height: 10 },
+
   anexoColSpacer: { width: 10 },
   anexoBox: { flexGrow: 1, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 8 },
-  anexoName: { fontSize: 9.5, fontWeight: 700, marginBottom: 6, color: C.ink },
-  anexoImg: { width: "100%", height: 330, objectFit: "cover", borderRadius: 8 },
+  anexoName: { fontSize: 9, fontWeight: 700, marginBottom: 6, color: C.ink },
+  anexoImg: { width: "100%", height: 240, objectFit: "cover", borderRadius: 8 },
+  anexoEmpty: { fontSize: 8.5, color: C.muted },
 });
 
 function brl(v: number) {
@@ -210,17 +215,38 @@ function resolveLogoUri(logo?: Props["logo"]) {
   return null;
 }
 
+function AnexoCell({ item }: { item?: AnexoPdf }) {
+  if (!item) {
+    return (
+      <>
+        <Text style={S.anexoName}>—</Text>
+        <Text style={S.anexoEmpty}>Sem anexo nesta posição.</Text>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Text style={S.anexoName}>{item.tipo}</Text>
+      {item?.src?.data ? (
+        <Image src={imgDataUri(item.src!)} style={S.anexoImg} />
+      ) : (
+        <Text style={S.anexoEmpty}>Não foi possível incorporar este anexo no PDF.</Text>
+      )}
+    </>
+  );
+}
+
 export default function RelatorioFinalPdf(p: Props) {
   const logoUri = resolveLogoUri(p.logo);
 
   const obs = (p.observacoes || "").trim();
-  // Observações compactas (não empurra seção pra outra página sem necessidade)
-  const obsCompact = obs ? (obs.length > 260 ? obs.slice(0, 257) + "…" : obs) : "—";
+  // Observações compactas (se existir — senão, não renderiza)
+  const obsCompact = obs ? (obs.length > 260 ? obs.slice(0, 257) + "…" : obs) : "";
 
   const anexosValidos = Array.isArray(p.anexos) ? p.anexos : [];
-  const anexosPaginas = chunk(anexosValidos, 2);
-
-  const pagamentoTexto = (p.condominio?.pagamento_texto || "").trim() || "—";
+  // 4 por página: 2x2
+  const anexosPaginas = chunk(anexosValidos, 4);
 
   return (
     <Document>
@@ -250,12 +276,9 @@ export default function RelatorioFinalPdf(p: Props) {
             <View style={S.metaDivider} />
 
             <Text style={S.metaLabel}>Gerado em</Text>
-            <Text style={[S.metaValue, { fontSize: 9.5 }]}>{fmtDateTime(p.gerado_em)}</Text>
+            <Text style={[S.metaValue, { fontSize: 9 }]}>{fmtDateTime(p.gerado_em)}</Text>
 
-            <View style={S.metaDivider} />
-
-            <Text style={S.metaLabel}>Forma de pagamento</Text>
-            <Text style={[S.metaValue, { fontSize: 9.2 }]}>{pagamentoTexto}</Text>
+            {/* ✅ Forma de pagamento REMOVIDA por requisito */}
           </View>
         </View>
 
@@ -382,27 +405,27 @@ export default function RelatorioFinalPdf(p: Props) {
               Repasse de consumo (insumos): <Text style={S.strong}>{brl(p.total_consumo ?? 0)}</Text>
             </Text>
             <Text style={[S.note, { marginTop: 10 }]}>
-              Total a pagar ao condomínio: <Text style={[S.strong, { fontSize: 12 }]}>{brl(p.total_pagar ?? 0)}</Text>
+              Total a pagar ao condomínio: <Text style={[S.strong, { fontSize: 11 }]}>{brl(p.total_pagar ?? 0)}</Text>
             </Text>
           </View>
 
-          <Text style={[S.note, { marginTop: 10 }]}>
-            Forma de pagamento: <Text style={S.strong}>{pagamentoTexto}</Text>
-          </Text>
+          {/* ✅ Forma de pagamento REMOVIDA por requisito */}
         </View>
 
-        {/* 4 Observações */}
-        <View style={[S.card, { marginBottom: 0 }]} wrap={false}>
-          <View style={S.sectionHeader}>
-            <Text style={S.sectionIndex}>4</Text>
-            <View style={S.sectionHeaderSpacer} />
-            <View>
-              <Text style={S.sectionTitle}>Observações</Text>
-              <Text style={S.sectionSub}>Notas do auditor / conferência</Text>
+        {/* 4 Observações (✅ só se existir; se ficar grande demais, some) */}
+        {obsCompact ? (
+          <View style={[S.card, { marginBottom: 0 }]}>
+            <View style={S.sectionHeader}>
+              <Text style={S.sectionIndex}>4</Text>
+              <View style={S.sectionHeaderSpacer} />
+              <View>
+                <Text style={S.sectionTitle}>Observações</Text>
+                <Text style={S.sectionSub}>Notas do auditor / conferência</Text>
+              </View>
             </View>
+            <Text style={S.obsText}>{obsCompact}</Text>
           </View>
-          <Text style={S.obsText}>{obsCompact}</Text>
-        </View>
+        ) : null}
 
         <View style={S.footer}>
           <Text>META LAV — Tecnologia em Lavanderia</Text>
@@ -410,74 +433,76 @@ export default function RelatorioFinalPdf(p: Props) {
         </View>
       </Page>
 
-      {/* Anexos — 2 por página */}
-      {anexosPaginas.map((pair, pageIdx) => (
-        <Page key={pageIdx} size="A4" style={S.page}>
-          <View style={S.topBar} />
+      {/* Anexos — 4 por página (2x2) */}
+      {anexosPaginas.map((items, pageIdx) => {
+        const r1 = [items[0], items[1]];
+        const r2 = [items[2], items[3]];
 
-          <View style={S.headerRow}>
-            <View style={S.brandLeft}>
-              {logoUri ? <Image src={logoUri} style={S.logo} /> : null}
-              <View style={S.brandSpacer} />
-              <View style={S.titleBlock}>
-                <Text style={S.title}>Anexos</Text>
-                <Text style={S.subtitle}>Evidências do fechamento — {p.periodo || "—"}</Text>
-                <Text style={S.badge}>EVIDÊNCIAS</Text>
+        return (
+          <Page key={pageIdx} size="A4" style={S.page}>
+            <View style={S.topBar} />
+
+            <View style={S.headerRow}>
+              <View style={S.brandLeft}>
+                {logoUri ? <Image src={logoUri} style={S.logo} /> : null}
+                <View style={S.brandSpacer} />
+                <View style={S.titleBlock}>
+                  <Text style={S.title}>Anexos</Text>
+                  <Text style={S.subtitle}>Evidências do fechamento — {p.periodo || "—"}</Text>
+                  <Text style={S.badge}>EVIDÊNCIAS</Text>
+                </View>
+              </View>
+
+              <View style={S.metaCard}>
+                <Text style={S.metaLabel}>Condomínio</Text>
+                <Text style={S.metaValue}>{p.condominio?.nome || "—"}</Text>
+                <View style={S.metaDivider} />
+                <Text style={S.metaLabel}>Competência</Text>
+                <Text style={S.metaValue}>{p.periodo || "—"}</Text>
+
+                {/* ✅ Forma de pagamento REMOVIDA por requisito */}
               </View>
             </View>
 
-            <View style={S.metaCard}>
-              <Text style={S.metaLabel}>Condomínio</Text>
-              <Text style={S.metaValue}>{p.condominio?.nome || "—"}</Text>
-              <View style={S.metaDivider} />
-              <Text style={S.metaLabel}>Competência</Text>
-              <Text style={S.metaValue}>{p.periodo || "—"}</Text>
-              <View style={S.metaDivider} />
-              <Text style={S.metaLabel}>Forma de pagamento</Text>
-              <Text style={[S.metaValue, { fontSize: 9.2 }]}>{pagamentoTexto}</Text>
+            <View style={S.hr} />
+
+            <View style={S.anexoGrid}>
+              {/* Linha 1 */}
+              <View style={S.anexoRow}>
+                <View style={S.anexoBox}>
+                  <AnexoCell item={r1[0]} />
+                </View>
+
+                <View style={S.anexoColSpacer} />
+
+                <View style={S.anexoBox}>
+                  <AnexoCell item={r1[1]} />
+                </View>
+              </View>
+
+              <View style={S.anexoRowSpacer} />
+
+              {/* Linha 2 */}
+              <View style={S.anexoRow}>
+                <View style={S.anexoBox}>
+                  <AnexoCell item={r2[0]} />
+                </View>
+
+                <View style={S.anexoColSpacer} />
+
+                <View style={S.anexoBox}>
+                  <AnexoCell item={r2[1]} />
+                </View>
+              </View>
             </View>
-          </View>
 
-          <View style={S.hr} />
-
-          <View style={S.anexoGrid}>
-            {/* coluna 1 */}
-            <View style={S.anexoBox}>
-              {pair[0] ? (
-                <>
-                  <Text style={S.anexoName}>{pair[0].tipo}</Text>
-                  {pair[0]?.src?.data ? (
-                    <Image src={imgDataUri(pair[0].src!)} style={S.anexoImg} />
-                  ) : (
-                    <Text style={{ fontSize: 9, color: C.muted }}>Não foi possível incorporar este anexo no PDF.</Text>
-                  )}
-                </>
-              ) : null}
+            <View style={S.footer}>
+              <Text>META LAV — Tecnologia em Lavanderia</Text>
+              <Text>Competência {p.periodo || "—"}</Text>
             </View>
-
-            <View style={S.anexoColSpacer} />
-
-            {/* coluna 2 */}
-            <View style={S.anexoBox}>
-              {pair[1] ? (
-                <>
-                  <Text style={S.anexoName}>{pair[1].tipo}</Text>
-                  {pair[1]?.src?.data ? (
-                    <Image src={imgDataUri(pair[1].src!)} style={S.anexoImg} />
-                  ) : (
-                    <Text style={{ fontSize: 9, color: C.muted }}>Não foi possível incorporar este anexo no PDF.</Text>
-                  )}
-                </>
-              ) : null}
-            </View>
-          </View>
-
-          <View style={S.footer}>
-            <Text>META LAV — Tecnologia em Lavanderia</Text>
-            <Text>Competência {p.periodo || "—"}</Text>
-          </View>
-        </Page>
-      ))}
+          </Page>
+        );
+      })}
     </Document>
   );
 }
