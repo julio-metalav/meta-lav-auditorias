@@ -8,73 +8,20 @@ type Condo = {
   nome: string;
   cidade: string;
   uf: string;
-  cep?: string;
   rua?: string;
   numero?: string;
   bairro?: string;
-  complemento?: string;
-
   tipo_pagamento?: "direto" | "boleto" | null;
-
-  // ✅ NOVO
   codigo_condominio?: string | null;
 
   // ✅ NOVO
-  contrato_assinado_em?: string | null;
-  contrato_prazo_meses?: number | null;
-  contrato_vencimento_em?: string | null;
-  email_sindico?: string | null;
-  email_financeiro?: string | null;
+  ativo?: boolean;
 };
 
 type Me = { user: { id: string; email: string }; role: string };
 
-type MaquinaRow = {
-  categoria: "lavadora" | "secadora";
-  capacidade_kg: number | null;
-  quantidade: number;
-
-  // input livre (16,50)
-  valor_ciclo_text: string;
-
-  // regras limpeza
-  limpeza_quimica_ciclos: number;
-  limpeza_mecanica_ciclos: number;
-};
-
-function brl(n: number) {
-  try {
-    return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-  } catch {
-    return `R$ ${Number(n ?? 0).toFixed(2)}`;
-  }
-}
-
-/** Aceita "16,50" ou "16.50" ou "1.234,56" e devolve number */
-function parseMoneyPtBr(input: string): number {
-  const s = String(input ?? "").trim();
-  if (!s) return 0;
-  const cleaned = s.replace(/\s/g, "").replace(/^R\$/i, "");
-  const normalized = cleaned.includes(",") ? cleaned.replace(/\./g, "").replace(",", ".") : cleaned;
-  const n = Number(normalized);
-  return Number.isFinite(n) ? n : 0;
-}
-
-/** Formata para pt-BR com 2 casas e vírgula */
-function formatMoneyPtBr(n: number): string {
-  const fixed = Number(n ?? 0).toFixed(2);
-  return fixed.replace(".", ",");
-}
-
-function clampPosInt(n: number, fallback: number) {
-  if (!Number.isFinite(n)) return fallback;
-  const i = Math.trunc(n);
-  return i > 0 ? i : fallback;
-}
-
 function badgePagamento(tipo?: string | null) {
   const t = String(tipo ?? "direto").toLowerCase();
-  const label = t === "boleto" ? "Boleto" : "Direto";
   return (
     <span
       style={{
@@ -86,23 +33,9 @@ function badgePagamento(tipo?: string | null) {
         background: "#f9fafb",
       }}
     >
-      {label}
+      {t === "boleto" ? "Boleto" : "Direto"}
     </span>
   );
-}
-
-function onlyDigits(v: string) {
-  return String(v ?? "").replace(/[^\d]/g, "");
-}
-
-function calcVencimento(assinadoEm?: string, prazoMeses?: string): string {
-  const a = String(assinadoEm ?? "").trim();
-  const p = Number(String(prazoMeses ?? "").trim());
-  if (!a || !Number.isFinite(p) || p <= 0) return "";
-  const d = new Date(a + "T00:00:00");
-  if (Number.isNaN(d.getTime())) return "";
-  d.setMonth(d.getMonth() + Math.trunc(p));
-  return d.toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
 export default function CondominiosPage() {
@@ -110,61 +43,6 @@ export default function CondominiosPage() {
   const [condos, setCondos] = useState<Condo[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  const [showForm, setShowForm] = useState(false);
-
-  const [form, setForm] = useState<any>({
-    // ✅ NOVO
-    codigo_condominio: "",
-
-    nome: "",
-    cidade: "",
-    uf: "",
-    cep: "",
-    rua: "",
-    numero: "",
-    bairro: "",
-    complemento: "",
-    sindico_nome: "",
-    sindico_telefone: "",
-    zelador_nome: "",
-    zelador_telefone: "",
-
-    cashback_percent: "",
-
-    // ✅ tarifas para cálculo de repasse por consumo
-    agua_valor_m3: "",
-    energia_valor_kwh: "",
-    gas_valor_m3: "",
-
-    banco: "",
-    agencia: "",
-    conta: "",
-    tipo_conta: "",
-    pix: "",
-    favorecido_cnpj: "",
-    tipo_pagamento: "direto",
-
-    // ✅ contrato + emails
-    contrato_assinado_em: "",
-    contrato_prazo_meses: "",
-    contrato_vencimento_em: "",
-    email_sindico: "",
-    email_financeiro: "",
-  });
-
-  // Parque de máquinas embutido no cadastro
-  const [maquinas, setMaquinas] = useState<MaquinaRow[]>([
-    {
-      categoria: "lavadora",
-      capacidade_kg: 10,
-      quantidade: 1,
-      valor_ciclo_text: "0,00",
-      limpeza_quimica_ciclos: 500,
-      limpeza_mecanica_ciclos: 2000,
-    },
-  ]);
 
   const canEdit = me?.role === "interno" || me?.role === "gestor";
 
@@ -177,16 +55,10 @@ export default function CondominiosPage() {
       fetch("/api/condominios").then((r) => r.json()),
     ]);
 
-    if (m?.error) {
-      setErr(m.error);
-      return;
-    }
-    setMe(m);
+    if (m?.error) return setErr(m.error);
+    if (c?.error) return setErr(c.error);
 
-    if (c?.error) {
-      setErr(c.error);
-      return;
-    }
+    setMe(m);
     setCondos(c.data || []);
   }
 
@@ -194,661 +66,88 @@ export default function CondominiosPage() {
     loadAll();
   }, []);
 
-  const mapsUrl = useMemo(() => {
-    const parts = [form.rua, form.numero, form.bairro, form.cidade, form.uf, form.cep]
-      .map((x: string) => String(x || "").trim())
-      .filter(Boolean)
-      .join(", ");
-    return parts ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts)}` : "";
-  }, [form]);
-
-  function addMaquina() {
-    setMaquinas((prev) => [
-      ...prev,
-      {
-        categoria: "lavadora",
-        capacidade_kg: 10, // default
-        quantidade: 1,
-        valor_ciclo_text: "0,00",
-        limpeza_quimica_ciclos: 500,
-        limpeza_mecanica_ciclos: 2000,
-      },
-    ]);
-  }
-
-  function removeMaquina(i: number) {
-    setMaquinas((prev) => prev.filter((_, idx) => idx !== i));
-  }
-
-  function updateMaquina(i: number, patch: Partial<MaquinaRow>) {
-    setMaquinas((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
-  }
-
-  const maquinasResumo = useMemo(() => {
-    const total = maquinas.reduce((acc, m) => acc + (Number(m.quantidade) || 0), 0);
-    const lav = maquinas.filter((m) => m.categoria === "lavadora").reduce((acc, m) => acc + (Number(m.quantidade) || 0), 0);
-    const sec = maquinas.filter((m) => m.categoria === "secadora").reduce((acc, m) => acc + (Number(m.quantidade) || 0), 0);
-    return { total, lav, sec };
-  }, [maquinas]);
-
-  function resetForm() {
-    setForm({
-      codigo_condominio: "",
-
-      nome: "",
-      cidade: "",
-      uf: "",
-      cep: "",
-      rua: "",
-      numero: "",
-      bairro: "",
-      complemento: "",
-      sindico_nome: "",
-      sindico_telefone: "",
-      zelador_nome: "",
-      zelador_telefone: "",
-      cashback_percent: "",
-
-      agua_valor_m3: "",
-      energia_valor_kwh: "",
-      gas_valor_m3: "",
-
-      banco: "",
-      agencia: "",
-      conta: "",
-      tipo_conta: "",
-      pix: "",
-      favorecido_cnpj: "",
-      tipo_pagamento: "direto",
-
-      contrato_assinado_em: "",
-      contrato_prazo_meses: "",
-      contrato_vencimento_em: "",
-      email_sindico: "",
-      email_financeiro: "",
-    });
-
-    setMaquinas([
-      {
-        categoria: "lavadora",
-        capacidade_kg: 10,
-        quantidade: 1,
-        valor_ciclo_text: "0,00",
-        limpeza_quimica_ciclos: 500,
-        limpeza_mecanica_ciclos: 2000,
-      },
-    ]);
-  }
-
-  const codigoOk = useMemo(() => /^\d{4}$/.test(String(form.codigo_condominio ?? "").trim()), [form.codigo_condominio]);
-
-  async function criar() {
-    setErr(null);
-    setOk(null);
-    setSaving(true);
-
+  async function toggleAtivo(c: Condo) {
     try {
-      const codigo = String(form.codigo_condominio ?? "").trim();
-      if (!/^\d{4}$/.test(codigo)) throw new Error("Preencha o Código do condomínio com 4 dígitos (ex: 0001).");
-      if (!form.nome) throw new Error("Preencha o Nome.");
+      setErr(null);
+      setOk(null);
 
-      if (!maquinas.length) throw new Error("Cadastre pelo menos 1 tipo de máquina.");
-
-      for (let idx = 0; idx < maquinas.length; idx++) {
-        const m = maquinas[idx];
-
-        if (!m.categoria) throw new Error(`Linha ${idx + 1}: Categoria da máquina é obrigatória.`);
-        if (m.capacidade_kg === null || m.capacidade_kg === undefined || !Number.isFinite(Number(m.capacidade_kg)))
-          throw new Error(`Linha ${idx + 1}: Capacidade (kg) é obrigatória. Use 10 ou 15.`);
-        if (!Number.isFinite(Number(m.quantidade)) || Number(m.quantidade) <= 0)
-          throw new Error(`Linha ${idx + 1}: Quantidade deve ser maior que zero.`);
-        const val = parseMoneyPtBr(m.valor_ciclo_text);
-        if (!Number.isFinite(val) || val < 0) throw new Error(`Linha ${idx + 1}: Valor por ciclo inválido.`);
-        if (!Number.isFinite(Number(m.limpeza_quimica_ciclos)) || Number(m.limpeza_quimica_ciclos) <= 0)
-          throw new Error(`Linha ${idx + 1}: Limpeza química (ciclos) inválida.`);
-        if (!Number.isFinite(Number(m.limpeza_mecanica_ciclos)) || Number(m.limpeza_mecanica_ciclos) <= 0)
-          throw new Error(`Linha ${idx + 1}: Limpeza mecânica (ciclos) inválida.`);
-      }
-
-      const payload: any = { ...form };
-
-      // ✅ garante só dígitos no código (4)
-      payload.codigo_condominio = onlyDigits(String(payload.codigo_condominio ?? "")).slice(0, 4);
-
-      // ⚠️ não manda valor_ciclo_lavadora/secadora (evita duplicidade)
-      payload.valor_ciclo_lavadora = null;
-      payload.valor_ciclo_secadora = null;
-
-      payload.cashback_percent = payload.cashback_percent ? Number(payload.cashback_percent) : null;
-
-      payload.agua_valor_m3 = payload.agua_valor_m3 ? parseMoneyPtBr(String(payload.agua_valor_m3)) : null;
-      payload.energia_valor_kwh = payload.energia_valor_kwh ? parseMoneyPtBr(String(payload.energia_valor_kwh)) : null;
-      payload.gas_valor_m3 = payload.gas_valor_m3 ? parseMoneyPtBr(String(payload.gas_valor_m3)) : null;
-
-      payload.tipo_pagamento =
-        String(payload.tipo_pagamento ?? "direto").toLowerCase() === "boleto" ? "boleto" : "direto";
-
-      // ✅ emails
-      payload.email_sindico = String(payload.email_sindico ?? "").trim().toLowerCase();
-      payload.email_financeiro = String(payload.email_financeiro ?? "").trim().toLowerCase();
-
-      // ✅ contrato (datas como YYYY-MM-DD)
-      payload.contrato_assinado_em = String(payload.contrato_assinado_em ?? "").trim() || null;
-
-      const prazoTxt = String(payload.contrato_prazo_meses ?? "").trim();
-      payload.contrato_prazo_meses = prazoTxt ? Number(onlyDigits(prazoTxt)) : null;
-
-      payload.contrato_vencimento_em = String(payload.contrato_vencimento_em ?? "").trim() || null;
-
-      const r = await fetch("/api/condominios", {
-        method: "POST",
+      const r = await fetch(`/api/condominios/${c.id}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ativo: !c.ativo }),
       });
 
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j?.error || "Erro ao salvar condomínio");
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || "Erro ao atualizar status");
 
-      const condominioId: string | undefined = j?.data?.id ?? j?.id ?? j?.condominio?.id ?? j?.data?.[0]?.id;
-      if (!condominioId) throw new Error("Condomínio salvo, mas não veio o ID na resposta da API (/api/condominios).");
-
-      const maquinasPayload = maquinas
-        .map((m) => {
-          const quantidadeRaw = Number(m.quantidade);
-          const quantidade = Number.isFinite(quantidadeRaw) && quantidadeRaw > 0 ? Math.trunc(quantidadeRaw) : 0;
-
-          return {
-            categoria: m.categoria,
-            capacidade_kg: m.capacidade_kg !== null ? Number(m.capacidade_kg) : null,
-            quantidade,
-            valor_ciclo: Number(parseMoneyPtBr(m.valor_ciclo_text) || 0),
-            limpeza_quimica_ciclos: clampPosInt(Number(m.limpeza_quimica_ciclos), 500),
-            limpeza_mecanica_ciclos: clampPosInt(Number(m.limpeza_mecanica_ciclos), 2000),
-          };
-        })
-        .filter((x) => Number(x.quantidade) > 0);
-
-      if (!maquinasPayload.length) throw new Error("Informe quantidade de máquinas (mínimo 1).");
-
-      // ✅ envia {itens:[...]} (backend também aceita array)
-      const r2 = await fetch(`/api/condominios/${condominioId}/maquinas`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ itens: maquinasPayload }),
-      });
-
-      const j2 = await r2.json().catch(() => ({}));
-      if (!r2.ok) throw new Error(j2?.error || "Condomínio salvo, mas falhou ao salvar máquinas.");
-
-      resetForm();
-      setShowForm(false);
-
-      setOk("Condomínio + máquinas salvos ✅");
+      setOk(`Condomínio ${!c.ativo ? "ativado" : "inativado"} com sucesso`);
       await loadAll();
     } catch (e: any) {
-      setErr(e?.message ?? "Erro ao salvar");
-    } finally {
-      setSaving(false);
+      setErr(e.message || "Erro");
     }
   }
 
-  // ✅ UX: sugestão automática de vencimento (somente UI)
-  const vencSug = useMemo(() => {
-    return calcVencimento(String(form.contrato_assinado_em || ""), String(form.contrato_prazo_meses || ""));
-  }, [form.contrato_assinado_em, form.contrato_prazo_meses]);
-
   return (
     <AppShell title="Cadastro do ponto">
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-        <div className="small">{condos.length} condomínios</div>
-
-        <div className="row" style={{ gap: 8 }}>
-          {canEdit && (
-            <button className="btn primary" onClick={() => setShowForm((v) => !v)}>
-              + Novo condomínio
-            </button>
-          )}
-          <button className="btn" onClick={loadAll}>
-            Recarregar
-          </button>
-        </div>
-      </div>
-
       {err && <p style={{ color: "#b42318" }}>{err}</p>}
       {ok && <p style={{ color: "#027a48" }}>{ok}</p>}
 
-      {canEdit && showForm && (
-        <div className="card" style={{ background: "#fbfcff", marginTop: 12 }}>
-          <div className="small" style={{ marginBottom: 8 }}>
-            Novo condomínio
-          </div>
+      <div className="list">
+        {condos.map((c) => {
+          const ativo = c.ativo !== false;
 
-          <div className="grid2">
-            <div>
-              <div className="small">Código do condomínio</div>
-              <input
-                className="input"
-                inputMode="numeric"
-                placeholder="0001"
-                value={form.codigo_condominio}
-                onChange={(e) => {
-                  const v = onlyDigits(e.target.value).slice(0, 4);
-                  setForm({ ...form, codigo_condominio: v });
-                }}
-              />
-              {String(form.codigo_condominio || "").length > 0 && !codigoOk && (
-                <div className="small" style={{ color: "#b42318", marginTop: 4 }}>
-                  Use 4 dígitos (ex: 0001).
-                </div>
-              )}
-            </div>
-
-            <div>
-              <div className="small">Nome</div>
-              <input className="input" value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} />
-            </div>
-
-            <div className="row">
-              <div style={{ flex: 2 }}>
-                <div className="small">Cidade</div>
-                <input className="input" value={form.cidade} onChange={(e) => setForm({ ...form, cidade: e.target.value })} />
-              </div>
-              <div style={{ width: 90 }}>
-                <div className="small">UF</div>
-                <input className="input" value={form.uf} onChange={(e) => setForm({ ...form, uf: e.target.value.toUpperCase() })} />
-              </div>
-            </div>
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          <div className="grid2">
-            <div>
-              <div className="small">Tipo de pagamento</div>
-              <select className="input" value={form.tipo_pagamento} onChange={(e) => setForm({ ...form, tipo_pagamento: e.target.value })}>
-                <option value="direto">Direto (PIX/depósito)</option>
-                <option value="boleto">Boleto</option>
-              </select>
-            </div>
-            <div />
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          {/* ✅ CONTRATO */}
-          <div className="small">Contrato</div>
-          <div className="grid2">
-            <div>
-              <div className="small">Data de assinatura</div>
-              <input
-                className="input"
-                type="date"
-                value={form.contrato_assinado_em}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setForm((f: any) => ({
-                    ...f,
-                    contrato_assinado_em: v,
-                    contrato_vencimento_em: String(f.contrato_vencimento_em || "").trim()
-                      ? f.contrato_vencimento_em
-                      : calcVencimento(v, String(f.contrato_prazo_meses || "")),
-                  }));
-                }}
-              />
-            </div>
-
-            <div>
-              <div className="small">Prazo (meses)</div>
-              <input
-                className="input"
-                inputMode="numeric"
-                placeholder="ex: 36"
-                value={form.contrato_prazo_meses}
-                onChange={(e) => {
-                  const v = onlyDigits(e.target.value);
-                  setForm((f: any) => ({
-                    ...f,
-                    contrato_prazo_meses: v,
-                    contrato_vencimento_em: String(f.contrato_vencimento_em || "").trim()
-                      ? f.contrato_vencimento_em
-                      : calcVencimento(String(f.contrato_assinado_em || ""), v),
-                  }));
-                }}
-              />
-              {!!vencSug && !String(form.contrato_vencimento_em || "").trim() && (
-                <div className="small" style={{ opacity: 0.7, marginTop: 4 }}>
-                  Sugestão de vencimento: <b>{vencSug}</b>
-                </div>
-              )}
-            </div>
-
-            <div>
-              <div className="small">Data de vencimento</div>
-              <input
-                className="input"
-                type="date"
-                value={form.contrato_vencimento_em}
-                onChange={(e) => setForm({ ...form, contrato_vencimento_em: e.target.value })}
-              />
-              <div className="small" style={{ opacity: 0.7, marginTop: 4 }}>
-                Se deixar vazio, o sistema calcula (assinatura + prazo).
-              </div>
-            </div>
-
-            <div />
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          {/* ✅ EMAILS */}
-          <div className="small">E-mails</div>
-          <div className="grid2">
-            <div>
-              <div className="small">E-mail do síndico</div>
-              <input
-                className="input"
-                placeholder="sindico@condominio.com"
-                value={form.email_sindico}
-                onChange={(e) => setForm({ ...form, email_sindico: e.target.value })}
-              />
-            </div>
-            <div>
-              <div className="small">E-mail do financeiro</div>
-              <input
-                className="input"
-                placeholder="financeiro@condominio.com"
-                value={form.email_financeiro}
-                onChange={(e) => setForm({ ...form, email_financeiro: e.target.value })}
-              />
-            </div>
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          <div className="small">Endereço</div>
-          <div className="grid2">
-            <div>
-              <div className="small">CEP</div>
-              <input className="input" value={form.cep} onChange={(e) => setForm({ ...form, cep: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Rua</div>
-              <input className="input" value={form.rua} onChange={(e) => setForm({ ...form, rua: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Número</div>
-              <input className="input" value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Bairro</div>
-              <input className="input" value={form.bairro} onChange={(e) => setForm({ ...form, bairro: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Complemento</div>
-              <input className="input" value={form.complemento} onChange={(e) => setForm({ ...form, complemento: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Mapa</div>
-              {mapsUrl ? (
-                <a className="btn" href={mapsUrl} target="_blank">
-                  Abrir no Google Maps
-                </a>
-              ) : (
-                <div className="small">Preencha endereço</div>
-              )}
-            </div>
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          <div className="small">Contatos</div>
-          <div className="grid2">
-            <div>
-              <div className="small">Síndico (nome)</div>
-              <input className="input" value={form.sindico_nome} onChange={(e) => setForm({ ...form, sindico_nome: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Síndico (telefone)</div>
-              <input className="input" value={form.sindico_telefone} onChange={(e) => setForm({ ...form, sindico_telefone: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Zelador (nome)</div>
-              <input className="input" value={form.zelador_nome} onChange={(e) => setForm({ ...form, zelador_nome: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Zelador (telefone)</div>
-              <input className="input" value={form.zelador_telefone} onChange={(e) => setForm({ ...form, zelador_telefone: e.target.value })} />
-            </div>
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          <div className="small">Financeiro</div>
-          <div className="grid2">
-            <div>
-              <div className="small">Cashback %</div>
-              <input className="input" value={form.cashback_percent} onChange={(e) => setForm({ ...form, cashback_percent: e.target.value })} />
-            </div>
-
-            <div>
-              <div className="small">Água (R$/m³)</div>
-              <input className="input" placeholder="ex: 15,00" value={form.agua_valor_m3} onChange={(e) => setForm({ ...form, agua_valor_m3: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Energia (R$/kWh)</div>
-              <input
-                className="input"
-                placeholder="ex: 1,20"
-                value={form.energia_valor_kwh}
-                onChange={(e) => setForm({ ...form, energia_valor_kwh: e.target.value })}
-              />
-            </div>
-            <div>
-              <div className="small">Gás (R$/m³)</div>
-              <input className="input" placeholder="ex: 30,00" value={form.gas_valor_m3} onChange={(e) => setForm({ ...form, gas_valor_m3: e.target.value })} />
-            </div>
-          </div>
-
-          <div style={{ height: 14 }} />
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <div className="small" style={{ fontWeight: 700 }}>
-              Parque de máquinas (preço por tipo)
-            </div>
-            <button className="btn" onClick={addMaquina}>
-              + Adicionar tipo
-            </button>
-          </div>
-
-          <div className="card" style={{ marginTop: 10 }}>
-            <div className="small" style={{ marginBottom: 8 }}>
-              Total máquinas: <b>{maquinasResumo.total}</b> &nbsp;|&nbsp; Lavadoras: <b>{maquinasResumo.lav}</b> &nbsp;|&nbsp; Secadoras: <b>{maquinasResumo.sec}</b>
-            </div>
-
-            {maquinas.length === 0 ? (
-              <div className="small">Nenhuma máquina cadastrada.</div>
-            ) : (
-              <div style={{ display: "grid", gap: 10 }}>
-                {maquinas.map((m, i) => (
-                  <div key={i} className="card" style={{ background: "#fff" }}>
-                    <div className="grid2" style={{ alignItems: "end" }}>
-                      <div>
-                        <div className="small">Categoria</div>
-                        <select className="input" value={m.categoria} onChange={(e) => updateMaquina(i, { categoria: e.target.value as any })}>
-                          <option value="lavadora">Lavadora</option>
-                          <option value="secadora">Secadora</option>
-                        </select>
-                      </div>
-
-                      <div className="row">
-                        <div style={{ flex: 1 }}>
-                          <div className="small">Capacidade (kg)</div>
-                          <input
-                            className="input"
-                            inputMode="numeric"
-                            placeholder="10 ou 15"
-                            value={m.capacidade_kg === null ? "" : String(m.capacidade_kg)}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/[^\d]/g, "");
-                              updateMaquina(i, { capacidade_kg: raw === "" ? null : Number(raw) });
-                            }}
-                          />
-                          <div className="small" style={{ opacity: 0.7, marginTop: 4 }}>
-                            dica: 10 = padrão, 15 = grande
-                          </div>
-                        </div>
-                        <div style={{ width: 120 }}>
-                          <div className="small">Qtd</div>
-                          <input
-                            className="input"
-                            inputMode="numeric"
-                            value={String(m.quantidade ?? 1)}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/[^\d]/g, "");
-                              updateMaquina(i, { quantidade: raw === "" ? 1 : Number(raw) });
-                            }}
-                            onBlur={() => {
-                              const n = Number(m.quantidade);
-                              if (!Number.isFinite(n) || n <= 0) updateMaquina(i, { quantidade: 1 });
-                            }}
-                          />
-                        </div>
-                      </div>
-
-                      <div>
-                        <div className="small">Valor por ciclo</div>
-                        <input
-                          className="input"
-                          inputMode="decimal"
-                          placeholder="ex: 16,50"
-                          value={m.valor_ciclo_text}
-                          onChange={(e) => {
-                            const raw = e.target.value.replace(/[^\d.,]/g, "");
-                            updateMaquina(i, { valor_ciclo_text: raw });
-                          }}
-                          onBlur={() => {
-                            const n = parseMoneyPtBr(m.valor_ciclo_text);
-                            updateMaquina(i, { valor_ciclo_text: formatMoneyPtBr(n) });
-                          }}
-                        />
-                        <div className="small" style={{ opacity: 0.7, marginTop: 4 }}>
-                          {brl(parseMoneyPtBr(m.valor_ciclo_text))}
-                        </div>
-                      </div>
-
-                      <div className="row">
-                        <div style={{ flex: 1 }}>
-                          <div className="small">Limpeza química (ciclos)</div>
-                          <input
-                            className="input"
-                            inputMode="numeric"
-                            value={String(m.limpeza_quimica_ciclos ?? 500)}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/[^\d]/g, "");
-                              updateMaquina(i, { limpeza_quimica_ciclos: raw === "" ? 500 : Number(raw) });
-                            }}
-                          />
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <div className="small">Limpeza mecânica (ciclos)</div>
-                          <input
-                            className="input"
-                            inputMode="numeric"
-                            value={String(m.limpeza_mecanica_ciclos ?? 2000)}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/[^\d]/g, "");
-                              updateMaquina(i, { limpeza_mecanica_ciclos: raw === "" ? 2000 : Number(raw) });
-                            }}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="row" style={{ justifyContent: "flex-end" }}>
-                        <button className="btn" onClick={() => removeMaquina(i)}>
-                          Remover
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          <div className="small">Dados bancários</div>
-          <div className="grid2">
-            <div>
-              <div className="small">Banco</div>
-              <input className="input" value={form.banco} onChange={(e) => setForm({ ...form, banco: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Agência</div>
-              <input className="input" value={form.agencia} onChange={(e) => setForm({ ...form, agencia: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Conta</div>
-              <input className="input" value={form.conta} onChange={(e) => setForm({ ...form, conta: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Tipo conta</div>
-              <input className="input" value={form.tipo_conta} onChange={(e) => setForm({ ...form, tipo_conta: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">PIX</div>
-              <input className="input" value={form.pix} onChange={(e) => setForm({ ...form, pix: e.target.value })} />
-            </div>
-            <div>
-              <div className="small">Favorecido/CNPJ</div>
-              <input className="input" value={form.favorecido_cnpj} onChange={(e) => setForm({ ...form, favorecido_cnpj: e.target.value })} />
-            </div>
-          </div>
-
-          <div className="row" style={{ justifyContent: "flex-end", marginTop: 10, gap: 8 }}>
-            <button
-              className="btn"
-              onClick={() => {
-                resetForm();
-                setShowForm(false);
+          return (
+            <div
+              key={c.id}
+              className="card"
+              style={{
+                opacity: ativo ? 1 : 0.45,
+                filter: ativo ? "none" : "grayscale(40%)",
               }}
             >
-              Cancelar
-            </button>
+              <div style={{ fontWeight: 700 }}>
+                {c.codigo_condominio ? `[${c.codigo_condominio}] ` : ""}
+                {c.nome}
+                {badgePagamento(c.tipo_pagamento)}
+                {!ativo && (
+                  <span style={{ marginLeft: 8, color: "#b42318", fontSize: 12 }}>
+                    (INATIVO)
+                  </span>
+                )}
+              </div>
 
-            <button className="btn primary" onClick={criar} disabled={saving || !codigoOk || !form.nome}>
-              {saving ? "Salvando..." : "Salvar (Condomínio + Máquinas)"}
-            </button>
-          </div>
-        </div>
-      )}
+              <div className="small">
+                {(c.cidade || "—")}/{(c.uf || "—")}
+              </div>
+              <div className="small">
+                {[c.rua, c.numero, c.bairro].filter(Boolean).join(", ")}
+              </div>
 
-      <hr className="hr" />
+              <div className="row" style={{ marginTop: 8, gap: 8 }}>
+                {canEdit && ativo && (
+                  <a className="btn primary" href={`/condominios/${c.id}`}>
+                    Editar ponto
+                  </a>
+                )}
 
-      <div className="list">
-        {condos.map((c) => (
-          <div key={c.id} className="card">
-            <div style={{ fontWeight: 700 }}>
-              {c.codigo_condominio ? `[${c.codigo_condominio}] ` : ""}
-              {c.nome}
-              {badgePagamento(c.tipo_pagamento)}
+                {ativo && (
+                  <a className="btn" href={`/condominios/${c.id}/maquinas`}>
+                    Ver máquinas
+                  </a>
+                )}
+
+                {canEdit && (
+                  <button
+                    className="btn"
+                    onClick={() => toggleAtivo(c)}
+                  >
+                    {ativo ? "Inativar" : "Ativar"}
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="small">
-              {(c.cidade || "—")}/{(c.uf || "—")}
-            </div>
-            <div className="small">{[c.rua, c.numero, c.bairro].filter(Boolean).join(", ")}</div>
-
-            <div className="row" style={{ marginTop: 8, gap: 8 }}>
-              {canEdit && (
-                <a className="btn primary" href={`/condominios/${c.id}`}>
-                  Editar ponto
-                </a>
-              )}
-              <a className="btn" href={`/condominios/${c.id}/maquinas`}>
-                Ver máquinas
-              </a>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </AppShell>
   );
