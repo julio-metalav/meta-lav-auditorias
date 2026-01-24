@@ -3,15 +3,12 @@ export const dynamic = "force-dynamic";
 
 import React from "react";
 import { NextResponse } from "next/server";
-import { renderToBuffer } from "@react-pdf/renderer";
-import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
 import { getUserAndRole, roleGte } from "@/lib/auth";
+import { renderToBuffer } from "@react-pdf/renderer";
+
+import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
 
 type Role = "auditor" | "interno" | "gestor";
-type ImgFormat = "png" | "jpg";
-
-type ImageSrcObj = { data: Buffer; format: ImgFormat };
-type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
 function bad(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
@@ -29,52 +26,24 @@ function getOriginFromRequest(req: Request) {
   }
 }
 
-function detectFormat(url: string, contentType?: string | null): ImgFormat | null {
+function guessFormat(url: string, contentType?: string | null): "jpg" | "png" {
   const ct = (contentType || "").toLowerCase();
-  if (ct.includes("image/png")) return "png";
-  if (ct.includes("image/jpeg") || ct.includes("image/jpg")) return "jpg";
+  if (ct.includes("png")) return "png";
+  if (ct.includes("jpeg") || ct.includes("jpg")) return "jpg";
 
   const u = url.toLowerCase();
-  if (u.endsWith(".png")) return "png";
-  if (u.endsWith(".jpg") || u.endsWith(".jpeg")) return "jpg";
-  return null;
+  if (u.includes(".png")) return "png";
+  return "jpg";
 }
 
-async function fetchImageAsBuffer(url: string): Promise<ImageSrcObj | null> {
-  if (!url) return null;
-
+async function fetchImageAsBuffer(url: string) {
   const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) return null;
-
-  const ct = res.headers.get("content-type");
-  const format = detectFormat(url, ct);
-  if (!format) return null; // se vier PDF etc, ignora (do jeito que você quer)
-
+  if (!res.ok) throw new Error(`Falha ao baixar imagem: ${res.status}`);
   const ab = await res.arrayBuffer();
-  return { data: Buffer.from(ab), format };
+  const buf = Buffer.from(ab);
+  const fmt = guessFormat(url, res.headers.get("content-type"));
+  return { data: buf, format: fmt as "jpg" | "png" };
 }
-
-type ReportDTO = {
-  meta: { auditoria_id: string; condominio_nome: string; competencia: string; gerado_em: string };
-  vendas_por_maquina: {
-    itens: Array<{ maquina: string; ciclos: number; valor_unitario: number; valor_total: number }>;
-    receita_bruta_total: number;
-    cashback_percent: number;
-    valor_cashback: number;
-  };
-  consumo_insumos: {
-    itens: Array<{ insumo: string; leitura_anterior: number | null; leitura_atual: number | null; consumo: number; valor_total: number }>;
-    total_repasse_consumo: number;
-  };
-  totalizacao_final: { cashback: number; repasse_consumo: number; total_a_pagar_condominio: number };
-  observacoes: string | null;
-  anexos: {
-    foto_agua_url?: string | null;
-    foto_energia_url?: string | null;
-    foto_gas_url?: string | null;
-    comprovante_fechamento_url?: string | null;
-  };
-};
 
 export async function GET(req: Request, { params }: { params: { id: string } }) {
   const { user, role } = await getUserAndRole();
@@ -82,14 +51,16 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   if (!roleGte(role as Role, "interno")) return bad("Sem permissão", 403);
 
   const auditoriaId = String(params.id || "").trim();
-  if (!auditoriaId) return bad("ID inválido", 400);
+  if (!auditoriaId) return bad("ID inválido");
 
   const origin = getOriginFromRequest(req);
+
+  // mantém sessão do usuário
   const cookie = req.headers.get("cookie") || "";
   const authorization = req.headers.get("authorization") || "";
 
-  // 1) pega o JSON do relatório (teu endpoint existente)
-  const dtoRes = await fetch(`${origin}/api/relatorios/condominio/final/${auditoriaId}`, {
+  // 1) pega o JSON do relatório final
+  const dataRes = await fetch(`${origin}/api/relatorios/condominio/final/${auditoriaId}`, {
     headers: {
       Accept: "application/json",
       ...(cookie ? { cookie } : {}),
@@ -98,82 +69,81 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     cache: "no-store",
   });
 
-  const dtoJson = await dtoRes.json().catch(() => null);
-  if (!dtoRes.ok) return bad(dtoJson?.error ?? "Falha ao obter dados do relatório", 500);
+  const dataJson = await dataRes.json().catch(() => null);
+  if (!dataRes.ok) return bad(dataJson?.error ?? "Falha ao obter relatório", 500);
 
-  const data: ReportDTO = dtoJson?.data ?? null;
-  if (!data) return bad("Sem dados do relatório", 500);
+  const payload = dataJson?.data;
+  if (!payload) return bad("Relatório sem dados", 500);
 
-  // 2) monta anexos (ORDEM IMPORTANTE: Água, Energia, Comprovante, Gás)
-  const a = data.anexos || {};
+  const anexosUrls = payload?.anexos ?? {};
 
-  const anexosOrdem: Array<{ tipo: string; url?: string | null }> = [
-    { tipo: "Foto do medidor de Água", url: a.foto_agua_url },
-    { tipo: "Foto do medidor de Energia", url: a.foto_energia_url },
-    { tipo: "Comprovante de pagamento", url: a.comprovante_fechamento_url },
-    { tipo: "Foto do medidor de Gás", url: a.foto_gas_url },
-  ];
+  // 2) monta lista (ordem certa) só com o que existe
+  const lista: Array<{ tipo: string; url: string }> = [];
 
-  const anexos: AnexoPdf[] = [];
-  for (const it of anexosOrdem) {
-    if (!it.url) continue;
+  if (anexosUrls?.foto_agua_url) lista.push({ tipo: "Foto do medidor de Água", url: anexosUrls.foto_agua_url });
+  if (anexosUrls?.foto_energia_url) lista.push({ tipo: "Foto do medidor de Energia", url: anexosUrls.foto_energia_url });
 
-    const img = await fetchImageAsBuffer(it.url);
-    if (!img) {
-      // mantém o card no PDF com msg "Não foi possível incorporar..." (se você quiser)
-      anexos.push({ tipo: it.tipo, isImagem: true, src: undefined });
-      continue;
-    }
+  // ✅ comprovante do pagamento ao condomínio (o que você quer “pregar”)
+  if (anexosUrls?.comprovante_fechamento_url)
+    lista.push({ tipo: "Comprovante de pagamento", url: anexosUrls.comprovante_fechamento_url });
 
-    anexos.push({ tipo: it.tipo, isImagem: true, src: img });
-  }
+  if (anexosUrls?.foto_gas_url) lista.push({ tipo: "Foto do medidor de Gás", url: anexosUrls.foto_gas_url });
 
-  // 3) monta props pro PDF (bate 1:1 com RelatorioFinalPdf.tsx)
+  // 3) baixa e embute (se falhar algum, não quebra tudo: marca como não imagem embutida)
+  const anexosPdf = await Promise.all(
+    lista.map(async (it) => {
+      try {
+        const src = await fetchImageAsBuffer(it.url);
+        return { tipo: it.tipo, src, isImagem: true };
+      } catch {
+        return { tipo: it.tipo, isImagem: false as const };
+      }
+    })
+  );
+
+  // 4) props do PDF
   const props = {
-    logo: null as any, // se você já tem logo no PDF antigo, me manda esse trecho que eu encaixo aqui
-    condominio: { nome: data.meta.condominio_nome, pagamento_texto: "—" }, // pagamento_texto vem do condo no PDF; se quiser puxar do JSON, me diga onde está
-    periodo: data.meta.competencia,
-    gerado_em: data.meta.gerado_em,
+    logo: null,
+    condominio: { nome: payload?.meta?.condominio_nome || "—" },
+    periodo: payload?.meta?.competencia || "—",
+    gerado_em: payload?.meta?.gerado_em || new Date().toISOString(),
 
-    vendas: (data.vendas_por_maquina?.itens ?? []).map((x) => ({
-      maquina: x.maquina,
-      ciclos: Number(x.ciclos) || 0,
-      valor_unitario: Number(x.valor_unitario) || 0,
-      valor_total: Number(x.valor_total) || 0,
+    vendas: (payload?.vendas_por_maquina?.itens ?? []).map((v: any) => ({
+      maquina: v.maquina,
+      ciclos: Number(v.ciclos) || 0,
+      valor_unitario: Number(v.valor_unitario) || 0,
+      valor_total: Number(v.valor_total) || 0,
     })),
 
     kpis: {
-      receita_bruta: Number(data.vendas_por_maquina?.receita_bruta_total) || 0,
-      cashback_percentual: Number(data.vendas_por_maquina?.cashback_percent) || 0,
-      cashback_valor: Number(data.vendas_por_maquina?.valor_cashback) || 0,
+      receita_bruta: Number(payload?.vendas_por_maquina?.receita_bruta_total) || 0,
+      cashback_percentual: Number(payload?.vendas_por_maquina?.cashback_percent) || 0,
+      cashback_valor: Number(payload?.vendas_por_maquina?.valor_cashback) || 0,
     },
 
-    consumos: (data.consumo_insumos?.itens ?? []).map((x) => ({
-      nome: x.insumo,
-      anterior: x.leitura_anterior ?? null,
-      atual: x.leitura_atual ?? null,
-      consumo: Number(x.consumo) || 0,
-      valor_total: Number(x.valor_total) || 0,
+    consumos: (payload?.consumo_insumos?.itens ?? []).map((c: any) => ({
+      nome: c.insumo,
+      anterior: c.leitura_anterior ?? null,
+      atual: c.leitura_atual ?? null,
+      consumo: Number(c.consumo) || 0,
+      valor_total: Number(c.valor_total) || 0,
     })),
 
-    total_consumo: Number(data.consumo_insumos?.total_repasse_consumo) || 0,
-    total_cashback: Number(data.totalizacao_final?.cashback) || 0,
-    total_pagar: Number(data.totalizacao_final?.total_a_pagar_condominio) || 0,
+    total_consumo: Number(payload?.consumo_insumos?.total_repasse_consumo) || 0,
+    total_cashback: Number(payload?.totalizacao_final?.cashback) || 0,
+    total_pagar: Number(payload?.totalizacao_final?.total_a_pagar_condominio) || 0,
 
-    observacoes: data.observacoes ?? "",
-    anexos,
+    observacoes: payload?.observacoes || "",
+    anexos: anexosPdf,
   };
 
-  // 4) gera PDF
-  const pdfBuffer = await renderToBuffer(React.createElement(RelatorioFinalPdf as any, props as any));
+  const element = React.createElement(RelatorioFinalPdf as any, props as any);
+  const pdfBuffer = await renderToBuffer(element);
 
+  const fileName = `relatorio-final-${auditoriaId}.pdf`;
 
-    const fileName = `relatorio-final-${auditoriaId}.pdf`;
-
-  // ✅ NextResponse não tipa Buffer como BodyInit, então converte para Uint8Array
-  const body = new Uint8Array(pdfBuffer);
-
-  return new NextResponse(body, {
+  // ✅ NextResponse não aceita Buffer no types do Next → converte pra Uint8Array
+  return new NextResponse(new Uint8Array(pdfBuffer), {
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `inline; filename="${fileName}"`,

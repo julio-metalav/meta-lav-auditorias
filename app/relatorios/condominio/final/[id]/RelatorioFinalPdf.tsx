@@ -5,11 +5,9 @@ type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
 type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
 type Props = {
-  // logo vem do route.ts (Buffer + format). Se quiser no futuro, pode mandar string (URL) também.
   logo?: ImageSrcObj | string | null;
 
-  // pagamento_texto fica no tipo por compatibilidade, mas NÃO é exibido no relatório final
-  condominio: { nome: string; pagamento_texto?: string | null };
+  condominio: { nome: string; pagamento_texto?: string | null }; // compat (não exibimos)
   periodo: string;
   gerado_em?: string;
 
@@ -49,7 +47,7 @@ const S = StyleSheet.create({
     paddingTop: 22,
     paddingHorizontal: 28,
     paddingBottom: 22,
-    fontSize: 9, // ✅ menor
+    fontSize: 9,
     fontFamily: "Helvetica",
     color: C.ink,
     backgroundColor: C.bg,
@@ -59,15 +57,13 @@ const S = StyleSheet.create({
 
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 },
 
-  // sem gap (react-pdf é ruim com isso)
   brandLeft: { flexDirection: "row", alignItems: "center", maxWidth: 380 },
   brandSpacer: { width: 12 },
 
-  // logo proporcional e “corporativa”
   logo: { width: 128, height: 42, objectFit: "contain" },
 
   titleBlock: { flexDirection: "column" },
-  title: { fontSize: 16, fontWeight: 700, letterSpacing: 0.2, color: C.ink }, // ✅ menor
+  title: { fontSize: 16, fontWeight: 700, letterSpacing: 0.2, color: C.ink },
   subtitle: { marginTop: 2, fontSize: 9, color: C.muted },
 
   badge: {
@@ -103,12 +99,12 @@ const S = StyleSheet.create({
 
   kpi: { flexGrow: 1, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 10 },
   kpiLabel: { fontSize: 8, color: C.muted },
-  kpiValue: { marginTop: 4, fontSize: 12, fontWeight: 700, color: C.ink }, // ✅ menor
+  kpiValue: { marginTop: 4, fontSize: 12, fontWeight: 700, color: C.ink },
   kpiHint: { marginTop: 3, fontSize: 8, color: C.muted },
 
   kpiTotal: { flexGrow: 1.3, backgroundColor: C.brand, borderRadius: 10, padding: 10 },
   kpiTotalLabel: { fontSize: 8, color: "#DCEAF6", fontWeight: 700 },
-  kpiTotalValue: { marginTop: 4, fontSize: 14, fontWeight: 700, color: C.white }, // ✅ menor
+  kpiTotalValue: { marginTop: 4, fontSize: 14, fontWeight: 700, color: C.white },
 
   card: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 12, marginBottom: 12 },
 
@@ -127,7 +123,7 @@ const S = StyleSheet.create({
     paddingTop: 3,
   },
   sectionHeaderSpacer: { width: 8 },
-  sectionTitle: { fontSize: 11.5, fontWeight: 700, color: C.ink }, // ✅ menor
+  sectionTitle: { fontSize: 11.5, fontWeight: 700, color: C.ink },
   sectionSub: { marginTop: 2, fontSize: 8.5, color: C.muted },
 
   table: { borderWidth: 1, borderColor: C.line, borderRadius: 10, overflow: "hidden" },
@@ -166,16 +162,17 @@ const S = StyleSheet.create({
     color: C.muted,
   },
 
-  // anexos: 4 por pagina (2x2)
-  anexoGrid: { flexDirection: "column" },
+  // Anexos (linhas variáveis, sem placeholders)
   anexoRow: { flexDirection: "row" },
   anexoRowSpacer: { height: 10 },
-
   anexoColSpacer: { width: 10 },
+
   anexoBox: { flexGrow: 1, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 8 },
   anexoName: { fontSize: 9, fontWeight: 700, marginBottom: 6, color: C.ink },
   anexoImg: { width: "100%", height: 240, objectFit: "cover", borderRadius: 8 },
-  anexoEmpty: { fontSize: 8.5, color: C.muted },
+
+  // quando só tem 1 item na linha, ele ocupa tudo
+  anexoBoxFull: { width: "100%" as any },
 });
 
 function brl(v: number) {
@@ -215,25 +212,17 @@ function resolveLogoUri(logo?: Props["logo"]) {
   return null;
 }
 
-function AnexoCell({ item }: { item?: AnexoPdf }) {
-  if (!item) {
-    return (
-      <>
-        <Text style={S.anexoName}>—</Text>
-        <Text style={S.anexoEmpty}>Sem anexo nesta posição.</Text>
-      </>
-    );
-  }
-
+function AnexoBox({ item, full }: { item: AnexoPdf; full?: boolean }) {
   return (
-    <>
+    <View style={[S.anexoBox, full ? S.anexoBoxFull : null]}>
       <Text style={S.anexoName}>{item.tipo}</Text>
       {item?.src?.data ? (
         <Image src={imgDataUri(item.src!)} style={S.anexoImg} />
       ) : (
-        <Text style={S.anexoEmpty}>Não foi possível incorporar este anexo no PDF.</Text>
+        // sem “placeholder”; se não embutiu, fica só o título (melhor do que poluir)
+        <Text style={{ fontSize: 8.5, color: C.muted }}>Anexo não incorporado no PDF.</Text>
       )}
-    </>
+    </View>
   );
 }
 
@@ -241,11 +230,11 @@ export default function RelatorioFinalPdf(p: Props) {
   const logoUri = resolveLogoUri(p.logo);
 
   const obs = (p.observacoes || "").trim();
-  // Observações compactas (se existir — senão, não renderiza)
   const obsCompact = obs ? (obs.length > 260 ? obs.slice(0, 257) + "…" : obs) : "";
 
-  const anexosValidos = Array.isArray(p.anexos) ? p.anexos : [];
-  // 4 por página: 2x2
+  // só anexos válidos (se vier vazio, some)
+  const anexosValidos = (Array.isArray(p.anexos) ? p.anexos : []).filter(Boolean);
+  // por página: até 4 itens (2 linhas de 2)
   const anexosPaginas = chunk(anexosValidos, 4);
 
   return (
@@ -278,13 +267,12 @@ export default function RelatorioFinalPdf(p: Props) {
             <Text style={S.metaLabel}>Gerado em</Text>
             <Text style={[S.metaValue, { fontSize: 9 }]}>{fmtDateTime(p.gerado_em)}</Text>
 
-            {/* ✅ Forma de pagamento REMOVIDA por requisito */}
+            {/* Forma de pagamento removida por requisito */}
           </View>
         </View>
 
         <View style={S.hr} />
 
-        {/* Resumo executivo */}
         <View style={S.kpiRow}>
           <View style={S.kpi}>
             <Text style={S.kpiLabel}>Receita bruta</Text>
@@ -408,11 +396,9 @@ export default function RelatorioFinalPdf(p: Props) {
               Total a pagar ao condomínio: <Text style={[S.strong, { fontSize: 11 }]}>{brl(p.total_pagar ?? 0)}</Text>
             </Text>
           </View>
-
-          {/* ✅ Forma de pagamento REMOVIDA por requisito */}
         </View>
 
-        {/* 4 Observações (✅ só se existir; se ficar grande demais, some) */}
+        {/* Observações: só se existir (senão some) */}
         {obsCompact ? (
           <View style={[S.card, { marginBottom: 0 }]}>
             <View style={S.sectionHeader}>
@@ -433,10 +419,10 @@ export default function RelatorioFinalPdf(p: Props) {
         </View>
       </Page>
 
-      {/* Anexos — 4 por página (2x2) */}
+      {/* Anexos — só se existir */}
       {anexosPaginas.map((items, pageIdx) => {
-        const r1 = [items[0], items[1]];
-        const r2 = [items[2], items[3]];
+        // divide em linhas de 2
+        const rows = chunk(items, 2);
 
         return (
           <Page key={pageIdx} size="A4" style={S.page}>
@@ -459,42 +445,26 @@ export default function RelatorioFinalPdf(p: Props) {
                 <View style={S.metaDivider} />
                 <Text style={S.metaLabel}>Competência</Text>
                 <Text style={S.metaValue}>{p.periodo || "—"}</Text>
-
-                {/* ✅ Forma de pagamento REMOVIDA por requisito */}
               </View>
             </View>
 
             <View style={S.hr} />
 
-            <View style={S.anexoGrid}>
-              {/* Linha 1 */}
-              <View style={S.anexoRow}>
-                <View style={S.anexoBox}>
-                  <AnexoCell item={r1[0]} />
+            {rows.map((r, idx) => {
+              const a = r[0];
+              const b = r[1];
+
+              return (
+                <View key={idx}>
+                  <View style={S.anexoRow}>
+                    {a ? <AnexoBox item={a} full={!b} /> : null}
+                    {a && b ? <View style={S.anexoColSpacer} /> : null}
+                    {b ? <AnexoBox item={b} /> : null}
+                  </View>
+                  {idx < rows.length - 1 ? <View style={S.anexoRowSpacer} /> : null}
                 </View>
-
-                <View style={S.anexoColSpacer} />
-
-                <View style={S.anexoBox}>
-                  <AnexoCell item={r1[1]} />
-                </View>
-              </View>
-
-              <View style={S.anexoRowSpacer} />
-
-              {/* Linha 2 */}
-              <View style={S.anexoRow}>
-                <View style={S.anexoBox}>
-                  <AnexoCell item={r2[0]} />
-                </View>
-
-                <View style={S.anexoColSpacer} />
-
-                <View style={S.anexoBox}>
-                  <AnexoCell item={r2[1]} />
-                </View>
-              </View>
-            </View>
+              );
+            })}
 
             <View style={S.footer}>
               <Text>META LAV — Tecnologia em Lavanderia</Text>

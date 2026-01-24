@@ -39,13 +39,11 @@ function competencia(iso: any) {
 }
 
 function getOriginFromRequest(req: Request) {
-  // Vercel/Proxy friendly
   const h = req.headers;
   const proto = h.get("x-forwarded-proto") || "https";
   const host = h.get("x-forwarded-host") || h.get("host");
   if (host) return `${proto}://${host}`;
 
-  // fallback
   try {
     return new URL(req.url).origin;
   } catch {
@@ -116,7 +114,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const ciclosJson = await ciclosRes.json().catch(() => null);
   if (!ciclosRes.ok) return bad(ciclosJson?.error ?? "Falha ao obter ciclos", 500);
 
-  const ciclos = ciclosJson?.data ?? ciclosJson; // compat
+  const ciclos = ciclosJson?.data ?? ciclosJson;
 
   const vendas = (ciclos?.itens ?? []).map((i: any) => ({
     maquina: maquinaLabel(i.categoria, i.capacidade_kg),
@@ -148,7 +146,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     },
   ];
 
-  // ✅ gás entra se existir "valor de gás" cadastrado no condomínio
+  // gás entra se existir "valor de gás" cadastrado no condomínio
   if (gasUnit > 0) {
     consumo.push({
       insumo: "Gás",
@@ -165,6 +163,10 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const totalCashback = m(ciclos?.totais?.total_cashback);
   const totalRepasse = m(ciclos?.totais?.total_repasse);
   const totalAPagar = m(ciclos?.totais?.total_a_pagar);
+
+  // ✅ regra nova: comprovante de fechamento é do pagamento ao condomínio
+  // → se existir, vai pro relatório SEM depender do tipo_pagamento
+  const _tp = tipoPagamento(condo.tipo_pagamento);
 
   return NextResponse.json({
     ok: true,
@@ -200,10 +202,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         foto_agua_url: aud.foto_agua_url,
         foto_energia_url: aud.foto_energia_url,
         foto_gas_url: gasUnit > 0 ? aud.foto_gas_url : null,
-        comprovante_fechamento_url:
-          tipoPagamento(condo.tipo_pagamento) === "direto"
-            ? aud.comprovante_fechamento_url
-            : null,
+        comprovante_fechamento_url: aud.comprovante_fechamento_url ?? null, // ✅ sempre
       },
     },
   });
