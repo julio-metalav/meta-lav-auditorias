@@ -48,6 +48,29 @@ function pickMonthISO(row: any, sch: Schema) {
   return raw ? String(raw) : null;
 }
 
+/**
+ * Busca emails dos usuários (auth.users) por id.
+ * Usa service role (supabaseAdmin) e chama admin.auth.admin.getUserById.
+ * Se falhar para algum id, retorna null para aquele id.
+ */
+async function fetchAuthEmailsByIds(admin: ReturnType<typeof supabaseAdmin>, ids: string[]) {
+  const uniq = Array.from(new Set(ids.filter(Boolean)));
+  const pairs = await Promise.all(
+    uniq.map(async (id) => {
+      try {
+        const { data, error } = await admin.auth.admin.getUserById(id);
+        if (error) return [id, null] as const;
+        const email = (data?.user?.email ?? null) as string | null;
+        return [id, email] as const;
+      } catch {
+        return [id, null] as const;
+      }
+    })
+  );
+
+  return new Map(pairs);
+}
+
 /* =========================================================
    GET  /api/auditorias
    ========================================================= */
@@ -73,13 +96,11 @@ export async function GET() {
     .select("*")
     .order(sch.monthCol, { ascending: false });
 
-  // Auditor vê apenas:
-  // - sem auditor
+  // Auditor vê:
+  // - sem auditor (pool)
   // - atribuídas a ele
   if (isAuditor && !isStaff) {
-    q = q.or(
-      `${sch.auditorCol}.is.null,${sch.auditorCol}.eq.${ctx.user.id}`
-    );
+    q = q.or(`${sch.auditorCol}.is.null,${sch.auditorCol}.eq.${ctx.user.id}`);
   }
 
   const { data: rows, error } = await q;
@@ -96,21 +117,32 @@ export async function GET() {
     new Set(list.map((r: any) => r[sch.auditorCol]).filter(Boolean))
   );
 
-  const [{ data: condos }, { data: profs }] = await Promise.all([
-    condoIds.length
-      ? admin.from("condominios").select("id,nome,cidade,uf").in("id", condoIds)
-      : Promise.resolve({ data: [] }),
-    auditorIds.length
-      ? admin.from("profiles").select("id,email,role").in("id", auditorIds)
-      : Promise.resolve({ data: [] }),
-  ]);
+  // Condos
+  const { data: condos } = await (condoIds.length
+    ? admin.from("condominios").select("id,nome,cidade,uf").in("id", condoIds)
+    : Promise.resolve({ data: [] as any[] }));
 
   const condoMap = new Map((condos ?? []).map((c: any) => [c.id, c]));
-  const profMap = new Map((profs ?? []).map((p: any) => [p.id, p]));
+
+  // ✅ Auditor: agora auditor_id é auth.users.id (não profiles.id).
+  // Então:
+  // 1) pega email via auth.users
+  // 2) busca role em profiles por email (se existir)
+  const authEmailMap = auditorIds.length ? await fetchAuthEmailsByIds(admin, auditorIds) : new Map<string, string | null>();
+  const emails = Array.from(new Set(Array.from(authEmailMap.values()).filter(Boolean))) as string[];
+
+  const { data: profs } = await (emails.length
+    ? admin.from("profiles").select("id,email,role").in("email", emails)
+    : Promise.resolve({ data: [] as any[] }));
+
+  const profByEmail = new Map((profs ?? []).map((p: any) => [String(p.email ?? "").toLowerCase(), p]));
 
   const normalized = list.map((r: any) => {
     const condominio_id = r[sch.condoCol];
     const auditor_id = r[sch.auditorCol] ?? null;
+
+    const auditor_email = auditor_id ? authEmailMap.get(auditor_id) ?? null : null;
+    const prof = auditor_email ? profByEmail.get(String(auditor_email).toLowerCase()) ?? null : null;
 
     return {
       ...r,
@@ -119,7 +151,15 @@ export async function GET() {
       mes_ref: pickMonthISO(r, sch),
       status: normalizeStatus(r[sch.statusCol]),
       condominios: condoMap.get(condominio_id) ?? null,
-      profiles: auditor_id ? profMap.get(auditor_id) ?? null : null,
+
+      // mantém compatibilidade com UI que espera "profiles"
+      profiles: auditor_id
+        ? {
+            id: auditor_id, // id real do auth.users
+            email: auditor_email,
+            role: prof?.role ?? null,
+          }
+        : null,
     };
   });
 
@@ -161,7 +201,7 @@ export async function POST(req: Request) {
       [sch.condoCol]: condominio_id,
       [sch.monthCol]: mes_ref,
       [sch.statusCol]: status,
-      [sch.auditorCol]: null,
+      [sch.auditorCol]: null, // pool
     };
 
     const { data, error } = await admin
