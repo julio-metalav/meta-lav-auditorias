@@ -51,6 +51,18 @@ function getOriginFromRequest(req: Request) {
   }
 }
 
+function stripQuery(u: string) {
+  const i = u.indexOf("?");
+  return i >= 0 ? u.slice(0, i) : u;
+}
+
+function isJpegUrl(u: any) {
+  const s = String(u ?? "").trim();
+  if (!s) return false;
+  const base = stripQuery(s).toLowerCase();
+  return base.endsWith(".jpg") || base.endsWith(".jpeg");
+}
+
 export async function GET(req: Request, { params }: { params: { id: string } }) {
   const { user, role } = await getUserAndRole();
   if (!user) return bad("Não autenticado", 401);
@@ -146,8 +158,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     },
   ];
 
-  // gás entra se existir "valor de gás" cadastrado no condomínio
-  if (gasUnit > 0) {
+  // gás entra se existir "valor de gás" cadastrado no condomínio (ou foto lançada)
+  const temGas = gasUnit > 0 || Boolean(aud.foto_gas_url) || aud.gas_leitura !== null || aud.gas_leitura_base !== null;
+  if (temGas && gasUnit > 0) {
     consumo.push({
       insumo: "Gás",
       leitura_anterior: n(aud.gas_leitura_base),
@@ -164,9 +177,26 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const totalRepasse = m(ciclos?.totais?.total_repasse);
   const totalAPagar = m(ciclos?.totais?.total_a_pagar);
 
-  // ✅ regra nova: comprovante de fechamento é do pagamento ao condomínio
-  // → se existir, vai pro relatório SEM depender do tipo_pagamento
+  // ✅ regra: comprovante independe de tipo_pagamento
+  // (mantemos a leitura por compat, mas não usamos)
   const _tp = tipoPagamento(condo.tipo_pagamento);
+
+  // URLs (normalizadas)
+  const fotoAgua = aud.foto_agua_url || null;
+  const fotoEnergia = aud.foto_energia_url || null;
+  const fotoGas = temGas ? aud.foto_gas_url || null : null;
+
+  // ✅ comprovante: só JPG/JPEG (requisito)
+  const comprovante = isJpegUrl(aud.comprovante_fechamento_url) ? aud.comprovante_fechamento_url : null;
+
+  // ✅ anexos em ORDEM: água, energia, gás (se houver), comprovante
+  // sem espaços vazios, sem placeholder
+  const anexos_ordenados = [
+    fotoAgua ? { tipo: "Água", url: fotoAgua } : null,
+    fotoEnergia ? { tipo: "Energia", url: fotoEnergia } : null,
+    fotoGas ? { tipo: "Gás", url: fotoGas } : null,
+    comprovante ? { tipo: "Comprovante", url: comprovante } : null,
+  ].filter(Boolean);
 
   return NextResponse.json({
     ok: true,
@@ -198,12 +228,16 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
       observacoes: aud.fechamento_obs,
 
+      // compat (mantém o formato antigo, pra não quebrar nada)
       anexos: {
-        foto_agua_url: aud.foto_agua_url,
-        foto_energia_url: aud.foto_energia_url,
-        foto_gas_url: gasUnit > 0 ? aud.foto_gas_url : null,
-        comprovante_fechamento_url: aud.comprovante_fechamento_url ?? null, // ✅ sempre
+        foto_agua_url: fotoAgua,
+        foto_energia_url: fotoEnergia,
+        foto_gas_url: fotoGas,
+        comprovante_fechamento_url: comprovante, // ✅ sempre que existir e for JPG/JPEG
       },
+
+      // ✅ novo (recomendado pro front/PDF): lista já ordenada e “limpa”
+      anexos_ordenados,
     },
   });
 }
