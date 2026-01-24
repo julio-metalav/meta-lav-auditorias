@@ -213,16 +213,19 @@ function resolveLogoUri(logo?: Props["logo"]) {
 }
 
 function AnexoBox({ item, full }: { item: AnexoPdf; full?: boolean }) {
-  return (
-    <View style={[S.anexoBox, full ? S.anexoBoxFull : undefined]}>
+  // React-PDF (TS) não aceita null/undefined/false dentro de style=[...]
+  // então fazemos a variação de layout por estrutura (ternário).
+  const content = (
+    <>
       <Text style={S.anexoName}>{item.tipo}</Text>
-      {item?.src?.data ? (
-        <Image src={imgDataUri(item.src!)} style={S.anexoImg} />
-      ) : (
-        // sem “placeholder”; se não embutiu, fica só o título (melhor do que poluir)
-        <Text style={{ fontSize: 8.5, color: C.muted }}>Anexo não incorporado no PDF.</Text>
-      )}
-    </View>
+      {item?.src?.data ? <Image src={imgDataUri(item.src!)} style={S.anexoImg} /> : null}
+    </>
+  );
+
+  return full ? (
+    <View style={[S.anexoBox, S.anexoBoxFull]}>{content}</View>
+  ) : (
+    <View style={S.anexoBox}>{content}</View>
   );
 }
 
