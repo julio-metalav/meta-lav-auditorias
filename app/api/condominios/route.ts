@@ -25,8 +25,8 @@ function intOrNull(v: any): number | null {
 
 function dateOrNull(v: any): string | null {
   const s = String(v ?? "").trim();
-  if (!s) return null; // espera "YYYY-MM-DD"
-  return s;
+  if (!s) return null;
+  return s; // YYYY-MM-DD
 }
 
 function onlyDigits(v: any) {
@@ -38,36 +38,45 @@ function calcVencimento(assinadoEm: string | null, prazoMeses: number | null): s
   const d = new Date(assinadoEm + "T00:00:00");
   if (Number.isNaN(d.getTime())) return null;
   d.setMonth(d.getMonth() + prazoMeses);
-  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+  return d.toISOString().slice(0, 10);
 }
 
 export async function GET() {
   const { supabase, user, role } = await getUserAndRole();
   if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
 
+  // 🔒 Auditor: só condomínios atribuídos
   if (role === "auditor") {
     const { data, error } = await supabase
       .from("auditor_condominios")
       .select(
-        "condominio_id, condominios(id,codigo_condominio,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3,contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro," +
-          // ✅ NOVO: custos/stone/sistema
-          "custo_quimicos_por_ciclo_lavadora,stone_taxa_percent,stone_taxa_fixa_por_transacao,custo_sistema_pagamento_mensal)"
+        "condominio_id, condominios(" +
+          "id,codigo_condominio,nome,cidade,uf,cep,rua,numero,bairro,complemento," +
+          "tipo_pagamento,ativo," +
+          "cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3," +
+          "custo_quimicos_por_ciclo_lavadora,stone_taxa_percent,stone_taxa_fixa_por_transacao,custo_sistema_pagamento_mensal," +
+          "contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em," +
+          "email_sindico,email_financeiro)"
       )
       .eq("auditor_id", user.id)
       .order("condominios(nome)");
 
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
     const condos = (data ?? []).map((r: any) => r.condominios).filter(Boolean);
     return NextResponse.json({ data: condos });
   }
 
+  // 👑 Interno / Gestor: todos os condomínios
   const { data, error } = await supabase
     .from("condominios")
     .select(
-      "id,codigo_condominio,nome,cidade,uf,cep,rua,numero,bairro,complemento,tipo_pagamento,cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3," +
-        // ✅ NOVO: custos/stone/sistema
+      "id,codigo_condominio,nome,cidade,uf,cep,rua,numero,bairro,complemento," +
+        "tipo_pagamento,ativo," +
+        "cashback_percent,agua_valor_m3,energia_valor_kwh,gas_valor_m3," +
         "custo_quimicos_por_ciclo_lavadora,stone_taxa_percent,stone_taxa_fixa_por_transacao,custo_sistema_pagamento_mensal," +
-        "contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em,email_sindico,email_financeiro,created_at"
+        "contrato_assinado_em,contrato_prazo_meses,contrato_vencimento_em," +
+        "email_sindico,email_financeiro,created_at"
     )
     .order("nome", { ascending: true });
 
@@ -84,13 +93,11 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
 
-  // ✅ codigo_condominio: obrigatório e 4 dígitos
   const codigo_condominio = onlyDigits(body?.codigo_condominio).slice(0, 4);
   if (!/^\d{4}$/.test(codigo_condominio)) {
     return NextResponse.json({ error: "Código do condomínio inválido. Use 4 dígitos (ex: 0001)." }, { status: 400 });
   }
 
-  // ✅ evita duplicar (mesmo antes do UNIQUE no banco)
   const { data: existing, error: exErr } = await supabase
     .from("condominios")
     .select("id")
@@ -107,13 +114,9 @@ export async function POST(req: Request) {
 
   const payload = {
     codigo_condominio,
-
     nome: String(body?.nome || "").trim(),
-
-    // cidade/uf continuam existindo, mas não travam mais
     cidade: String(body?.cidade || "").trim(),
     uf: String(body?.uf || "").trim(),
-
     cep: String(body?.cep || "").trim(),
     rua: String(body?.rua || "").trim(),
     numero: String(body?.numero || "").trim(),
@@ -123,11 +126,9 @@ export async function POST(req: Request) {
     sindico_telefone: String(body?.sindico_telefone || "").trim(),
     zelador_nome: String(body?.zelador_nome || "").trim(),
     zelador_telefone: String(body?.zelador_telefone || "").trim(),
-    valor_ciclo_lavadora: body?.valor_ciclo_lavadora ?? null,
-    valor_ciclo_secadora: body?.valor_ciclo_secadora ?? null,
+
     cashback_percent: body?.cashback_percent ?? null,
 
-    // ✅ NOVO: custos/stone/sistema (se vier vazio -> null; banco tem default 0)
     custo_quimicos_por_ciclo_lavadora: numOrNull(body?.custo_quimicos_por_ciclo_lavadora),
     stone_taxa_percent: numOrNull(body?.stone_taxa_percent),
     stone_taxa_fixa_por_transacao: numOrNull(body?.stone_taxa_fixa_por_transacao),
@@ -140,23 +141,21 @@ export async function POST(req: Request) {
     tipo_conta: String(body?.tipo_conta || "").trim(),
     pix: String(body?.pix || "").trim(),
 
-    // ✅ emails
     email_sindico: String(body?.email_sindico || "").trim(),
     email_financeiro: String(body?.email_financeiro || "").trim(),
 
-    // ✅ contrato
     contrato_assinado_em,
     contrato_prazo_meses,
     contrato_vencimento_em,
 
-    maquinas: body?.maquinas ?? null,
-
-    // ✅ tarifas
     agua_valor_m3: numOrNull(body?.agua_valor_m3),
     energia_valor_kwh: numOrNull(body?.energia_valor_kwh),
     gas_valor_m3: numOrNull(body?.gas_valor_m3),
 
     tipo_pagamento: normalizeTipoPagamento(body?.tipo_pagamento),
+
+    // ✅ novo condomínio nasce ATIVO
+    ativo: true,
   };
 
   if (!payload.nome) {
