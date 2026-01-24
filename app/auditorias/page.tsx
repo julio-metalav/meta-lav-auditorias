@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+export const dynamic = "force-dynamic";
+
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/app/components/AppShell";
 
 type Role = "auditor" | "interno" | "gestor" | null;
@@ -100,9 +102,29 @@ function statusPillClass(st: any) {
   ].join(" ");
 }
 
+function getMesRefFromUrl(): string | null {
+  try {
+    const sp = new URLSearchParams(window.location.search);
+    const v = sp.get("mes_ref");
+    if (v && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function setMesRefInUrl(mesRef: string) {
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.set("mes_ref", mesRef);
+    window.history.replaceState({}, "", u.toString());
+  } catch {
+    // ignore
+  }
+}
+
 export default function AuditoriasPage() {
   const router = useRouter();
-  const sp = useSearchParams();
 
   const [me, setMe] = useState<Me | null>(null);
   const [auditorias, setAuditorias] = useState<Aud[]>([]);
@@ -116,11 +138,9 @@ export default function AuditoriasPage() {
   const [mesRelatorio, setMesRelatorio] = useState<string>(currentMonthInputValue());
 
   // ✅ mês da LISTA (sempre filtra a listagem)
-  const [mesLista, setMesLista] = useState<string>(() => {
-    const mesRefUrl = sp?.get("mes_ref") || "";
-    const iso = /^\d{4}-\d{2}-\d{2}$/.test(mesRefUrl) ? mesRefUrl : "";
-    return monthInputFromISO(iso || defaultListMonthISO()) || currentMonthInputValue();
-  });
+  const [mesLista, setMesLista] = useState<string>(() => monthInputFromISO(defaultListMonthISO()) || currentMonthInputValue());
+
+  const didInitFromUrl = useRef(false);
 
   const mesRefLista = useMemo(() => {
     const iso = monthISOFromDateInput(mesLista);
@@ -148,17 +168,14 @@ export default function AuditoriasPage() {
     setLoading(true);
     setErr(null);
     try {
-      // carrega /api/me só uma vez (se já tiver, não precisa repetir)
       if (!me?.role) {
         await carregarMe();
       }
 
       await carregarAuditorias(mesRefLista);
 
-      // ✅ garante URL com mes_ref
-      const qs = new URLSearchParams(sp?.toString() || "");
-      qs.set("mes_ref", mesRefLista);
-      router.replace(`/auditorias?${qs.toString()}`);
+      // ✅ mantém a URL “travada” no mês atual da tela
+      setMesRefInUrl(mesRefLista);
     } catch (e: any) {
       setErr(e?.message ?? "Falha ao carregar");
       setAuditorias([]);
@@ -167,15 +184,21 @@ export default function AuditoriasPage() {
     }
   }
 
-  // init
+  // init: lê mes_ref da URL (se existir) só depois do mount
   useEffect(() => {
-    carregar();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (didInitFromUrl.current) return;
+    didInitFromUrl.current = true;
+
+    const urlMesRef = getMesRefFromUrl();
+    if (urlMesRef) {
+      const inp = monthInputFromISO(urlMesRef);
+      if (inp) setMesLista(inp);
+    }
+    // não chama carregar aqui; deixa o effect abaixo (mesRefLista) disparar
   }, []);
 
   // quando muda o mês da lista, recarrega
   useEffect(() => {
-    // evita rodar antes do primeiro render estabilizar
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesRefLista]);
@@ -202,7 +225,7 @@ export default function AuditoriasPage() {
       });
     }
 
-    // como a API já filtra por mês, aqui só ordena por condomínio (e fallback por mês)
+    // como a API já filtra por mês, aqui só ordena por condomínio (fallback por mês)
     list.sort((a, b) => {
       const am = pickMonth(a);
       const bm = pickMonth(b);
@@ -330,7 +353,7 @@ export default function AuditoriasPage() {
           </select>
         </div>
 
-        {/* MOBILE: Cards */}
+        {/* ✅ MOBILE: Cards */}
         <div className="space-y-3 sm:hidden">
           {auditoriasFiltradas.length === 0 && (
             <div className="rounded-2xl border bg-white p-4 text-sm text-gray-600">Nenhuma auditoria no filtro.</div>
@@ -380,7 +403,7 @@ export default function AuditoriasPage() {
           })}
         </div>
 
-        {/* DESKTOP (sm+): Tabela */}
+        {/* ✅ DESKTOP (sm+): Tabela atual (mantida) */}
         <div className="hidden overflow-hidden rounded-2xl border bg-white shadow-sm sm:block">
           <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600">
             <div className="col-span-5">Condomínio</div>
