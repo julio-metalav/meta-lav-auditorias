@@ -6,6 +6,7 @@ import { NextResponse } from "next/server";
 import { getUserAndRole, roleGte } from "@/lib/auth";
 import { renderToBuffer } from "@react-pdf/renderer";
 import sharp from "sharp";
+import { supabaseAdmin } from "@/lib/auth";
 
 import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
 
@@ -15,19 +16,6 @@ function bad(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
-function getOriginFromRequest(req: Request) {
-  const h = req.headers;
-  const proto = h.get("x-forwarded-proto") || "https";
-  const host = h.get("x-forwarded-host") || h.get("host");
-  if (host) return `${proto}://${host}`;
-  try {
-    return new URL(req.url).origin;
-  } catch {
-    return "http://localhost";
-  }
-}
-
-// remove aspas/escape que podem vir no params.id
 function cleanUuidLike(v: any) {
   let s = String(v ?? "").trim();
   s = s.replace(/^"+/, "").replace(/"+$/, "");
@@ -39,49 +27,32 @@ function cleanUuidLike(v: any) {
 type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
 type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
-function guessFormat(url: string, contentType?: string | null): "jpg" | "png" {
-  const ct = (contentType || "").toLowerCase();
-  if (ct.includes("png")) return "png";
-  if (ct.includes("jpeg") || ct.includes("jpg")) return "jpg";
-  const u = url.toLowerCase();
-  if (u.includes(".png")) return "png";
-  return "jpg";
+function guessFormat(path: string): "jpg" | "png" {
+  return path.toLowerCase().endsWith(".png") ? "png" : "jpg";
 }
 
-async function fetchImage(url: string) {
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Falha ao baixar imagem: ${res.status}`);
-  const ab = await res.arrayBuffer();
-  const buf = Buffer.from(ab);
-  const fmt = guessFormat(url, res.headers.get("content-type"));
-  const ct = res.headers.get("content-type") || null;
-  return { buf, fmt, contentType: ct };
-}
+async function loadFromStorage(path: string): Promise<ImageSrcObj> {
+  const admin = supabaseAdmin();
 
-/**
- * Normaliza para PNG/JPG compatível com react-pdf.
- * IMPORTANTÍSSIMO: não derrubar a rota se falhar.
- *
- * OBS: o erro que você viu (vips_colourspace: no known route from 'srgb' to 'rgb')
- * aparece porque .toColorspace("rgb") pode estourar dependendo do build do libvips.
- * Então aqui a gente evita essa conversão agressiva e faz regravação simples.
- */
-async function normalizeForPdf(url: string): Promise<ImageSrcObj> {
-  const { buf, fmt } = await fetchImage(url);
+  const cleanPath = path.replace(/^\/?storage\/v1\/object\/(public|sign)\//, "");
 
-  // PNG: tenta usar direto
-  if (fmt === "png") return { data: buf, format: "png" };
+  const { data, error } = await admin.storage.from("auditorias").download(cleanPath);
+  if (error || !data) throw error ?? new Error("Falha ao baixar arquivo");
 
-  // JPG: regrava como JPG baseline (mais compatível e sem mexer no colorspace)
+  const buf = Buffer.from(await data.arrayBuffer());
+  const fmt = guessFormat(cleanPath);
+
+  if (fmt === "png") {
+    return { data: buf, format: "png" };
+  }
+
   try {
-    const outJpg = await sharp(buf, { failOnError: false })
+    const out = await sharp(buf, { failOnError: false })
       .rotate()
       .jpeg({ quality: 85, mozjpeg: true, progressive: false })
       .toBuffer();
-
-    return { data: outJpg, format: "jpg" };
+    return { data: out, format: "jpg" };
   } catch {
-    // fallback: devolve original
     return { data: buf, format: "jpg" };
   }
 }
@@ -95,13 +66,10 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     const auditoriaId = cleanUuidLike(params.id);
     if (!auditoriaId) return bad("ID inválido");
 
-    const origin = getOriginFromRequest(req);
-
-    // mantém sessão do usuário
+    const origin = new URL(req.url).origin;
     const cookie = req.headers.get("cookie") || "";
     const authorization = req.headers.get("authorization") || "";
 
-    // 1) pega o JSON do relatório final
     const dataRes = await fetch(
       `${origin}/api/relatorios/condominio/final/${encodeURIComponent(auditoriaId)}`,
       {
@@ -122,19 +90,17 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
     const anexosUrls = payload?.anexos ?? {};
 
-    // 2) ordem correta: Água, Energia, Gás (se houver), Comprovante
-    const lista: Array<{ tipo: string; url: string }> = [];
-    if (anexosUrls?.foto_agua_url) lista.push({ tipo: "Foto do medidor de Água", url: anexosUrls.foto_agua_url });
-    if (anexosUrls?.foto_energia_url) lista.push({ tipo: "Foto do medidor de Energia", url: anexosUrls.foto_energia_url });
-    if (anexosUrls?.foto_gas_url) lista.push({ tipo: "Foto do medidor de Gás", url: anexosUrls.foto_gas_url });
+    const lista: Array<{ tipo: string; path: string }> = [];
+    if (anexosUrls?.foto_agua_url) lista.push({ tipo: "Foto do medidor de Água", path: anexosUrls.foto_agua_url });
+    if (anexosUrls?.foto_energia_url) lista.push({ tipo: "Foto do medidor de Energia", path: anexosUrls.foto_energia_url });
+    if (anexosUrls?.foto_gas_url) lista.push({ tipo: "Foto do medidor de Gás", path: anexosUrls.foto_gas_url });
     if (anexosUrls?.comprovante_fechamento_url)
-      lista.push({ tipo: "Comprovante de pagamento", url: anexosUrls.comprovante_fechamento_url });
+      lista.push({ tipo: "Comprovante de pagamento", path: anexosUrls.comprovante_fechamento_url });
 
-    // 3) baixa e embute — sem derrubar a rota se 1 anexo falhar
     const anexosPdf: AnexoPdf[] = await Promise.all(
       lista.map(async (it) => {
         try {
-          const src = await normalizeForPdf(it.url);
+          const src = await loadFromStorage(it.path);
           return { tipo: it.tipo, src, isImagem: true };
         } catch {
           return { tipo: it.tipo, isImagem: false };
@@ -142,7 +108,6 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       })
     );
 
-    // 4) props do PDF
     const props = {
       logo: null,
       condominio: { nome: payload?.meta?.condominio_nome || "—" },
@@ -178,19 +143,14 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       anexos: anexosPdf,
     };
 
-    // ✅ FIX DO BUILD (TypeScript):
-    // renderToBuffer tipa como <Document />, mas o TS não “enxerga” isso aqui.
-    // Cast é intencional e seguro.
     const element = React.createElement(RelatorioFinalPdf as any, props as any);
     const pdfBuffer = await (renderToBuffer as any)(element);
-
-    const fileName = `relatorio-final-${auditoriaId}.pdf`;
 
     return new NextResponse(new Uint8Array(pdfBuffer), {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `inline; filename="${fileName}"`,
-        "Cache-Control": "no-store, max-age=0",
+        "Content-Disposition": `inline; filename="relatorio-final-${auditoriaId}.pdf"`,
+        "Cache-Control": "no-store",
       },
     });
   } catch (e: any) {
