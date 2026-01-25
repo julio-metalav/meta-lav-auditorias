@@ -3,10 +3,9 @@ export const dynamic = "force-dynamic";
 
 import React from "react";
 import { NextResponse } from "next/server";
-import { getUserAndRole, roleGte } from "@/lib/auth";
+import { getUserAndRole, roleGte, supabaseAdmin } from "@/lib/auth";
 import { renderToBuffer } from "@react-pdf/renderer";
 import sharp from "sharp";
-import { supabaseAdmin } from "@/lib/auth";
 
 import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
 
@@ -27,20 +26,22 @@ function cleanUuidLike(v: any) {
 type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
 type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
-function guessFormat(path: string): "jpg" | "png" {
-  return path.toLowerCase().endsWith(".png") ? "png" : "jpg";
-}
-
 async function loadFromStorage(path: string): Promise<ImageSrcObj> {
   const admin = supabaseAdmin();
 
-  const cleanPath = path.replace(/^\/?storage\/v1\/object\/(public|sign)\//, "");
+  const cleanPath = path
+    .replace(/^https?:\/\/[^/]+\/storage\/v1\/object\/(public|sign)\//, "")
+    .replace(/^\/?storage\/v1\/object\/(public|sign)\//, "")
+    .replace(/^public\//, "");
 
-  const { data, error } = await admin.storage.from("auditorias").download(cleanPath);
+  const { data, error } = await admin.storage
+    .from("auditorias")
+    .download(cleanPath);
+
   if (error || !data) throw error ?? new Error("Falha ao baixar arquivo");
 
   const buf = Buffer.from(await data.arrayBuffer());
-  const fmt = guessFormat(cleanPath);
+  const fmt = cleanPath.toLowerCase().endsWith(".png") ? "png" : "jpg";
 
   if (fmt === "png") {
     return { data: buf, format: "png" };
@@ -83,7 +84,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     );
 
     const dataJson = await dataRes.json().catch(() => null);
-    if (!dataRes.ok) return bad(dataJson?.error ?? "Falha ao obter relatório", 500);
+    if (!dataRes.ok) {
+      return bad(dataJson?.error ?? "Falha ao obter relatório", 500);
+    }
 
     const payload = dataJson?.data;
     if (!payload) return bad("Relatório sem dados", 500);
@@ -91,11 +94,17 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     const anexosUrls = payload?.anexos ?? {};
 
     const lista: Array<{ tipo: string; path: string }> = [];
-    if (anexosUrls?.foto_agua_url) lista.push({ tipo: "Foto do medidor de Água", path: anexosUrls.foto_agua_url });
-    if (anexosUrls?.foto_energia_url) lista.push({ tipo: "Foto do medidor de Energia", path: anexosUrls.foto_energia_url });
-    if (anexosUrls?.foto_gas_url) lista.push({ tipo: "Foto do medidor de Gás", path: anexosUrls.foto_gas_url });
+    if (anexosUrls?.foto_agua_url)
+      lista.push({ tipo: "Foto do medidor de Água", path: anexosUrls.foto_agua_url });
+    if (anexosUrls?.foto_energia_url)
+      lista.push({ tipo: "Foto do medidor de Energia", path: anexosUrls.foto_energia_url });
+    if (anexosUrls?.foto_gas_url)
+      lista.push({ tipo: "Foto do medidor de Gás", path: anexosUrls.foto_gas_url });
     if (anexosUrls?.comprovante_fechamento_url)
-      lista.push({ tipo: "Comprovante de pagamento", path: anexosUrls.comprovante_fechamento_url });
+      lista.push({
+        tipo: "Comprovante de pagamento",
+        path: anexosUrls.comprovante_fechamento_url,
+      });
 
     const anexosPdf: AnexoPdf[] = await Promise.all(
       lista.map(async (it) => {
@@ -122,9 +131,12 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       })),
 
       kpis: {
-        receita_bruta: Number(payload?.vendas_por_maquina?.receita_bruta_total) || 0,
-        cashback_percentual: Number(payload?.vendas_por_maquina?.cashback_percent) || 0,
-        cashback_valor: Number(payload?.vendas_por_maquina?.valor_cashback) || 0,
+        receita_bruta:
+          Number(payload?.vendas_por_maquina?.receita_bruta_total) || 0,
+        cashback_percentual:
+          Number(payload?.vendas_por_maquina?.cashback_percent) || 0,
+        cashback_valor:
+          Number(payload?.vendas_por_maquina?.valor_cashback) || 0,
       },
 
       consumos: (payload?.consumo_insumos?.itens ?? []).map((c: any) => ({
@@ -135,9 +147,12 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         valor_total: Number(c.valor_total) || 0,
       })),
 
-      total_consumo: Number(payload?.consumo_insumos?.total_repasse_consumo) || 0,
-      total_cashback: Number(payload?.totalizacao_final?.cashback) || 0,
-      total_pagar: Number(payload?.totalizacao_final?.total_a_pagar_condominio) || 0,
+      total_consumo:
+        Number(payload?.consumo_insumos?.total_repasse_consumo) || 0,
+      total_cashback:
+        Number(payload?.totalizacao_final?.cashback) || 0,
+      total_pagar:
+        Number(payload?.totalizacao_final?.total_a_pagar_condominio) || 0,
 
       observacoes: payload?.observacoes || "",
       anexos: anexosPdf,
