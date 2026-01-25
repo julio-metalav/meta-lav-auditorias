@@ -27,56 +27,63 @@ function getOriginFromRequest(req: Request) {
   }
 }
 
-/**
- * Extrai UUID limpo
- */
-function extractUuid(v: any) {
+// remove aspas/escape que podem vir no params.id
+function cleanUuidLike(v: any) {
   let s = String(v ?? "").trim();
-  try {
-    s = decodeURIComponent(s);
-  } catch {}
-  const m = s.match(
-    /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/
-  );
-  return m ? m[0] : "";
+  s = s.replace(/^"+/, "").replace(/"+$/, "");
+  s = s.replace(/^\\"+/, "").replace(/\\"+$/, "");
+  s = s.replace(/^["']+/, "").replace(/["']+$/, "");
+  return s;
 }
 
-type AnexoPdf = { tipo: string; src?: string; isImagem: boolean };
+type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
+type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
-async function fetchImage(url: string, forwardHeaders?: Record<string, string>) {
-  const res = await fetch(url, {
-    cache: "no-store",
-    redirect: "follow",
-    headers: {
-      Accept: "image/*,*/*;q=0.8",
-      ...(forwardHeaders ?? {}),
-    },
-  });
+function guessFormat(url: string, contentType?: string | null): "jpg" | "png" {
+  const ct = (contentType || "").toLowerCase();
+  if (ct.includes("png")) return "png";
+  if (ct.includes("jpeg") || ct.includes("jpg")) return "jpg";
+  const u = url.toLowerCase();
+  if (u.includes(".png")) return "png";
+  return "jpg";
+}
 
-  if (!res.ok) {
-    throw new Error(`Falha ao baixar imagem: ${res.status}`);
-  }
-
+async function fetchImage(url: string) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Falha ao baixar imagem: ${res.status}`);
   const ab = await res.arrayBuffer();
-  return Buffer.from(ab);
+  const buf = Buffer.from(ab);
+  const fmt = guessFormat(url, res.headers.get("content-type"));
+  const ct = res.headers.get("content-type") || null;
+  return { buf, fmt, contentType: ct };
 }
 
 /**
- * Normalização segura para react-pdf:
- * - NÃO força colorspace
- * - só regrava como JPEG baseline
+ * Normaliza para PNG/JPG compatível com react-pdf.
+ * IMPORTANTÍSSIMO: não derrubar a rota se falhar.
+ *
+ * OBS: o erro que você viu (vips_colourspace: no known route from 'srgb' to 'rgb')
+ * aparece porque .toColorspace("rgb") pode estourar dependendo do build do libvips.
+ * Então aqui a gente evita essa conversão agressiva e faz regravação simples.
  */
-async function normalizeForPdf(url: string, forwardHeaders?: Record<string, string>): Promise<Buffer> {
-  const buf = await fetchImage(url, forwardHeaders);
+async function normalizeForPdf(url: string): Promise<ImageSrcObj> {
+  const { buf, fmt } = await fetchImage(url);
 
-  return await sharp(buf, { failOnError: false })
-    .rotate()
-    .jpeg({
-      quality: 85,
-      mozjpeg: true,
-      progressive: false, // baseline
-    })
-    .toBuffer();
+  // PNG: tenta usar direto
+  if (fmt === "png") return { data: buf, format: "png" };
+
+  // JPG: regrava como JPG baseline (mais compatível e sem mexer no colorspace)
+  try {
+    const outJpg = await sharp(buf, { failOnError: false })
+      .rotate()
+      .jpeg({ quality: 85, mozjpeg: true, progressive: false })
+      .toBuffer();
+
+    return { data: outJpg, format: "jpg" };
+  } catch {
+    // fallback: devolve original
+    return { data: buf, format: "jpg" };
+  }
 }
 
 export async function GET(req: Request, { params }: { params: { id: string } }) {
@@ -85,76 +92,108 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     if (!user) return bad("Não autenticado", 401);
     if (!roleGte(role as Role, "interno")) return bad("Sem permissão", 403);
 
-    const auditoriaId = extractUuid(params.id);
+    const auditoriaId = cleanUuidLike(params.id);
     if (!auditoriaId) return bad("ID inválido");
 
     const origin = getOriginFromRequest(req);
 
+    // mantém sessão do usuário
     const cookie = req.headers.get("cookie") || "";
     const authorization = req.headers.get("authorization") || "";
 
-    const forwardHeaders: Record<string, string> = {
-      ...(cookie ? { cookie } : {}),
-      ...(authorization ? { authorization } : {}),
-    };
-
+    // 1) pega o JSON do relatório final
     const dataRes = await fetch(
-      `${origin}/api/relatorios/condominio/final/${auditoriaId}`,
-      { headers: { Accept: "application/json", ...forwardHeaders }, cache: "no-store" }
+      `${origin}/api/relatorios/condominio/final/${encodeURIComponent(auditoriaId)}`,
+      {
+        headers: {
+          Accept: "application/json",
+          ...(cookie ? { cookie } : {}),
+          ...(authorization ? { authorization } : {}),
+        },
+        cache: "no-store",
+      }
     );
 
-    const dataJson = await dataRes.json();
-    if (!dataRes.ok) return bad(dataJson?.error ?? "Erro ao obter relatório", 500);
+    const dataJson = await dataRes.json().catch(() => null);
+    if (!dataRes.ok) return bad(dataJson?.error ?? "Falha ao obter relatório", 500);
 
-    const payload = dataJson.data;
+    const payload = dataJson?.data;
+    if (!payload) return bad("Relatório sem dados", 500);
+
     const anexosUrls = payload?.anexos ?? {};
 
+    // 2) ordem correta: Água, Energia, Gás (se houver), Comprovante
     const lista: Array<{ tipo: string; url: string }> = [];
-    if (anexosUrls.foto_agua_url) lista.push({ tipo: "Foto do medidor de Água", url: anexosUrls.foto_agua_url });
-    if (anexosUrls.foto_energia_url) lista.push({ tipo: "Foto do medidor de Energia", url: anexosUrls.foto_energia_url });
-    if (anexosUrls.foto_gas_url) lista.push({ tipo: "Foto do medidor de Gás", url: anexosUrls.foto_gas_url });
-    if (anexosUrls.comprovante_fechamento_url)
+    if (anexosUrls?.foto_agua_url) lista.push({ tipo: "Foto do medidor de Água", url: anexosUrls.foto_agua_url });
+    if (anexosUrls?.foto_energia_url) lista.push({ tipo: "Foto do medidor de Energia", url: anexosUrls.foto_energia_url });
+    if (anexosUrls?.foto_gas_url) lista.push({ tipo: "Foto do medidor de Gás", url: anexosUrls.foto_gas_url });
+    if (anexosUrls?.comprovante_fechamento_url)
       lista.push({ tipo: "Comprovante de pagamento", url: anexosUrls.comprovante_fechamento_url });
 
-    const anexos: AnexoPdf[] = await Promise.all(
+    // 3) baixa e embute — sem derrubar a rota se 1 anexo falhar
+    const anexosPdf: AnexoPdf[] = await Promise.all(
       lista.map(async (it) => {
         try {
-          const buf = await normalizeForPdf(it.url, forwardHeaders);
-          const src = `data:image/jpeg;base64,${buf.toString("base64")}`;
+          const src = await normalizeForPdf(it.url);
           return { tipo: it.tipo, src, isImagem: true };
-        } catch (e: any) {
-          console.error(`[pdf] falha anexo "${it.tipo}"`, e?.message);
+        } catch {
           return { tipo: it.tipo, isImagem: false };
         }
       })
     );
 
-    const element = React.createElement(RelatorioFinalPdf as any, {
+    // 4) props do PDF
+    const props = {
       logo: null,
       condominio: { nome: payload?.meta?.condominio_nome || "—" },
       periodo: payload?.meta?.competencia || "—",
       gerado_em: payload?.meta?.gerado_em || new Date().toISOString(),
-      vendas: payload?.vendas_por_maquina?.itens ?? [],
-      kpis: payload?.vendas_por_maquina ?? {},
-      consumos: payload?.consumo_insumos?.itens ?? [],
-      total_consumo: payload?.consumo_insumos?.total_repasse_consumo ?? 0,
-      total_cashback: payload?.totalizacao_final?.cashback ?? 0,
-      total_pagar: payload?.totalizacao_final?.total_a_pagar_condominio ?? 0,
-      observacoes: payload?.observacoes ?? "",
-      anexos,
-    });
 
-    const pdfBuffer = await renderToBuffer(element);
+      vendas: (payload?.vendas_por_maquina?.itens ?? []).map((v: any) => ({
+        maquina: v.maquina,
+        ciclos: Number(v.ciclos) || 0,
+        valor_unitario: Number(v.valor_unitario) || 0,
+        valor_total: Number(v.valor_total) || 0,
+      })),
+
+      kpis: {
+        receita_bruta: Number(payload?.vendas_por_maquina?.receita_bruta_total) || 0,
+        cashback_percentual: Number(payload?.vendas_por_maquina?.cashback_percent) || 0,
+        cashback_valor: Number(payload?.vendas_por_maquina?.valor_cashback) || 0,
+      },
+
+      consumos: (payload?.consumo_insumos?.itens ?? []).map((c: any) => ({
+        nome: c.insumo,
+        anterior: c.leitura_anterior ?? null,
+        atual: c.leitura_atual ?? null,
+        consumo: Number(c.consumo) || 0,
+        valor_total: Number(c.valor_total) || 0,
+      })),
+
+      total_consumo: Number(payload?.consumo_insumos?.total_repasse_consumo) || 0,
+      total_cashback: Number(payload?.totalizacao_final?.cashback) || 0,
+      total_pagar: Number(payload?.totalizacao_final?.total_a_pagar_condominio) || 0,
+
+      observacoes: payload?.observacoes || "",
+      anexos: anexosPdf,
+    };
+
+    // ✅ FIX DO BUILD (TypeScript):
+    // renderToBuffer tipa como <Document />, mas o TS não “enxerga” isso aqui.
+    // Cast é intencional e seguro.
+    const element = React.createElement(RelatorioFinalPdf as any, props as any);
+    const pdfBuffer = await (renderToBuffer as any)(element);
+
+    const fileName = `relatorio-final-${auditoriaId}.pdf`;
 
     return new NextResponse(new Uint8Array(pdfBuffer), {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `inline; filename="relatorio-final-${auditoriaId}.pdf"`,
-        "Cache-Control": "no-store",
+        "Content-Disposition": `inline; filename="${fileName}"`,
+        "Cache-Control": "no-store, max-age=0",
       },
     });
   } catch (e: any) {
-    console.error("[pdf] erro geral", e?.message);
-    return bad("Erro ao gerar PDF", 500);
+    return bad(e?.message ?? "Erro inesperado ao gerar PDF", 500);
   }
 }
