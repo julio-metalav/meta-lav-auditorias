@@ -36,8 +36,7 @@ function cleanUuidLike(v: any) {
   return s;
 }
 
-type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
-type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
+type AnexoPdf = { tipo: string; src?: string; isImagem: boolean };
 
 function guessFormat(url: string, contentType?: string | null): "jpg" | "png" {
   const ct = (contentType || "").toLowerCase();
@@ -53,7 +52,6 @@ async function fetchImage(url: string, forwardHeaders?: Record<string, string>) 
     cache: "no-store",
     redirect: "follow",
     headers: {
-      // evita alguns CDNs devolverem html
       Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
       ...(forwardHeaders ?? {}),
     },
@@ -64,7 +62,7 @@ async function fetchImage(url: string, forwardHeaders?: Record<string, string>) 
     throw new Error(`Falha ao baixar imagem: ${res.status} (${ct})`);
   }
 
-    const ct = res.headers.get("content-type") || "";
+  const ct = res.headers.get("content-type") || "";
   const ctL = ct.toLowerCase();
 
   // Supabase Storage frequentemente responde imagens como application/octet-stream.
@@ -78,7 +76,6 @@ async function fetchImage(url: string, forwardHeaders?: Record<string, string>) 
     throw new Error(`Resposta não é imagem (content-type: ${ct})`);
   }
 
-
   const ab = await res.arrayBuffer();
   const buf = Buffer.from(ab);
   const fmt = guessFormat(url, ct);
@@ -88,13 +85,11 @@ async function fetchImage(url: string, forwardHeaders?: Record<string, string>) 
 /**
  * Normalização "definitiva" para react-pdf:
  * -> SEMPRE gerar JPG baseline RGB (mais compatível).
- * Se falhar, não derruba a rota (caller decide fallback).
  */
-async function normalizeForPdf(url: string, forwardHeaders?: Record<string, string>): Promise<ImageSrcObj> {
+async function normalizeForPdf(url: string, forwardHeaders?: Record<string, string>): Promise<Buffer> {
   const { buf } = await fetchImage(url, forwardHeaders);
 
   // Sempre converte para JPG baseline RGB
-  // (resolve CMYK/progressive/EXIF/HEIC disfarçado em muitos casos quando sharp consegue decodificar)
   const outJpg = await sharp(buf, { failOnError: false })
     .rotate()
     .toColorspace("rgb")
@@ -106,7 +101,7 @@ async function normalizeForPdf(url: string, forwardHeaders?: Record<string, stri
     })
     .toBuffer();
 
-  return { data: outJpg, format: "jpg" };
+  return outJpg;
 }
 
 export async function GET(req: Request, { params }: { params: { id: string } }) {
@@ -154,22 +149,19 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     if (anexosUrls?.foto_agua_url) lista.push({ tipo: "Foto do medidor de Água", url: anexosUrls.foto_agua_url });
     if (anexosUrls?.foto_energia_url) lista.push({ tipo: "Foto do medidor de Energia", url: anexosUrls.foto_energia_url });
     if (anexosUrls?.foto_gas_url) lista.push({ tipo: "Foto do medidor de Gás", url: anexosUrls.foto_gas_url });
-    if (anexosUrls?.comprovante_fechamento_url) lista.push({ tipo: "Comprovante de pagamento", url: anexosUrls.comprovante_fechamento_url });
+    if (anexosUrls?.comprovante_fechamento_url)
+      lista.push({ tipo: "Comprovante de pagamento", url: anexosUrls.comprovante_fechamento_url });
 
     // 3) baixa e embute — sem derrubar a rota se 1 anexo falhar
     const anexosPdf: AnexoPdf[] = await Promise.all(
       lista.map(async (it) => {
         try {
           // importante: reenvia cookie/authorization para Storage privado
-          const img = await normalizeForPdf(it.url, forwardHeaders);
-const base64 = img.data.toString("base64");
+          const buf = await normalizeForPdf(it.url, forwardHeaders);
+          const base64 = buf.toString("base64");
+          const src = `data:image/jpeg;base64,${base64}`;
 
-return {
-  tipo: it.tipo,
-  src: `data:image/jpeg;base64,${base64}`,
-  isImagem: true,
-};
-
+          return { tipo: it.tipo, src, isImagem: true };
         } catch (e: any) {
           console.error(`[pdf] falha anexo "${it.tipo}":`, e?.message ?? e);
           // não derruba o PDF
