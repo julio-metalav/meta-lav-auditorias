@@ -161,8 +161,15 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       lista.map(async (it) => {
         try {
           // importante: reenvia cookie/authorization para Storage privado
-          const src = await normalizeForPdf(it.url, forwardHeaders);
-          return { tipo: it.tipo, src, isImagem: true };
+          const img = await normalizeForPdf(it.url, forwardHeaders);
+const base64 = img.data.toString("base64");
+
+return {
+  tipo: it.tipo,
+  src: `data:image/jpeg;base64,${base64}`,
+  isImagem: true,
+};
+
         } catch (e: any) {
           console.error(`[pdf] falha anexo "${it.tipo}":`, e?.message ?? e);
           // não derruba o PDF
