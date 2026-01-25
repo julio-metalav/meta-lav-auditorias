@@ -64,11 +64,20 @@ async function fetchImage(url: string, forwardHeaders?: Record<string, string>) 
     throw new Error(`Falha ao baixar imagem: ${res.status} (${ct})`);
   }
 
-  const ct = res.headers.get("content-type") || "";
-  // Se não é imagem, o PDF pode renderizar em branco ou estourar em decode.
-  if (!ct.toLowerCase().startsWith("image/")) {
+    const ct = res.headers.get("content-type") || "";
+  const ctL = ct.toLowerCase();
+
+  // Supabase Storage frequentemente responde imagens como application/octet-stream.
+  // Não bloqueia: o sharp vai validar/decodificar de qualquer forma.
+  const ok =
+    ctL.startsWith("image/") ||
+    ctL.includes("application/octet-stream") ||
+    ctL.includes("binary/octet-stream");
+
+  if (!ok) {
     throw new Error(`Resposta não é imagem (content-type: ${ct})`);
   }
+
 
   const ab = await res.arrayBuffer();
   const buf = Buffer.from(ab);
