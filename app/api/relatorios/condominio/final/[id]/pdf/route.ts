@@ -48,48 +48,56 @@ function guessFormat(url: string, contentType?: string | null): "jpg" | "png" {
   return "jpg";
 }
 
-async function fetchImage(url: string) {
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Falha ao baixar imagem: ${res.status}`);
+async function fetchImage(url: string, forwardHeaders?: Record<string, string>) {
+  const res = await fetch(url, {
+    cache: "no-store",
+    redirect: "follow",
+    headers: {
+      // evita alguns CDNs devolverem html
+      Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+      ...(forwardHeaders ?? {}),
+    },
+  });
+
+  if (!res.ok) {
+    const ct = res.headers.get("content-type") || "";
+    throw new Error(`Falha ao baixar imagem: ${res.status} (${ct})`);
+  }
+
+  const ct = res.headers.get("content-type") || "";
+  // Se não é imagem, o PDF pode renderizar em branco ou estourar em decode.
+  if (!ct.toLowerCase().startsWith("image/")) {
+    throw new Error(`Resposta não é imagem (content-type: ${ct})`);
+  }
+
   const ab = await res.arrayBuffer();
   const buf = Buffer.from(ab);
-  const fmt = guessFormat(url, res.headers.get("content-type"));
-  const ct = res.headers.get("content-type") || null;
+  const fmt = guessFormat(url, ct);
   return { buf, fmt, contentType: ct };
 }
 
 /**
- * Tenta “normalizar” para PNG RGB (mais compatível com react-pdf).
- * Se der erro, NÃO derruba a rota: cai em fallback.
+ * Normalização "definitiva" para react-pdf:
+ * -> SEMPRE gerar JPG baseline RGB (mais compatível).
+ * Se falhar, não derruba a rota (caller decide fallback).
  */
-async function normalizeForPdf(url: string): Promise<ImageSrcObj> {
-  const { buf, fmt } = await fetchImage(url);
+async function normalizeForPdf(url: string, forwardHeaders?: Record<string, string>): Promise<ImageSrcObj> {
+  const { buf } = await fetchImage(url, forwardHeaders);
 
-  // Se já for PNG, tenta usar direto (mas ainda pode falhar no render; ok)
-  if (fmt === "png") return { data: buf, format: "png" };
+  // Sempre converte para JPG baseline RGB
+  // (resolve CMYK/progressive/EXIF/HEIC disfarçado em muitos casos quando sharp consegue decodificar)
+  const outJpg = await sharp(buf, { failOnError: false })
+    .rotate()
+    .toColorspace("rgb")
+    .jpeg({
+      quality: 85,
+      mozjpeg: true,
+      progressive: false, // baseline
+      chromaSubsampling: "4:2:0",
+    })
+    .toBuffer();
 
-  // JPG: tenta converter pra PNG RGB (o mais seguro)
-  try {
-    const outPng = await sharp(buf, { failOnError: false })
-      .rotate()
-      .toColorspace("rgb")
-      .png({ compressionLevel: 9, adaptiveFiltering: true })
-      .toBuffer();
-    return { data: outPng, format: "png" };
-  } catch {
-    // fallback 1: tenta “regravar” como JPG baseline
-    try {
-      const outJpg = await sharp(buf, { failOnError: false })
-        .rotate()
-        .toColorspace("rgb")
-        .jpeg({ quality: 85, mozjpeg: true })
-        .toBuffer();
-      return { data: outJpg, format: "jpg" };
-    } catch {
-      // fallback 2: devolve original (último recurso)
-      return { data: buf, format: "jpg" };
-    }
-  }
+  return { data: outJpg, format: "jpg" };
 }
 
 export async function GET(req: Request, { params }: { params: { id: string } }) {
@@ -107,15 +115,22 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     const cookie = req.headers.get("cookie") || "";
     const authorization = req.headers.get("authorization") || "";
 
+    const forwardHeaders: Record<string, string> = {
+      ...(cookie ? { cookie } : {}),
+      ...(authorization ? { authorization } : {}),
+    };
+
     // 1) pega o JSON do relatório final
-    const dataRes = await fetch(`${origin}/api/relatorios/condominio/final/${encodeURIComponent(auditoriaId)}`, {
-      headers: {
-        Accept: "application/json",
-        ...(cookie ? { cookie } : {}),
-        ...(authorization ? { authorization } : {}),
-      },
-      cache: "no-store",
-    });
+    const dataRes = await fetch(
+      `${origin}/api/relatorios/condominio/final/${encodeURIComponent(auditoriaId)}`,
+      {
+        headers: {
+          Accept: "application/json",
+          ...forwardHeaders,
+        },
+        cache: "no-store",
+      }
+    );
 
     const dataJson = await dataRes.json().catch(() => null);
     if (!dataRes.ok) return bad(dataJson?.error ?? "Falha ao obter relatório", 500);
@@ -130,16 +145,17 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     if (anexosUrls?.foto_agua_url) lista.push({ tipo: "Foto do medidor de Água", url: anexosUrls.foto_agua_url });
     if (anexosUrls?.foto_energia_url) lista.push({ tipo: "Foto do medidor de Energia", url: anexosUrls.foto_energia_url });
     if (anexosUrls?.foto_gas_url) lista.push({ tipo: "Foto do medidor de Gás", url: anexosUrls.foto_gas_url });
-    if (anexosUrls?.comprovante_fechamento_url)
-      lista.push({ tipo: "Comprovante de pagamento", url: anexosUrls.comprovante_fechamento_url });
+    if (anexosUrls?.comprovante_fechamento_url) lista.push({ tipo: "Comprovante de pagamento", url: anexosUrls.comprovante_fechamento_url });
 
     // 3) baixa e embute — sem derrubar a rota se 1 anexo falhar
     const anexosPdf: AnexoPdf[] = await Promise.all(
       lista.map(async (it) => {
         try {
-          const src = await normalizeForPdf(it.url);
+          // importante: reenvia cookie/authorization para Storage privado
+          const src = await normalizeForPdf(it.url, forwardHeaders);
           return { tipo: it.tipo, src, isImagem: true };
-        } catch {
+        } catch (e: any) {
+          console.error(`[pdf] falha anexo "${it.tipo}":`, e?.message ?? e);
           // não derruba o PDF
           return { tipo: it.tipo, isImagem: false };
         }
@@ -195,7 +211,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       },
     });
   } catch (e: any) {
-    // garante que sempre retorna algo (e não “morre” silencioso)
+    console.error("[pdf] erro geral:", e?.message ?? e);
     return bad(e?.message ?? "Erro inesperado ao gerar PDF", 500);
   }
 }
