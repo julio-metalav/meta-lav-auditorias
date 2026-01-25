@@ -27,13 +27,32 @@ function getOriginFromRequest(req: Request) {
   }
 }
 
-// remove aspas/escape que podem vir no params.id
-function cleanUuidLike(v: any) {
+/**
+ * Extrai um UUID de dentro de qualquer lixo de string:
+ * - remove aspas, <>, espaços, escapes
+ * - tenta decodeURIComponent
+ * - pega o primeiro UUID válido por regex
+ */
+function extractUuid(v: any) {
   let s = String(v ?? "").trim();
-  s = s.replace(/^"+/, "").replace(/"+$/, "");
-  s = s.replace(/^\\"+/, "").replace(/\\"+$/, "");
+
+  // tenta decodificar caso venha %20 etc (sem explodir)
+  try {
+    s = decodeURIComponent(s);
+  } catch {
+    // ignore
+  }
+
+  // limpa lixo comum
+  s = s.trim();
+  s = s.replace(/^\\+/, "");
   s = s.replace(/^["']+/, "").replace(/["']+$/, "");
-  return s;
+  s = s.replace(/^<+/, "").replace(/>+$/, "");
+  s = s.trim();
+
+  // pega o primeiro UUID dentro da string
+  const m = s.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
+  return m ? m[0] : "";
 }
 
 type AnexoPdf = { tipo: string; src?: string; isImagem: boolean };
@@ -66,7 +85,6 @@ async function fetchImage(url: string, forwardHeaders?: Record<string, string>) 
   const ctL = ct.toLowerCase();
 
   // Supabase Storage frequentemente responde imagens como application/octet-stream.
-  // Não bloqueia: o sharp vai validar/decodificar de qualquer forma.
   const ok =
     ctL.startsWith("image/") ||
     ctL.includes("application/octet-stream") ||
@@ -89,7 +107,6 @@ async function fetchImage(url: string, forwardHeaders?: Record<string, string>) 
 async function normalizeForPdf(url: string, forwardHeaders?: Record<string, string>): Promise<Buffer> {
   const { buf } = await fetchImage(url, forwardHeaders);
 
-  // Sempre converte para JPG baseline RGB
   const outJpg = await sharp(buf, { failOnError: false })
     .rotate()
     .toColorspace("rgb")
@@ -110,7 +127,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     if (!user) return bad("Não autenticado", 401);
     if (!roleGte(role as Role, "interno")) return bad("Sem permissão", 403);
 
-    const auditoriaId = cleanUuidLike(params.id);
+    const auditoriaId = extractUuid(params.id);
     if (!auditoriaId) return bad("ID inválido");
 
     const origin = getOriginFromRequest(req);
@@ -156,15 +173,12 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     const anexosPdf: AnexoPdf[] = await Promise.all(
       lista.map(async (it) => {
         try {
-          // importante: reenvia cookie/authorization para Storage privado
           const buf = await normalizeForPdf(it.url, forwardHeaders);
           const base64 = buf.toString("base64");
           const src = `data:image/jpeg;base64,${base64}`;
-
           return { tipo: it.tipo, src, isImagem: true };
         } catch (e: any) {
           console.error(`[pdf] falha anexo "${it.tipo}":`, e?.message ?? e);
-          // não derruba o PDF
           return { tipo: it.tipo, isImagem: false };
         }
       })
