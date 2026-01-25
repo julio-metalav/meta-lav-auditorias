@@ -206,6 +206,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   // comprovante + obs financeiro
   const [fechamentoObs, setFechamentoObs] = useState("");
   const [uploadingComprovante, setUploadingComprovante] = useState(false);
+const [reabrindo, setReabrindo] = useState(false);
   const [finalizando, setFinalizando] = useState(false);
 
 
@@ -666,28 +667,42 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
             <div className="flex flex-wrap items-center justify-end gap-2">
               {/* ✅ Botões do relatório (somente quando FINAL) */}
               {isFinal ? (
-                <>
-                  <a
-                    href={reportHtmlHref}
-                    target="_blank"
-                    rel="noreferrer"
-                    className={btnGhost}
-                    title="Abrir relatório final (visualização)"
-                  >
-                    Ver relatório
-                  </a>
-                  <a
-                    href={reportPdfHref}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm hover:opacity-95"
-                    style={{ backgroundColor: BRAND.primary }}
-                    title="Baixar PDF do relatório final"
-                  >
-                    Baixar PDF
-                  </a>
-                </>
-              ) : null}
+  <>
+    {isStaff ? (
+      <button
+        className="rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm hover:opacity-95 disabled:opacity-60"
+        style={{ backgroundColor: BRAND.accent }}
+        onClick={() => reabrirAuditoria()}
+        disabled={reabrindo || loading}
+        title="Reabre a auditoria para edição (volta para em conferência)"
+      >
+        {reabrindo ? "Reabrindo..." : "Reabrir"}
+      </button>
+    ) : null}
+
+    <a
+      href={reportHtmlHref}
+      target="_blank"
+      rel="noreferrer"
+      className={btnGhost}
+      title="Abrir relatório final (visualização)"
+    >
+      Ver relatório
+    </a>
+
+    <a
+      href={reportPdfHref}
+      target="_blank"
+      rel="noreferrer"
+      className="rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm hover:opacity-95"
+      style={{ backgroundColor: BRAND.primary }}
+      title="Baixar PDF do relatório final"
+    >
+      Baixar PDF
+    </a>
+  </>
+) : null}
+
 
               <button className={btnGhost} onClick={() => carregar()} disabled={loading}>
                 Recarregar
