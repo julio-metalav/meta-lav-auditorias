@@ -32,6 +32,7 @@ async function loadFromStorage(path: string): Promise<ImageSrcObj> {
   const cleanPath = path
     .replace(/^https?:\/\/[^/]+\/storage\/v1\/object\/(public|sign)\//, "")
     .replace(/^\/?storage\/v1\/object\/(public|sign)\//, "")
+    .replace(/^auditorias\//, "")
     .replace(/^public\//, "");
 
   const { data, error } = await admin.storage
@@ -41,9 +42,9 @@ async function loadFromStorage(path: string): Promise<ImageSrcObj> {
   if (error || !data) throw error ?? new Error("Falha ao baixar arquivo");
 
   const buf = Buffer.from(await data.arrayBuffer());
-  const fmt = cleanPath.toLowerCase().endsWith(".png") ? "png" : "jpg";
+  const isPng = cleanPath.toLowerCase().endsWith(".png");
 
-  if (fmt === "png") {
+  if (isPng) {
     return { data: buf, format: "png" };
   }
 
