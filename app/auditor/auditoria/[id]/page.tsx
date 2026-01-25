@@ -37,7 +37,7 @@ type Aud = {
         cidade: string;
         uf: string;
 
-        // opcionais (se vier do backend, exibimos)
+        // opcionais (se existir no backend, aparece no topo)
         rua?: string | null;
         numero?: string | null;
         bairro?: string | null;
@@ -130,6 +130,7 @@ function roleRank(r: Role) {
   if (r === "gestor") return 3;
   return 0;
 }
+
 function normStatus(s: any) {
   const x = String(s ?? "").trim().toLowerCase();
   if (x === "em conferencia") return "em_conferencia";
@@ -164,20 +165,17 @@ function pickMonth(a: Aud) {
 
 function buildEndereco(c?: Aud["condominios"] | null) {
   if (!c) return "";
-  const parts1 = [c.rua, c.numero].filter(Boolean).join(", ");
-  const parts2 = [c.bairro, c.cidade && c.uf ? `${c.cidade}/${c.uf}` : c.cidade ?? c.uf ?? null]
+  const linha1 = [c.rua, c.numero].filter(Boolean).join(", ");
+  const linha2 = [c.bairro, c.cidade && c.uf ? `${c.cidade}/${c.uf}` : c.cidade ?? c.uf ?? null]
     .filter(Boolean)
     .join(" - ");
-  const parts3 = [c.complemento, c.cep ? `CEP ${c.cep}` : null].filter(Boolean).join(" • ");
-
-  const parts = [parts1, parts2, parts3].filter(Boolean);
-  return parts.join(" • ");
+  const linha3 = [c.complemento, c.cep ? `CEP ${c.cep}` : null].filter(Boolean).join(" • ");
+  return [linha1, linha2, linha3].filter(Boolean).join(" • ");
 }
 
 /* =========================
-   OTIMIZAÇÃO DE IMAGEM (CLIENT-SIDE)
-   - Redimensiona e comprime antes do upload
-   - Alvo: sempre < ~2.5MB (ajustável)
+   OTIMIZAÇÃO (CLIENT-SIDE)
+   - evita FUNCTION_PAYLOAD_TOO_LARGE
 ========================= */
 
 const IMG_MAX_DIM = 2000; // maior lado
@@ -185,22 +183,13 @@ const IMG_TARGET_BYTES = 2_500_000; // ~2.5MB
 const IMG_MIN_QUALITY = 0.55;
 const IMG_START_QUALITY = 0.85;
 
-async function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result));
-    r.onerror = () => reject(new Error("Falha ao ler imagem"));
-    r.readAsDataURL(file);
-  });
-}
-
 async function loadImageFromFile(file: File): Promise<HTMLImageElement> {
   const url = URL.createObjectURL(file);
   try {
     return await new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error("Não consegui abrir a imagem (formato não suportado?)"));
+      img.onerror = () => reject(new Error("Formato de imagem não suportado neste aparelho/navegador"));
       img.src = url;
     });
   } finally {
@@ -218,10 +207,7 @@ function calcResize(w: number, h: number, maxDim: number) {
 async function canvasToBlob(canvas: HTMLCanvasElement, mime: string, quality: number): Promise<Blob> {
   return await new Promise((resolve, reject) => {
     canvas.toBlob(
-      (b) => {
-        if (!b) reject(new Error("Falha ao converter imagem"));
-        else resolve(b);
-      },
+      (b) => (b ? resolve(b) : reject(new Error("Falha ao converter imagem"))),
       mime,
       quality
     );
@@ -230,28 +216,12 @@ async function canvasToBlob(canvas: HTMLCanvasElement, mime: string, quality: nu
 
 async function optimizeImageFile(file: File): Promise<File> {
   // se já é pequeno, não mexe
-  if (file.size <= IMG_TARGET_BYTES && file.type !== "image/heic" && file.type !== "image/heif") {
-    return file;
-  }
+  if (file.size <= IMG_TARGET_BYTES && file.type !== "image/heic" && file.type !== "image/heif") return file;
 
-  // tenta carregar e redesenhar
-  // (se for HEIC/HEIF e o browser não suportar, vai cair no erro)
-  let img: HTMLImageElement;
-  try {
-    img = await loadImageFromFile(file);
-  } catch {
-    // fallback: tenta via dataURL (às vezes ajuda em alguns browsers)
-    const dataUrl = await fileToDataUrl(file);
-    img = await new Promise((resolve, reject) => {
-      const i = new Image();
-      i.onload = () => resolve(i);
-      i.onerror = () => reject(new Error("Formato de imagem não suportado neste aparelho/navegador"));
-      i.src = dataUrl;
-    });
-  }
-
+  const img = await loadImageFromFile(file);
   const ow = img.naturalWidth || img.width;
   const oh = img.naturalHeight || img.height;
+
   const { w, h } = calcResize(ow, oh, IMG_MAX_DIM);
 
   const canvas = document.createElement("canvas");
@@ -263,24 +233,21 @@ async function optimizeImageFile(file: File): Promise<File> {
 
   ctx.drawImage(img, 0, 0, w, h);
 
-  // sempre gera JPEG pra garantir compatibilidade e reduzir tamanho
   const mime = "image/jpeg";
-
   let q = IMG_START_QUALITY;
   let blob = await canvasToBlob(canvas, mime, q);
 
-  // reduz qualidade até ficar abaixo do alvo (ou atingir piso)
   while (blob.size > IMG_TARGET_BYTES && q > IMG_MIN_QUALITY) {
     q = Math.max(IMG_MIN_QUALITY, q - 0.08);
     blob = await canvasToBlob(canvas, mime, q);
   }
 
-  // se mesmo assim ficou grande, tenta diminuir dimensão mais um pouco
   if (blob.size > IMG_TARGET_BYTES) {
-    const canvas2 = document.createElement("canvas");
     const scale = Math.sqrt(IMG_TARGET_BYTES / blob.size);
-    const w2 = Math.max(800, Math.round(w * Math.min(0.9, scale)));
-    const h2 = Math.max(800, Math.round(h * Math.min(0.9, scale)));
+    const w2 = Math.max(900, Math.round(w * Math.min(0.9, scale)));
+    const h2 = Math.max(900, Math.round(h * Math.min(0.9, scale)));
+
+    const canvas2 = document.createElement("canvas");
     canvas2.width = w2;
     canvas2.height = h2;
 
@@ -288,7 +255,6 @@ async function optimizeImageFile(file: File): Promise<File> {
     if (!ctx2) throw new Error("Falha ao preparar canvas 2");
     ctx2.drawImage(img, 0, 0, w2, h2);
 
-    q = Math.max(IMG_MIN_QUALITY, q);
     blob = await canvasToBlob(canvas2, mime, q);
   }
 
@@ -339,7 +305,6 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
   const [histErr, setHistErr] = useState<string | null>(null);
   const [histRole, setHistRole] = useState<Role>(null);
   const [histData, setHistData] = useState<HistItem[]>([]);
-
   function setOkMsg(msg: string) {
     setOk(msg);
     if (okTimer.current) window.clearTimeout(okTimer.current);
@@ -422,18 +387,15 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
 
   async function carregarQtdLavadoras(condominioId: string) {
     try {
-      // endpoint esperado: { count: number }
       const res = await fetch(`/api/condominios/${condominioId}/lavadoras`, { cache: "no-store" });
       const json = await safeReadJson(res);
-      if (res.ok && Number.isFinite(Number(json?.count))) {
-        setQtdLavadoras(Number(json.count));
-      } else {
-        setQtdLavadoras(0);
-      }
+      if (res.ok && Number.isFinite(Number(json?.count))) setQtdLavadoras(Number(json.count));
+      else setQtdLavadoras(0);
     } catch {
       setQtdLavadoras(0);
     }
   }
+
   async function carregarTudo() {
     setLoading(true);
     setErr(null);
@@ -458,7 +420,9 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
         const uRes = await fetch("/api/users", { cache: "no-store" });
         const uJson = await safeReadJson(uRes);
         if (uRes.ok) setUsers(Array.isArray(uJson) ? uJson : uJson?.data ?? []);
-      } catch {}
+      } catch {
+        // ignora
+      }
 
       const res = await fetch(`/api/auditorias/${id}`, { cache: "no-store" });
       const json = await safeReadJson(res);
@@ -473,10 +437,11 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
       if (found.condominio_id) carregarQtdLavadoras(found.condominio_id);
 
       if (json?.provetas && typeof json.provetas === "object") {
+        const obj = json.provetas as Record<string, string>;
         const next: Record<number, string> = {};
-        Object.entries(json.provetas as Record<string, string>).forEach(([k, v]) => {
+        Object.keys(obj).forEach((k) => {
           const idx = Number(k);
-          if (Number.isFinite(idx) && v) next[idx] = v;
+          if (Number.isFinite(idx) && obj[k]) next[idx] = obj[k];
         });
         setProvetaUrls(next);
       }
@@ -489,11 +454,86 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     }
   }
 
+  async function salvarRascunho(extra?: Partial<Pick<Aud, "status">>) {
+    setErr(null);
+    setOk(null);
+
+    if (!aud) return setErr("Auditoria não carregada.");
+    if (mismatch) return setErr(`Sem permissão: logado como "${meLabel}", mas auditoria é de "${assignedAuditorLabel}".`);
+    if (concluida) return setErr("Esta auditoria já está em conferência/final. Não dá pra alterar em campo.");
+
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/auditorias/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agua_leitura: toNumberOrNull(agua_leitura),
+          energia_leitura: toNumberOrNull(energia_leitura),
+          gas_leitura: toNumberOrNull(gas_leitura),
+          observacoes: obs,
+          ...(extra ?? {}),
+        }),
+      });
+
+      const json = await safeReadJson(res);
+      if (!res.ok) {
+        if (Array.isArray(json?.missing) && json.missing.length) {
+          throw new Error(`${json?.error ?? "Checklist incompleto"}: ${json.missing.join(", ")}`);
+        }
+        throw new Error(json?.error ?? "Erro ao salvar");
+      }
+
+      const saved: Aud | null = json?.auditoria ?? null;
+      if (saved) {
+        setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...saved }));
+        applyFromAud(saved);
+      } else {
+        setDirty(false);
+      }
+
+      setOkMsg(extra?.status ? "Concluída em campo ✅" : "Salvo ✅");
+
+      if (extra?.status) {
+        await carregarTudo();
+      } else {
+        carregarHistorico();
+      }
+    } catch (e: any) {
+      setErr(e?.message ?? "Falha ao salvar");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function onPick(kind: UploadKey, file?: File | null) {
     if (!file) return;
+
     const url = URL.createObjectURL(file);
+    const old = pendingUrl[kind];
+    if (old) URL.revokeObjectURL(old);
+
     setPendingFile((p) => ({ ...p, [kind]: file }));
     setPendingUrl((p) => ({ ...p, [kind]: url }));
+    setPreviewKind(null);
+  }
+
+  function cancelPending(kind: UploadKey) {
+    const url = pendingUrl[kind];
+    if (url) URL.revokeObjectURL(url);
+
+    setPendingFile((p) => {
+      const copy = { ...p };
+      delete copy[kind];
+      return copy;
+    });
+    setPendingUrl((p) => {
+      const copy = { ...p };
+      delete copy[kind];
+      return copy;
+    });
+
+    if (previewKind === kind) setPreviewKind(null);
   }
 
   async function uploadFoto(kind: UploadKey, file: File) {
@@ -501,99 +541,761 @@ export default function AuditorAuditoriaPage({ params }: { params: { id: string 
     setOk(null);
 
     if (!aud) return setErr("Auditoria não carregada.");
-    if (mismatch) return setErr("Sem permissão.");
-    if (concluida) return setErr("Auditoria já finalizada.");
+    if (mismatch) return setErr(`Sem permissão: logado como "${meLabel}", mas auditoria é de "${assignedAuditorLabel}".`);
+    if (concluida) return setErr("Esta auditoria já está em conferência/final. Não dá pra alterar fotos em campo.");
     if (!file.type.startsWith("image/")) return setErr("Envie apenas imagem.");
 
     setUploading((p) => ({ ...p, [kind]: true }));
 
     try {
+      // ✅ aqui é a solução do payload too large
       const optimized = await optimizeImageFile(file);
 
       const fd = new FormData();
+
       const kindStr = String(kind);
       const isProveta = kindStr.startsWith("proveta_");
 
       if (isProveta) {
+        const idx = Number(kindStr.replace("proveta_", ""));
         fd.append("kind", "proveta");
-        fd.append("idx", kindStr.replace("proveta_", ""));
+        fd.append("idx", String(idx));
       } else {
         fd.append("kind", kindStr);
       }
 
       fd.append("file", optimized);
 
-      const res = await fetch(`/api/auditorias/${id}/fotos`, {
-        method: "POST",
-        body: fd,
-      });
-
+      const res = await fetch(`/api/auditorias/${id}/fotos`, { method: "POST", body: fd });
       const json = await safeReadJson(res);
-      if (!res.ok) throw new Error(json?.error ?? "Erro ao enviar foto");
+
+      if (!res.ok) {
+        const raw = json?._raw ? ` (${String(json._raw).slice(0, 140)})` : "";
+        throw new Error((json?.error ?? "Erro ao enviar foto") + raw);
+      }
 
       if (isProveta) {
         const idx = Number(kindStr.replace("proveta_", ""));
-        if (json?.url) setProvetaUrls((p) => ({ ...p, [idx]: json.url }));
-      } else if (json?.updated) {
-        setAud((prev) => ({ ...(prev as Aud), ...json.updated }));
+        const url = (json?.url ?? json?.proveta_url ?? null) as string | null;
+        if (url) setProvetaUrls((p) => ({ ...p, [idx]: url }));
+      } else {
+        const updated = (json?.updated ?? null) as Record<string, any> | null;
+
+        if (updated && typeof updated === "object") {
+          setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...(updated as any) }));
+        } else if (json?.auditoria) {
+          setAud((prev) => ({ ...(prev ?? ({} as Aud)), ...(json.auditoria as Aud) }));
+        } else if (json?.url) {
+          const map: Record<FotoKind, keyof Aud> = {
+            agua: "foto_agua_url",
+            energia: "foto_energia_url",
+            gas: "foto_gas_url",
+            bombonas: "foto_bombonas_url",
+            conector_bala: "foto_conector_bala_url",
+          };
+          const k = kind as FotoKind;
+          const key = map[k];
+          setAud((prev) => ({ ...(prev ?? ({} as Aud)), [key]: json.url } as any));
+        }
       }
 
-      setOkMsg("Foto salva ✅");
+      // limpa pending
+      const urlLocal = pendingUrl[kind];
+      if (urlLocal) URL.revokeObjectURL(urlLocal);
+
       setPendingFile((p) => {
-        const c = { ...p };
-        delete c[kind];
-        return c;
+        const copy = { ...p };
+        delete copy[kind];
+        return copy;
       });
       setPendingUrl((p) => {
-        const c = { ...p };
-        delete c[kind];
-        return c;
+        const copy = { ...p };
+        delete copy[kind];
+        return copy;
       });
+
+      if (previewKind === kind) setPreviewKind(null);
+
+      setOkMsg("Foto salva ✅");
     } catch (e: any) {
-      setErr(e?.message ?? "Falha no upload");
+      setErr(e?.message ?? "Falha ao enviar foto");
     } finally {
       setUploading((p) => ({ ...p, [kind]: false }));
     }
   }
+  const provetaItems = useMemo(() => {
+    const n = Math.max(0, Number(qtdLavadoras || 0));
+    if (!n) return [] as Array<{ idx: number; key: ProvetaKey; label: string }>;
+    return Array.from({ length: n }, (_, i) => {
+      const idx = i + 1;
+      return { idx, key: `proveta_${idx}` as ProvetaKey, label: `Proveta Lavadora ${idx}` };
+    });
+  }, [qtdLavadoras]);
+
+  const checklistUi = useMemo(() => {
+    const a = aud;
+
+    const leituraAguaOk = (agua_leitura ?? "").trim().length > 0;
+    const leituraEnergiaOk = (energia_leitura ?? "").trim().length > 0;
+
+    const fotoAguaOk = !!a?.foto_agua_url;
+    const fotoEnergiaOk = !!a?.foto_energia_url;
+    const fotoConectorOk = !!a?.foto_conector_bala_url;
+
+    // Químicos (obrigatórios, mas fora do bloco principal)
+    const fotoBombonasOk = !!a?.foto_bombonas_url;
+
+    const provetasOk =
+      provetaItems.length === 0
+        ? false
+        : provetaItems.every((p) => {
+            const u = provetaUrls[p.idx];
+            return !!u;
+          });
+
+    const items = [
+      { label: "Leitura de água", ok: leituraAguaOk, required: true },
+      { label: "Leitura de energia", ok: leituraEnergiaOk, required: true },
+      { label: "Foto do medidor de água", ok: fotoAguaOk, required: true },
+      { label: "Foto do medidor de energia", ok: fotoEnergiaOk, required: true },
+      { label: "Foto conector bala", ok: fotoConectorOk, required: true },
+
+      // Químicos
+      { label: "Foto bombonas (Químicos)", ok: fotoBombonasOk, required: true },
+      { label: "Fotos provetas (Químicos)", ok: provetasOk, required: true },
+
+      // opcionais
+      { label: "Leitura de gás (opcional)", ok: (gas_leitura ?? "").trim().length > 0, required: false },
+      { label: "Foto do medidor de gás (opcional)", ok: !!a?.foto_gas_url, required: false },
+    ];
+
+    const required = items.filter((i) => i.required);
+    const doneReq = required.filter((i) => i.ok).length;
+    const totalReq = required.length;
+
+    const faltas = required.filter((i) => !i.ok).map((i) => i.label);
+
+    if (qtdLavadoras <= 0) {
+      if (!faltas.includes("Fotos provetas (Químicos)")) faltas.push("Fotos provetas (Químicos)");
+    }
+
+    const prontoCampo = faltas.length === 0;
+    const pct = totalReq === 0 ? 0 : Math.round((doneReq / totalReq) * 100);
+
+    return { items, faltas, prontoCampo, doneReq, totalReq, pct };
+  }, [aud, agua_leitura, energia_leitura, gas_leitura, provetaItems, provetaUrls, qtdLavadoras]);
+
+  const concluidaBanner = useMemo(() => statusBadge(aud?.status), [aud?.status]);
+  const mePill = useMemo(() => rolePill(me?.role ?? null), [me?.role]);
+
   useEffect(() => {
     carregarTudo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const endereco = buildEndereco(aud?.condominios);
-  const mapsLink = endereco
-    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(endereco)}`
-    : null;
+  useEffect(() => {
+    return () => {
+      if (okTimer.current) window.clearTimeout(okTimer.current);
+      Object.values(pendingUrl).forEach((u) => u && URL.revokeObjectURL(u));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  return (
-    <AppShell title="Auditoria (Campo)">
-      <div className="mx-auto max-w-4xl px-4 py-6">
+  const titulo = aud?.condominios
+    ? `${aud.condominios.nome} - ${aud.condominios.cidade}/${aud.condominios.uf}`
+    : aud?.condominio_id ?? "";
 
-        {/* TOPO – CONDOMÍNIO */}
-        <div className="mb-4 rounded-xl border bg-white p-4">
-          <div className="text-lg font-semibold">
-            {aud?.condominios?.nome}
+  const endereco = useMemo(() => buildEndereco(aud?.condominios ?? null), [aud?.condominios]);
+  const mapsLink = useMemo(() => {
+    if (!endereco) return null;
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(endereco)}`;
+  }, [endereco]);
+
+  const disableAll = loading || saving || !aud || concluida;
+
+  const busyAnyUpload = useMemo(() => Object.values(uploading).some(Boolean), [uploading]);
+
+  const concludeDisabledReason = useMemo(() => {
+    if (!aud) return "Auditoria não carregada";
+    if (loading || saving) return "Aguarde…";
+    if (busyAnyUpload) return "Ainda tem upload em andamento";
+    if (mismatch) return "Você não é o auditor atribuído";
+    if (concluida) return "Já está em conferência/final";
+    if (!checklistUi.prontoCampo) return `Faltando: ${checklistUi.faltas.join(", ")}`;
+    return "";
+  }, [aud, loading, saving, busyAnyUpload, mismatch, concluida, checklistUi]);
+
+  async function concluirEmCampo() {
+    const okConfirm = window.confirm(
+      "Após concluir, você não poderá mais alterar leituras e fotos como auditor. Deseja continuar?"
+    );
+    if (!okConfirm) return;
+    await salvarRascunho({ status: "em_conferencia" });
+  }
+
+  function badgeFor(required: boolean, saved: boolean, pend: boolean) {
+    if (saved) {
+      return (
+        <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">Feita</span>
+      );
+    }
+    if (pend) {
+      return (
+        <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">Pendente</span>
+      );
+    }
+    if (required) {
+      return (
+        <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">Obrigatória</span>
+      );
+    }
+    return (
+      <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-700">Opcional</span>
+    );
+  }
+
+  function UploadRow(props: {
+    kind: UploadKey;
+    title: string;
+    required: boolean;
+    savedUrl: string | null;
+    help?: string;
+    previewLabel?: string;
+  }) {
+    const { kind, title, required, savedUrl, help, previewLabel } = props;
+
+    const saved = !!savedUrl;
+    const pend = !!pendingFile[kind];
+    const busy = !!uploading[kind];
+    const pUrl = pendingUrl[kind];
+
+    return (
+      <div className="flex flex-col gap-3 p-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-sm font-semibold text-gray-800">{title}</div>
+            {badgeFor(required, saved, pend)}
           </div>
 
-          {endereco && (
-            <div className="mt-1 text-sm text-gray-600">{endereco}</div>
+          {help && <div className="mt-1 text-xs text-gray-500">{help}</div>}
+
+          {saved && savedUrl && (
+            <div className="mt-1">
+              <a className="text-xs underline text-gray-600" href={savedUrl} target="_blank" rel="noreferrer">
+                Abrir arquivo
+              </a>
+            </div>
           )}
 
-          {mapsLink && (
-            <a
-              href={mapsLink}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-2 inline-flex text-sm text-blue-600 underline"
-            >
-              📍 Abrir no Google Maps
-            </a>
+          {pend && (
+            <div className="mt-1 text-xs text-gray-600">
+              Selecionada: <b>{pendingFile[kind]?.name ?? "foto.jpg"}</b>
+              {pUrl && (
+                <>
+                  {" "}
+                  -{" "}
+                  <button className="underline" onClick={() => setPreviewKind(kind)}>
+                    Ver
+                  </button>
+                </>
+              )}
+            </div>
           )}
         </div>
 
-        {/* RESTO DA TELA — permanece igual */}
-        {/* ⚠️ Todo o JSX abaixo é exatamente o mesmo que você já tinha */}
-        {/* Checklist, leituras, uploads, histórico, botões etc */}
+        <div className="w-full md:w-auto">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+            <label
+              className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${
+                disableAll || mismatch ? "bg-gray-300" : "bg-blue-600 hover:bg-blue-700"
+              }`}
+              title={disableAll ? "Somente leitura" : mismatch ? "Sem permissão" : "Abrir câmera"}
+            >
+              Tirar
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={(e) => {
+                  onPick(kind, e.target.files?.[0]);
+                  e.currentTarget.value = "";
+                }}
+                disabled={disableAll || mismatch || busy}
+              />
+            </label>
 
+            <label
+              className={`inline-flex w-full sm:w-auto items-center justify-center cursor-pointer rounded-xl border px-4 py-2 text-sm ${
+                disableAll || mismatch ? "opacity-50" : "hover:bg-gray-50"
+              }`}
+              title="Selecionar da galeria"
+            >
+              Galeria
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  onPick(kind, e.target.files?.[0]);
+                  e.currentTarget.value = "";
+                }}
+                disabled={disableAll || mismatch || busy}
+              />
+            </label>
+
+            {pend && (
+              <>
+                <button
+                  className={`inline-flex w-full sm:w-auto items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                    disableAll || mismatch ? "bg-gray-300" : "bg-green-600 hover:bg-green-700"
+                  }`}
+                  disabled={disableAll || mismatch || busy}
+                  onClick={() => uploadFoto(kind, pendingFile[kind] as File)}
+                  title="Enviar e salvar no sistema"
+                >
+                  {busy ? "Enviando..." : "Salvar"}
+                </button>
+
+                <button
+                  className="inline-flex w-full sm:w-auto items-center justify-center rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                  disabled={disableAll || mismatch || busy}
+                  onClick={() => cancelPending(kind)}
+                  title="Descartar esta seleção"
+                >
+                  Refazer
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        <span className="hidden" data-preview-label={previewLabel ?? title} />
+      </div>
+    );
+  }
+
+  return (
+    <AppShell title="Auditoria (Campo)">
+      <div className="mx-auto max-w-4xl px-3 py-4 sm:px-6 sm:py-6 overflow-x-hidden">
+        {/* Header */}
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-xl font-semibold sm:text-2xl">Auditoria (Campo)</h1>
+
+              <span
+                className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${mePill.cls}`}
+              >
+                {mePill.label}
+              </span>
+
+              <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${concluidaBanner.cls}`}>
+                {concluidaBanner.label}
+              </span>
+            </div>
+
+            <div className="mt-1 text-sm text-gray-600 truncate">{titulo}</div>
+
+            {/* ✅ NOVO: endereço + maps */}
+            {endereco && (
+              <div className="mt-1 text-xs text-gray-500 break-words">
+                {endereco}{" "}
+                {mapsLink && (
+                  <>
+                    •{" "}
+                    <a className="underline" href={mapsLink} target="_blank" rel="noreferrer">
+                      Abrir no Google Maps
+                    </a>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="mt-2 rounded-xl border bg-white p-3 text-xs">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-gray-700 break-words">
+                  <b>Logado como:</b> {meLabel}
+                </div>
+                <div className="text-gray-700 break-words">
+                  <b>Auditoria atribuída a:</b> {assignedAuditorLabel}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-2 text-xs text-gray-500">
+              Mês: <b>{aud ? pickMonth(aud) : "-"}</b> • ID:{" "}
+              <span className="font-mono text-gray-400 break-all">{id}</span>
+            </div>
+
+            {concluida && isAuditor && (
+              <div className="mt-3">
+                <a
+                  className="inline-flex w-full items-center justify-center rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-gray-50 sm:w-auto"
+                  href="/auditorias"
+                  title="Voltar para a lista das suas auditorias"
+                >
+                  ← Voltar para minhas auditorias
+                </a>
+              </div>
+            )}
+          </div>
+
+          <button
+            className="w-full shrink-0 rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 sm:w-auto"
+            onClick={carregarTudo}
+            disabled={loading || saving}
+            title="Recarregar dados"
+          >
+            {loading ? "Carregando..." : "Recarregar"}
+          </button>
+        </div>
+
+        {/* Mensagens */}
+        {mismatch && (
+          <div className="mb-4 rounded-2xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
+            <b>Atenção:</b> você está logado como <b>{meLabel}</b>, mas a auditoria pertence a{" "}
+            <b>{assignedAuditorLabel}</b>.
+            <div className="mt-1 text-xs text-red-700">
+              Para lançar dados como auditor, faça login com o usuário do auditor atribuído.
+            </div>
+            <div className="mt-1 text-xs text-red-700">Obs: interno/gestor não são bloqueados por isso.</div>
+          </div>
+        )}
+
+        {concluida && (
+          <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+            Esta auditoria já foi concluída e está em <b>{concluidaBanner.label}</b>. (Somente leitura nesta tela)
+          </div>
+        )}
+
+        {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>}
+        {ok && (
+          <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">{ok}</div>
+        )}
+
+        {/* Checklist + Progresso + Ação principal */}
+        <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-gray-800">Checklist de campo</div>
+              <div className="mt-1 text-xs text-gray-500">
+                Para concluir, complete os itens obrigatórios. (Químicos inclui bombonas + provetas por lavadora)
+              </div>
+
+              <div className="mt-3">
+                <div className="flex items-center justify-between text-xs text-gray-600">
+                  <div>
+                    Progresso:{" "}
+                    <b>
+                      {checklistUi.doneReq}/{checklistUi.totalReq}
+                    </b>
+                  </div>
+                  <div>
+                    <b>{checklistUi.pct}%</b>
+                  </div>
+                </div>
+                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-gray-100">
+                  <div className="h-2 rounded-full bg-green-500" style={{ width: `${checklistUi.pct}%` }} />
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {checklistUi.items.map((it) => (
+                  <div
+                    key={it.label}
+                    className={`flex items-center justify-between rounded-xl border px-3 py-2 text-sm ${
+                      it.ok ? "bg-green-50 border-green-200" : it.required ? "bg-red-50 border-red-200" : "bg-gray-50"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate">
+                        {it.ok ? "✅ " : "⬜ "}
+                        {it.label}
+                      </div>
+                      {!it.required && <div className="text-xs text-gray-500">Opcional</div>}
+                    </div>
+                    <div className="text-xs font-semibold">
+                      {it.ok ? (
+                        <span className="text-green-700">OK</span>
+                      ) : it.required ? (
+                        <span className="text-red-700">Falta</span>
+                      ) : (
+                        <span className="text-gray-600">—</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {!checklistUi.prontoCampo && !concluida && (
+                <div className="mt-3 rounded-xl border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">
+                  Falta concluir: <b>{checklistUi.faltas.join(", ")}</b>
+                </div>
+              )}
+            </div>
+
+            <div className="shrink-0">
+              <button
+                className={`w-full rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 sm:w-auto ${
+                  concluida ? "bg-green-300" : checklistUi.prontoCampo ? "bg-green-600 hover:bg-green-700" : "bg-gray-400"
+                }`}
+                disabled={!!concludeDisabledReason}
+                onClick={concluirEmCampo}
+                title={concludeDisabledReason || "Concluir em campo"}
+              >
+                {saving ? "Salvando..." : concluida ? "Concluída" : "Concluir em campo"}
+              </button>
+
+              {!!concludeDisabledReason && !concluida && (
+                <div className="mt-2 max-w-full text-xs text-gray-500 sm:max-w-[260px] break-words">
+                  {concludeDisabledReason}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Histórico (somente leitura p/ interno/gestor) */}
+        {canSeeHistorico && (
+          <div className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-sm font-semibold text-gray-800">Histórico de status</div>
+                <div className="mt-1 text-xs text-gray-500">Somente leitura.</div>
+              </div>
+
+              <button
+                className="w-full rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 sm:w-auto"
+                onClick={carregarHistorico}
+                disabled={histLoading}
+                title="Atualizar histórico"
+              >
+                {histLoading ? "Carregando..." : "Atualizar"}
+              </button>
+            </div>
+
+            {histErr && (
+              <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{histErr}</div>
+            )}
+
+            {!histErr && !histLoading && histData.length === 0 && (
+              <div className="mt-3 text-sm text-gray-600">Ainda não há registros de mudança de status.</div>
+            )}
+
+            {histData.length > 0 && (
+              <div className="mt-3 overflow-hidden rounded-xl border">
+                <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600">
+                  <div className="col-span-4">Data/Hora</div>
+                  <div className="col-span-4">Status</div>
+                  <div className="col-span-4">Quem</div>
+                </div>
+
+                <div className="divide-y">
+                  {histData.map((h, idx) => {
+                    const de = (h.de_status ?? "-").toString();
+                    const para = (h.para_status ?? "-").toString();
+                    const who = h.actor?.email ?? h.actor?.id ?? "-";
+                    const whoRole = h.actor?.role ? ` - ${h.actor.role}` : "";
+                    return (
+                      <div key={`${h.created_at}-${idx}`} className="grid grid-cols-12 px-3 py-2 text-sm">
+                        <div className="col-span-12 sm:col-span-4 text-gray-700">{fmtBR(h.created_at)}</div>
+                        <div className="col-span-12 sm:col-span-4 text-gray-800">
+                          <span className="font-mono text-xs text-gray-600">{de}</span> {"->"}{" "}
+                          <span className="font-mono text-xs text-gray-600">{para}</span>
+                        </div>
+                        <div className="col-span-12 sm:col-span-4 text-gray-700">
+                          {who}
+                          <span className="text-xs text-gray-500">{whoRole}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Conteúdo: Leituras + Observações + Fotos */}
+        <div className="rounded-2xl border bg-white p-4 sm:p-5 shadow-sm">
+          <div className="mb-3 text-sm font-semibold text-gray-700">Leituras</div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs text-gray-600">Leitura Água</label>
+              <input
+                className="w-full rounded-xl border px-3 py-2"
+                value={agua_leitura}
+                onChange={(e) => {
+                  setAguaLeitura(e.target.value);
+                  setDirty(true);
+                }}
+                placeholder="ex: 12345"
+                disabled={disableAll || mismatch}
+                inputMode="decimal"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-gray-600">Leitura Energia</label>
+              <input
+                className="w-full rounded-xl border px-3 py-2"
+                value={energia_leitura}
+                onChange={(e) => {
+                  setEnergiaLeitura(e.target.value);
+                  setDirty(true);
+                }}
+                placeholder="ex: 67890"
+                disabled={disableAll || mismatch}
+                inputMode="decimal"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-gray-600">Leitura Gás (opcional)</label>
+              <input
+                className="w-full rounded-xl border px-3 py-2"
+                value={gas_leitura}
+                onChange={(e) => {
+                  setGasLeitura(e.target.value);
+                  setDirty(true);
+                }}
+                placeholder="se não tiver, deixe vazio"
+                disabled={disableAll || mismatch}
+                inputMode="decimal"
+              />
+              <div className="mt-1 text-[11px] text-gray-500">Se o condomínio não usa gás, deixe vazio.</div>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <label className="mb-1 block text-xs text-gray-600">Observações</label>
+            <textarea
+              className="w-full rounded-xl border px-3 py-2"
+              value={obs}
+              onChange={(e) => {
+                setObs(e.target.value);
+                setDirty(true);
+              }}
+              rows={3}
+              placeholder="anote ocorrências, etc."
+              disabled={disableAll || mismatch}
+            />
+          </div>
+
+          {/* Fotos (CHECKLIST principal) */}
+          <div className="mt-6 rounded-2xl border p-4">
+            <div className="mb-2 text-sm font-semibold text-gray-700">Fotos (checklist)</div>
+            <div className="text-xs text-gray-500">Tocar em “Tirar” → depois “Salvar”.</div>
+
+            <div className="mt-3 divide-y rounded-xl border">
+              {FOTO_ITEMS_CHECKLIST.map((item) => (
+                <UploadRow
+                  key={item.kind}
+                  kind={item.kind}
+                  title={item.label}
+                  required={item.required}
+                  help={item.help}
+                  savedUrl={fotoUrl(aud, item.kind)}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* ✅ QUÍMICOS (fora do bloco principal): Bombonas + Provetas */}
+          <div className="mt-6 rounded-2xl border p-4">
+            <div className="mb-2 text-sm font-semibold text-gray-700">Químicos</div>
+            <div className="text-xs text-gray-500">Bombonas e provetas por lavadora. (Obrigatório para concluir)</div>
+
+            <div className="mt-3 overflow-hidden rounded-xl border">
+              {/* Bombonas */}
+              <div className="border-b bg-white">
+                <UploadRow
+                  kind={FOTO_ITEM_BOMBONAS.kind}
+                  title={FOTO_ITEM_BOMBONAS.label}
+                  required={FOTO_ITEM_BOMBONAS.required}
+                  savedUrl={fotoUrl(aud, FOTO_ITEM_BOMBONAS.kind)}
+                />
+              </div>
+
+              {/* Provetas */}
+              <div className="bg-white">
+                {qtdLavadoras <= 0 ? (
+                  <div className="p-3 text-sm text-gray-600">
+                    Não consegui identificar a quantidade de lavadoras deste condomínio.
+                    <div className="mt-1 text-xs text-gray-500">
+                      Sem esse número, não dá pra renderizar as provetas por lavadora.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="divide-y">
+                    {provetaItems.map((it) => (
+                      <UploadRow
+                        key={it.key}
+                        kind={it.key}
+                        title={it.label}
+                        required={true}
+                        savedUrl={provetaUrls[it.idx] ?? null}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Ações */}
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <button
+              className={`w-full sm:w-auto rounded-xl px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                dirty ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-300"
+              }`}
+              onClick={() => salvarRascunho()}
+              disabled={disableAll || mismatch || !dirty}
+              title={dirty ? "Salvar alterações" : "Sem alterações"}
+            >
+              {saving ? "Salvando..." : dirty ? "Salvar" : "Sem alterações"}
+            </button>
+
+            <a
+              className="w-full sm:w-auto inline-flex items-center justify-center rounded-xl border px-5 py-2 text-sm hover:bg-gray-50"
+              href="/auditorias"
+            >
+              Voltar
+            </a>
+          </div>
+        </div>
+
+        {/* Preview modal */}
+        {previewKind && pendingUrl[previewKind] && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-lg rounded-2xl bg-white p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 truncate text-sm font-semibold">
+                  {String(previewKind).startsWith("proveta_")
+                    ? `Proveta Lavadora ${String(previewKind).replace("proveta_", "")}`
+                    : FOTO_ITEMS_CHECKLIST.find((x) => x.kind === (previewKind as any))?.label ??
+                      (previewKind === "bombonas" ? "Bombonas (detergente + amaciante)" : String(previewKind))}
+                </div>
+                <button
+                  className="shrink-0 rounded-lg border px-3 py-1 text-sm hover:bg-gray-50"
+                  onClick={() => setPreviewKind(null)}
+                >
+                  Fechar
+                </button>
+              </div>
+              <div className="mt-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={pendingUrl[previewKind] as string}
+                  alt="preview"
+                  className="max-h-[70vh] w-full rounded-xl object-contain"
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </AppShell>
   );
