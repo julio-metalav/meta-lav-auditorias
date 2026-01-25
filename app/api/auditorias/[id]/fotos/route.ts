@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { supabaseServer } from "@/lib/supabaseServer";
+import sharp from "sharp";
 
 type Role = "auditor" | "interno" | "gestor";
 
@@ -32,11 +33,9 @@ function folderFor(kind: string) {
   return isComprovante(kind) ? "fechamento" : "fotos";
 }
 
-function extFromFileName(name: string) {
-  const n = name.toLowerCase();
-  const parts = n.split(".");
-  const ext = parts.length > 1 ? parts[parts.length - 1] : "bin";
-  return ext.replace(/[^a-z0-9]/g, "") || "bin";
+function extFromMime(mime: string) {
+  if (mime.includes("png")) return "png";
+  return "jpg";
 }
 
 function safeFileBase(name: string) {
@@ -76,29 +75,34 @@ function kindToColumn(kind: string) {
   return map[kind] ?? null;
 }
 
-function toShortText(v: any, max = 800) {
-  const s = String(v ?? "").trim();
-  return s ? s.slice(0, max) : null;
-}
-
-// ✅ NORMALIZA "kind" de proveta para (tag + idx)
-// Aceita: proveta_1, proveta_2, proveta-2, proveta2, proveta (vira proveta_1)
+// proveta / proveta_1 / proveta2 / proveta-2
 function parseProvetaKind(kindRaw: string): { tag: string; idx: number } | null {
   const k = String(kindRaw ?? "").trim().toLowerCase();
   if (!k) return null;
-
-  // proveta (sem número) -> assume 1
   if (k === "proveta") return { tag: "proveta_1", idx: 1 };
-
-  // proveta_2 / proveta-2 / proveta2
   const m = /^proveta(?:[_-]?)(\d+)$/.exec(k);
   if (!m) return null;
-
   const idx = Number(m[1]);
   if (!Number.isFinite(idx) || idx <= 0) return null;
-
   return { tag: `proveta_${idx}`, idx };
 }
+
+async function normalizeImage(file: File): Promise<{ buffer: Buffer; mime: string; ext: string }> {
+  const input = Buffer.from(await file.arrayBuffer());
+
+  const out = await sharp(input, { failOnError: false })
+    .rotate()
+    .resize({ width: 1600, withoutEnlargement: true })
+    .jpeg({ quality: 80, mozjpeg: true })
+    .toBuffer();
+
+  return {
+    buffer: out,
+    mime: "image/jpeg",
+    ext: "jpg",
+  };
+}
+
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {
     const auditoriaId = params.id;
@@ -124,17 +128,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const form = await req.formData();
     const kind = String(form.get("kind") ?? "").trim();
     const file = form.get("file") as File | null;
-    const mime = file?.type ?? "";
-    const fechamentoObs = toShortText(form.get("fechamento_obs"));
 
     if (!kind) return NextResponse.json({ error: "kind é obrigatório." }, { status: 400 });
     if (!file) return NextResponse.json({ error: "file é obrigatório." }, { status: 400 });
 
-    // ✅ proveta detecta e normaliza (tag+idx)
     const proveta = parseProvetaKind(kind);
     const isProveta = !!proveta;
 
-    // okKinds SEM "quimicos" (proveta é quem cobre o químico por lavadora)
     const okKinds: FotoKind[] = [
       "agua",
       "energia",
@@ -146,18 +146,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     if (!okKinds.includes(kind as FotoKind) && !isProveta) {
       return NextResponse.json({ error: `kind inválido: ${kind}` }, { status: 400 });
-    }
-
-    // 🔒 REGRA DEFINITIVA
-    if (isComprovante(kind) && !mime.startsWith("image/")) {
-      return NextResponse.json(
-        { error: "Comprovante deve ser IMAGEM (JPG/JPEG/PNG)." },
-        { status: 400 }
-      );
-    }
-
-    if (!mime.startsWith("image/")) {
-      return NextResponse.json({ error: "Arquivo inválido. Envie apenas imagem." }, { status: 400 });
     }
 
     const { data: aud, error: audErr } = await admin
@@ -175,17 +163,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const isOwnerAuditor = role === "auditor" && aud.auditor_id === user.id;
     const isUnassigned = !aud.auditor_id;
 
-    if (!isStaff) {
-      if (!isOwnerAuditor && !isUnassigned) {
-        return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
-      }
-    }
-
-    if (isComprovante(kind) && !isStaff) {
-      return NextResponse.json(
-        { error: "Apenas interno/gestor podem enviar comprovante." },
-        { status: 403 }
-      );
+    if (!isStaff && !isOwnerAuditor && !isUnassigned) {
+      return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
     }
 
     if (
@@ -194,22 +173,16 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       !isComprovante(kind) &&
       (statusAtual === "em_conferencia" || statusAtual === "final")
     ) {
-      return NextResponse.json(
-        { error: "Auditor não pode alterar fotos após conferência/final." },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "Auditor não pode alterar após conferência/final." }, { status: 403 });
     }
 
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const ext = extFromFileName(file.name);
+    const normalized = await normalizeImage(file);
     const base = safeFileBase(file.name);
-
-    // usa o kind original no nome do arquivo (ok), mas proveta salva com tag normalizada
-    const filename = `${kind}-${Date.now()}-${base}.${ext}`;
+    const filename = `${kind}-${Date.now()}-${base}.${normalized.ext}`;
     const storagePath = `${auditoriaId}/${folderFor(kind)}/${filename}`;
 
-    const up = await admin.storage.from(BUCKET).upload(storagePath, bytes, {
-      contentType: mime,
+    const up = await admin.storage.from(BUCKET).upload(storagePath, normalized.buffer, {
+      contentType: normalized.mime,
       upsert: true,
     });
 
@@ -219,68 +192,50 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (!pub?.publicUrl) {
       return NextResponse.json({ error: "Falha ao obter URL pública." }, { status: 500 });
     }
-    // ✅ PROVETAS: salva em auditoria_provetas (1 foto por maquina_tag)
+
     if (isProveta && proveta) {
-      // ✅ FIX DEFINITIVO DO ERRO:
-      // a tabela tem coluna maquina_idx NOT NULL -> precisamos mandar.
-      // NÃO usamos maquina_id.
-      const { data: saved, error: pErr } = await admin
+      const { error } = await admin
         .from("auditoria_provetas")
         .upsert(
           {
             auditoria_id: auditoriaId,
-            maquina_tag: proveta.tag, // sempre proveta_N
-            maquina_idx: proveta.idx, // ✅ evita null value em maquina_idx
+            maquina_tag: proveta.tag,
+            maquina_idx: proveta.idx,
             foto_url: pub.publicUrl,
-          } as any,
+          },
           { onConflict: "auditoria_id,maquina_tag" }
-        )
-        .select("*")
-        .single();
+        );
 
-      if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-      return NextResponse.json({
-        ok: true,
-        kind: proveta.tag,
-        url: pub.publicUrl,
-        proveta: saved,
-      });
+      return NextResponse.json({ ok: true, kind: proveta.tag, url: pub.publicUrl });
     }
 
-    // ✅ FOTOS "normais": salva na auditoria (colunas)
     const col = kindToColumn(kind);
     if (!col) return NextResponse.json({ error: "kind não mapeado." }, { status: 400 });
 
     const patch: any = { [col]: pub.publicUrl };
-    if (isComprovante(kind) && fechamentoObs) patch.fechamento_obs = fechamentoObs;
 
-    let updated;
     if (!isStaff && role === "auditor" && isUnassigned) {
       const { data, error } = await admin
         .from("auditorias")
         .update({ ...patch, auditor_id: user.id })
         .eq("id", auditoriaId)
         .is("auditor_id", null)
-        .select("*")
         .maybeSingle();
 
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       if (!data) return NextResponse.json({ error: "auditoria_ja_assumida" }, { status: 409 });
-      updated = data;
     } else {
-      const { data, error } = await admin
+      const { error } = await admin
         .from("auditorias")
         .update(patch)
-        .eq("id", auditoriaId)
-        .select("*")
-        .single();
+        .eq("id", auditoriaId);
 
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-      updated = data;
     }
 
-    return NextResponse.json({ ok: true, kind, url: pub.publicUrl, auditoria: updated });
+    return NextResponse.json({ ok: true, kind, url: pub.publicUrl });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Erro inesperado" }, { status: 500 });
   }
