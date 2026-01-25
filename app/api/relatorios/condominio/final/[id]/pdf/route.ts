@@ -5,6 +5,7 @@ import React from "react";
 import { NextResponse } from "next/server";
 import { getUserAndRole, roleGte } from "@/lib/auth";
 import { renderToBuffer } from "@react-pdf/renderer";
+import sharp from "sharp";
 
 import RelatorioFinalPdf from "@/app/relatorios/condominio/final/[id]/RelatorioFinalPdf";
 
@@ -26,7 +27,7 @@ function getOriginFromRequest(req: Request) {
   }
 }
 
-// ✅ remove aspas/escape que podem vir no params.id
+// remove aspas/escape que podem vir no params.id
 function cleanUuidLike(v: any) {
   let s = String(v ?? "").trim();
   s = s.replace(/^"+/, "").replace(/"+$/, "");
@@ -34,6 +35,9 @@ function cleanUuidLike(v: any) {
   s = s.replace(/^["']+/, "").replace(/["']+$/, "");
   return s;
 }
+
+type ImageSrcObj = { data: Buffer; format: "png" | "jpg" };
+type AnexoPdf = { tipo: string; src?: ImageSrcObj; isImagem: boolean };
 
 function guessFormat(url: string, contentType?: string | null): "jpg" | "png" {
   const ct = (contentType || "").toLowerCase();
@@ -45,55 +49,39 @@ function guessFormat(url: string, contentType?: string | null): "jpg" | "png" {
   return "jpg";
 }
 
-// ✅ normaliza URL (se vier relativa)
-function toAbsUrl(origin: string, url: string) {
-  const u = String(url || "").trim();
-  if (!u) return "";
-  if (u.startsWith("http://") || u.startsWith("https://")) return u;
-  if (u.startsWith("/")) return `${origin}${u}`;
-  return `${origin}/${u}`;
-}
-
-function isSameOriginUrl(origin: string, url: string) {
-  try {
-    const u = new URL(url);
-    const o = new URL(origin);
-    return u.origin === o.origin;
-  } catch {
-    return false;
-  }
+async function fetchImage(url: string) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Falha ao baixar imagem: ${res.status}`);
+  const ab = await res.arrayBuffer();
+  const buf = Buffer.from(ab);
+  const fmt = guessFormat(url, res.headers.get("content-type"));
+  const ct = res.headers.get("content-type") || null;
+  return { buf, fmt, contentType: ct };
 }
 
 /**
- * Baixa imagem e retorna Buffer + formato.
- * Regra de negócio: aceita só JPG/JPEG.
- * Se não for imagem ou for PNG, lança erro (anexo não entra embutido).
+ * Converte imagens "problemáticas" (principalmente JPG de comprovante)
+ * para PNG RGB simples, que o @react-pdf/renderer costuma aceitar sem falhar.
  */
-async function fetchImageAsBuffer(url: string, headers?: Record<string, string>) {
-  const res = await fetch(url, { cache: "no-store", headers: headers ?? {} });
+async function normalizeForPdf(url: string): Promise<ImageSrcObj> {
+  const { buf, fmt } = await fetchImage(url);
 
-  if (!res.ok) {
-    throw new Error(`Falha ao baixar imagem: ${res.status}`);
+  // Se já for PNG, geralmente não precisa mexer.
+  if (fmt === "png") {
+    // Mesmo PNG pode vir esquisito; ainda assim, manter como está costuma ser OK.
+    return { data: buf, format: "png" };
   }
 
-  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  // JPG: converte SEMPRE pra PNG RGB
+  // - remove metadados esquisitos
+  // - evita CMYK/progressivo que o react-pdf às vezes não renderiza
+  const out = await sharp(buf)
+    .rotate() // respeita orientação EXIF (print/foto)
+    .toColorspace("rgb")
+    .png({ compressionLevel: 9, adaptiveFiltering: true })
+    .toBuffer();
 
-  // precisa ser imagem
-  if (!ct.includes("image/")) {
-    throw new Error(`Conteúdo não é imagem (content-type: ${ct || "vazio"})`);
-  }
-
-  const fmt = guessFormat(url, ct);
-
-  // regra: só JPG/JPEG
-  if (fmt !== "jpg") {
-    throw new Error(`Formato não permitido (apenas JPG/JPEG). Detectado: ${fmt}`);
-  }
-
-  const ab = await res.arrayBuffer();
-  const buf = Buffer.from(ab);
-
-  return { data: buf, format: "jpg" as const };
+  return { data: out, format: "png" };
 }
 
 export async function GET(req: Request, { params }: { params: { id: string } }) {
@@ -106,7 +94,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
   const origin = getOriginFromRequest(req);
 
-  // mantém sessão do usuário (para chamadas na mesma origem)
+  // mantém sessão do usuário
   const cookie = req.headers.get("cookie") || "";
   const authorization = req.headers.get("authorization") || "";
 
@@ -128,37 +116,21 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
   const anexosUrls = payload?.anexos ?? {};
 
-  // 2) monta lista (ordem correta) só com o que existe
-  // ✅ ordem final: água, energia, gás (se houver), comprovante
+  // 2) monta lista (ordem correta) só com o que existe:
+  // Água, Energia, Gás (se houver), Comprovante
   const lista: Array<{ tipo: string; url: string }> = [];
 
   if (anexosUrls?.foto_agua_url) lista.push({ tipo: "Foto do medidor de Água", url: anexosUrls.foto_agua_url });
   if (anexosUrls?.foto_energia_url) lista.push({ tipo: "Foto do medidor de Energia", url: anexosUrls.foto_energia_url });
   if (anexosUrls?.foto_gas_url) lista.push({ tipo: "Foto do medidor de Gás", url: anexosUrls.foto_gas_url });
-
-  if (anexosUrls?.comprovante_fechamento_url) {
+  if (anexosUrls?.comprovante_fechamento_url)
     lista.push({ tipo: "Comprovante de pagamento", url: anexosUrls.comprovante_fechamento_url });
-  }
 
-  // 3) baixa e embute (se falhar algum, não quebra tudo: não embute)
-  const anexosPdf = await Promise.all(
+  // 3) baixa e embute (AGORA: normaliza para PNG RGB antes de embutir)
+  const anexosPdf: AnexoPdf[] = await Promise.all(
     lista.map(async (it) => {
-      const absUrl = toAbsUrl(origin, it.url);
-
-      // só repassa sessão se a URL for da própria aplicação (mesma origem)
-      const extraHeaders: Record<string, string> = {};
-      if (isSameOriginUrl(origin, absUrl)) {
-        if (cookie) extraHeaders.cookie = cookie;
-        if (authorization) extraHeaders.authorization = authorization;
-      }
-
-      try {
-        const src = await fetchImageAsBuffer(absUrl, Object.keys(extraHeaders).length ? extraHeaders : undefined);
-        return { tipo: it.tipo, src, isImagem: true };
-      } catch {
-        // não embute — PDF fica só com o título (sem placeholder grande)
-        return { tipo: it.tipo, isImagem: false as const };
-      }
+      const src = await normalizeForPdf(it.url); // <- aqui está a “cura”
+      return { tipo: it.tipo, src, isImagem: true };
     })
   );
 
