@@ -28,43 +28,26 @@ function getOriginFromRequest(req: Request) {
 }
 
 /**
- * Extrai um UUID de dentro de qualquer lixo de string:
- * - remove aspas, <>, espaços, escapes
- * - tenta decodeURIComponent
- * - pega o primeiro UUID válido por regex
+ * Extrai um UUID de dentro de qualquer string (remove lixo: espaços, <>, aspas, etc.)
  */
 function extractUuid(v: any) {
   let s = String(v ?? "").trim();
-
-  // tenta decodificar caso venha %20 etc (sem explodir)
   try {
     s = decodeURIComponent(s);
   } catch {
     // ignore
   }
-
-  // limpa lixo comum
   s = s.trim();
   s = s.replace(/^\\+/, "");
   s = s.replace(/^["']+/, "").replace(/["']+$/, "");
   s = s.replace(/^<+/, "").replace(/>+$/, "");
   s = s.trim();
 
-  // pega o primeiro UUID dentro da string
   const m = s.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
   return m ? m[0] : "";
 }
 
 type AnexoPdf = { tipo: string; src?: string; isImagem: boolean };
-
-function guessFormat(url: string, contentType?: string | null): "jpg" | "png" {
-  const ct = (contentType || "").toLowerCase();
-  if (ct.includes("png")) return "png";
-  if (ct.includes("jpeg") || ct.includes("jpg")) return "jpg";
-  const u = url.toLowerCase();
-  if (u.includes(".png")) return "png";
-  return "jpg";
-}
 
 async function fetchImage(url: string, forwardHeaders?: Record<string, string>) {
   const res = await fetch(url, {
@@ -76,15 +59,12 @@ async function fetchImage(url: string, forwardHeaders?: Record<string, string>) 
     },
   });
 
+  const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
-    const ct = res.headers.get("content-type") || "";
     throw new Error(`Falha ao baixar imagem: ${res.status} (${ct})`);
   }
 
-  const ct = res.headers.get("content-type") || "";
   const ctL = ct.toLowerCase();
-
-  // Supabase Storage frequentemente responde imagens como application/octet-stream.
   const ok =
     ctL.startsWith("image/") ||
     ctL.includes("application/octet-stream") ||
@@ -96,8 +76,7 @@ async function fetchImage(url: string, forwardHeaders?: Record<string, string>) 
 
   const ab = await res.arrayBuffer();
   const buf = Buffer.from(ab);
-  const fmt = guessFormat(url, ct);
-  return { buf, fmt, contentType: ct };
+  return { buf, contentType: ct };
 }
 
 /**
@@ -130,9 +109,11 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     const auditoriaId = extractUuid(params.id);
     if (!auditoriaId) return bad("ID inválido");
 
+    const urlObj = new URL(req.url);
+    const diag = urlObj.searchParams.get("diag") === "1";
+
     const origin = getOriginFromRequest(req);
 
-    // mantém sessão do usuário
     const cookie = req.headers.get("cookie") || "";
     const authorization = req.headers.get("authorization") || "";
 
@@ -166,23 +147,65 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     if (anexosUrls?.foto_agua_url) lista.push({ tipo: "Foto do medidor de Água", url: anexosUrls.foto_agua_url });
     if (anexosUrls?.foto_energia_url) lista.push({ tipo: "Foto do medidor de Energia", url: anexosUrls.foto_energia_url });
     if (anexosUrls?.foto_gas_url) lista.push({ tipo: "Foto do medidor de Gás", url: anexosUrls.foto_gas_url });
-    if (anexosUrls?.comprovante_fechamento_url)
-      lista.push({ tipo: "Comprovante de pagamento", url: anexosUrls.comprovante_fechamento_url });
+    if (anexosUrls?.comprovante_fechamento_url) lista.push({ tipo: "Comprovante de pagamento", url: anexosUrls.comprovante_fechamento_url });
 
-    // 3) baixa e embute — sem derrubar a rota se 1 anexo falhar
+    // 3) baixa/embute (com diagnóstico opcional)
+    const diagRows: any[] = [];
+
     const anexosPdf: AnexoPdf[] = await Promise.all(
       lista.map(async (it) => {
         try {
           const buf = await normalizeForPdf(it.url, forwardHeaders);
           const base64 = buf.toString("base64");
           const src = `data:image/jpeg;base64,${base64}`;
+
+          if (diag) {
+            diagRows.push({
+              tipo: it.tipo,
+              ok: true,
+              bytes: buf.length,
+              src_prefix: src.slice(0, 30),
+            });
+          }
+
           return { tipo: it.tipo, src, isImagem: true };
         } catch (e: any) {
-          console.error(`[pdf] falha anexo "${it.tipo}":`, e?.message ?? e);
+          const msg = e?.message ?? String(e);
+
+          if (diag) {
+            diagRows.push({
+              tipo: it.tipo,
+              ok: false,
+              error: msg,
+              url: it.url,
+            });
+          } else {
+            console.error(`[pdf] falha anexo "${it.tipo}":`, msg);
+          }
+
           return { tipo: it.tipo, isImagem: false };
         }
       })
     );
+
+    // 🔎 modo diagnóstico: não gera PDF, devolve JSON com o que falhou
+    if (diag) {
+      // ordena igual a lista
+      diagRows.sort((a, b) => {
+        const ai = lista.findIndex((x) => x.tipo === a.tipo);
+        const bi = lista.findIndex((x) => x.tipo === b.tipo);
+        return ai - bi;
+      });
+
+      return NextResponse.json(
+        {
+          auditoriaId,
+          anexos_count: lista.length,
+          anexos_diag: diagRows,
+        },
+        { status: 200 }
+      );
+    }
 
     // 4) props do PDF
     const props = {
