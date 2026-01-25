@@ -208,6 +208,7 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
   const [uploadingComprovante, setUploadingComprovante] = useState(false);
   const [finalizando, setFinalizando] = useState(false);
 
+
   const role = me?.role ?? null;
   const isStaff = role === "interno" || role === "gestor";
 
@@ -544,7 +545,33 @@ export default function InternoAuditoriaPage({ params }: { params: { id: string 
     };
   }, [aud, relPrev]);
 
-  async function finalizarAuditoria() {
+  async function reabrirAuditoria() {
+    const audId = String(aud?.id ?? id).trim();
+    if (!audId) return;
+
+    // só staff e só quando estiver final
+    if (!isStaff) return;
+    if (toLower(aud?.status) !== "final") return;
+
+    try {
+      setErr(null);
+      setReabrindo(true);
+
+      await fetchJSON(`/api/auditorias/${audId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "em_conferencia" }),
+      });
+
+      await carregar();
+    } catch (e: any) {
+      setErr(e?.message ?? "Erro ao reabrir auditoria");
+    } finally {
+      setReabrindo(false);
+    }
+  }
+ 
+ async function finalizarAuditoria() {
     const audId = String(aud?.id ?? id).trim();
     if (!audId) return;
 
